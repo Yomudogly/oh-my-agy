@@ -1,0 +1,26 @@
+{
+  "oh-my-agy-routing": {
+    "SessionStart": [
+      { "type": "command", "command": "sh ./hooks/run.sh session-start", "timeout": 10 }
+    ],
+    "PreInvocation": [
+      { "type": "command", "command": "sh ./hooks/run.sh pre-invocation", "timeout": 10 }
+    ]
+  },
+  "oh-my-agy-continuation": {
+    "Stop": [
+      { "type": "command", "command": "sh ./hooks/run.sh stop", "timeout": 20 }
+    ]
+  },
+  "oh-my-agy-planning-guard": {
+    "enabled": false,
+    "PreToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          { "type": "command", "command": "sh ./hooks/run.sh pre-tool-use", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

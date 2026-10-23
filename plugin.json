@@ -1,0 +1,12 @@
+{
+  // oh-my-agy: Antigravity port of oh-my-codex (OMX) 0.21.33 by Yeachan Heo (MIT).
+  "name": "oh-my-agy",
+  "displayName": "oh-my-agy",
+  "description": "Multi-agent workflow layer for Antigravity, ported from oh-my-codex: deep-interview -> ralplan -> ultragoal autopilot, consensus planning, durable goal ledgers, adversarial QA, dual-lane code review, and role subagents.",
+  "version": "0.21.33-agy.1",
+  "suggestedPrompts": [
+    "$autopilot build a CLI that converts CSV files to JSON with schema validation",
+    "$deep-interview I want to add authentication to this app",
+    "$code-review the changes on my current branch"
+  ]
+}

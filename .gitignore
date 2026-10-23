@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+*.tmp
+# workflow state written by the plugin when this repo is itself the workspace
+.omagy/
+omagy_wiki/
