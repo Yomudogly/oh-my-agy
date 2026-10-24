@@ -13,16 +13,19 @@ OMX launched tmux panes of headless Codex processes with mailbox files. In Antig
 - launch: `invoke_subagent` (several entries in one call run concurrently)
 - coordinate: `send_message` to a worker's conversation ID
 - monitor/stop: `manage_subagents` (`list`, `kill`)
-- isolate: `Workspace: "branch"` (isolated copy) or `"share"` (shared repo, independent branch) for workers that write overlapping areas
+- isolate: prefer `Workspace: "share"` (shared git object store with an independent branch, like `git worktree`) over `"branch"` (isolated clone deleted when the subagent is killed) whenever workers write overlapping areas or commit recovery matters.
 
 ## Inputs and preconditions
 
 - Launch shape: `$team [N:role] "<task>"`. Default role is `team-worker`. Use `executor`, `test-engineer`, `designer`, etc. for specialized lanes. Max **6** concurrent workers.
 - Ground the task first: reuse or create `.omagy/context/{slug}-*.md` (target, evidence, constraints, unknowns, touchpoints). Prefer an approved spec or plan (`.omagy/specs/`, `.omagy/plans/`).
 - Do not launch nested teams. Workers never spawn subagents.
-- Prefer inherited model defaults. Override `Model` only with a concrete reason (e.g. `flash` for mechanical lanes).
+- **Work-Shape Model Routing (`Splittable` vs `Cohesive`, ported from OmO `ulw-execute` / categories)**:
+  - **Splittable / Quick** (isolated single-file edits, mechanical renames, doc/config updates, targeted lookups): fan out across parallel workers with `Model: "flash"`.
+  - **Cohesive / Deep** (multi-file feature slices, shared state/types, stateful debugging): keep together in a single worker with `Model: "inherit"` rather than splitting across workers that would fight over interfaces.
+  - **Ultrabrain / Review & Architecture** (`architect`, `critic`, `tracer`, `security-reviewer`): use `Model: "pro"` (or `"inherit"` when the session already runs a frontier reasoning model).
 
-## Task board (leader-owned)
+## Task board & DAG wave scheduling (leader-owned)
 
 `.omagy/state/team/<team>/tasks.json`:
 ```json
@@ -32,12 +35,18 @@ OMX launched tmux panes of headless Codex processes with mailbox files. In Antig
   "created_at": "<ISO>",
   "updated_at": "<ISO>",
   "tasks": [
-    {"id": "1", "title": "...", "role": "team-worker", "owned_paths": ["src/auth/**"], "acceptance": ["..."],
-     "requires_code_change": true, "depends_on": [], "status": "pending|in_progress|completed|failed|blocked", "worker": null, "conversation_id": null, "result": null}
+    {"id": "1", "title": "...", "role": "team-worker", "model": "inherit|flash|pro", "owned_paths": ["src/auth/**"], "acceptance": ["..."],
+     "requires_code_change": true, "depends_on": [], "fingerprint": "<sha1-or-short-hash-of-title+owned_paths+acceptance>",
+     "status": "pending|in_progress|completed|failed|blocked", "worker": null, "conversation_id": null, "result": null}
   ]
 }
 ```
 Also write `.omagy/state/team-state.json` (`mode:"team"`, `active:true`, `current_phase:"executing"`, `state.team:"<team>"`).
+
+**DAG Wave Scheduling & Fingerprint-Cached Amendment (ported from OmO `mass-ulw`)**:
+- Tasks form an explicit DAG via `depends_on`. Launch ready waves (`status:"pending"` whose `depends_on` tasks are all `"completed"`), up to 6 concurrent workers per wave.
+- If a task fails or blocks After retries, mark it `"blocked"` and cascade `"blocked"` (`result:"blocked-by:<id>"`) to downstream tasks whose `depends_on` transitively includes `<id>`, while continuing independent branches.
+- When amending a team plan mid-run, recompute each task's `fingerprint` (`title + owned_paths + acceptance + upstream fingerprints`). Any `"completed"` task whose `fingerprint` is unchanged stays `"completed"` and its verified output is reused without re-running.
 
 Only the leader edits the board. Workers report results in their final message, and the leader transitions status.
 
@@ -72,9 +81,11 @@ Only the leader edits the board. Workers report results in their final message, 
 
    Then re-run the verification command for anything non-trivial, transition the task to `completed`/`failed`/`blocked` with `result`, and refresh `updated_at`. Launch newly unblocked tasks.
    (Optional scripted check: `sh <plugin>/hooks/run.sh verify-evidence <workspace> .omagy/evidence/task-<id>.json <team> <id>`. Antigravity's terminal sandbox may deny reading plugin files, in which case it needs `BypassSandbox: true`. The `read_file` check above is the default.)
-5. **Blocked worker**: answer via `send_message` to the same conversation ID rather than spawning a replacement. For a stuck or looping worker, `manage_subagents kill` that worker only, set the task `pending`, and relaunch with a sharper prompt.
-6. **Integrate**: when workers used `branch`/`share` workspaces, merge their changes into the main workspace and resolve conflicts in the leader lane.
-7. **Finish** only when `pending=0`, `in_progress=0`, and `failed=0` (or failures are explicitly acknowledged). Run integrated verification (tests/lint/typecheck/build) in the leader lane. Write `team-state.json` terminal (`active:false`, `current_phase:"complete"`, `completed_at`).
+5. **Blocked worker**: answer via `send_message` to the same conversation ID rather than spawning a replacement. For a stuck or looping worker, **preserve its work before killing** (since `manage_subagents kill` deletes `"branch"` workspaces): if it ran in `"share"` or `"branch"`, ask it once via `send_message` to commit/report its branch or salvage reachable commits in the leader lane before calling `manage_subagents kill` on that worker only, then set the task `pending` and relaunch with a sharper prompt.
+6. **Integrate & Shutdown Worktree Preservation (ported from OMX 0.21.34 PR #3896)**:
+   - When workers used `share`/`branch` workspaces, merge their changes into the main workspace and resolve conflicts in the leader lane.
+   - **Never discard unsaved worker work on shutdown**: before removing any worker branch/worktree or killing a worker with `Workspace: "branch"`, verify in the leader lane that (a) the worker's `HEAD` is an ancestor of the leader's `HEAD` (`git merge-base --is-ancestor <workerHead> HEAD`), and (b) no unpreserved untracked, ignored, or submodule changes remain (`git status --porcelain --untracked-files=all --ignored --ignore-submodules=none`). If checkpointing or merging fails, retain the worker branch/workspace and team state (`status:"blocked"`) for recovery instead of deleting it. Preserve tracked or staged `.omagy/evidence` files during cleanup.
+7. **Finish** only when `pending=0`, `in_progress=0`, `failed=0` (or failures are explicitly acknowledged), and all isolated worker branches are verified merged. Run integrated verification (tests/lint/typecheck/build) in the leader lane. Write `team-state.json` terminal (`active:false`, `current_phase:"complete"`, `completed_at`).
 
 ## Team and Ultragoal
 

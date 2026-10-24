@@ -31,21 +31,27 @@ Codex's hidden `/goal` state (`get_goal`/`create_goal`/`update_goal`) does not e
       "id": "G1",
       "title": "<short title>",
       "objective": "<verifiable objective>",
+      "rigor": "light|heavy",
       "acceptance": ["<testable criterion>"],
       "status": "pending|in_progress|complete|blocked|failed|superseded",
       "depends_on": [],
+      "product_failures": 0,
       "evidence": null
     }
   ]
 }
 ```
 
+**Goal rigor classification (`rigor`, ported from OmO `ulw-execute`)**:
+- `"light"`: narrow change inside an existing module/pattern with no schema, auth, security, or public API contract change. Verified by targeted tests + acceptance check.
+- `"heavy"`: cross-cutting change, new boundary/schema/auth/security surface, or state machine change. Requires targeted tests + at least 1 adversarial probe + independent `verifier` (`AdversarialVerify`) check before checkpointing.
+
 Ledger entry shape (append; never rewrite earlier lines):
 ```json
 {"at":"<ISO>","goal_id":"G1","event":"created|started|checkpoint|blocked|failed|steer|review-blockers|final-gate","status":"<status>","evidence":"<commands + exit codes / file refs>","note":"<optional>"}
 ```
 
-Append a ledger line by reading the file and writing it back with the new line added, or with `run_command` using a non-interpolating write (e.g. `printf '%s\n' '<json>' >> .omagy/ultragoal/ledger.jsonl`) when quoting is safe.
+Append a ledger line using the crash-resilient newline-isolated hook helper (`sh <plugin>/hooks/run.sh append-jsonl .omagy/ultragoal/ledger.jsonl '<json>'`, which prepends `\n` if a prior crash left a torn tail and refuses symlinks, ported from OMX 0.21.33 PR #3893), or by reading the file and writing it back with the new line added on its own newline. Read the ledger tolerantly (`sh <plugin>/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl` or line-by-line JSON parsing that skips malformed torn lines).
 
 ## Operational steps: create
 
@@ -60,9 +66,15 @@ Repeat until every goal is `complete` (or `superseded`):
 
 1. Pick the first `pending` goal whose dependencies are complete. Set it `in_progress`, append `started`, and set the phase to `executing`.
 2. Implement the goal: solo, or via an `executor` subagent for a bounded slice, or via `$team` when parallel lanes are justified.
-3. Audit the goal against real artifacts: run its acceptance checks and targeted tests. Set the phase to `verifying`.
-4. Checkpoint: set the goal `status:"complete"` with `evidence`, then append a `checkpoint` ledger line containing commands and exit codes. Refresh `updated_at` in state.
-5. Blocked/failed goal: record `blocked|failed` with evidence. Continue with independent goals. Retry failed goals after the blocker is resolved. If the blocker needs the user, write the Ultragoal (or Autopilot) state as `current_phase:"blocked"`, `active:false`, and ask.
+3. Audit the goal against real artifacts (`current_phase:"verifying"`):
+   - For `"rigor": "light"`, run targeted tests and acceptance checks directly.
+   - For `"rigor": "heavy"`, form a `DoneClaim` (changed files, commands + exit codes, criterion mapping) and validate it (via the `verifier` subagent when independent confirmation is warranted) using the `AdversarialVerify` contract:
+     - `verdict`: `"confirmed" | "false-positive" | "needs-fix" | "needs-human-review"`
+     - `failure_class`: `"none" | "product" | "harness"`
+4. Checkpoint: when `verdict` is `"confirmed"` (or `"light"` checks pass), set the goal `status:"complete"` with `evidence`, then append a `checkpoint` ledger line containing commands and exit codes. Refresh `updated_at` in state.
+5. **Failure triage (`product` vs `harness`) & blocked-goal cascade**:
+   - If verification fails with `failure_class: "harness"` (test runner setup, missing fixture, port/env glitch), run up to 1 bounded harness-repair attempt without incrementing `product_failures`.
+   - If verification fails with `failure_class: "product"`, increment `product_failures` (max 3 attempts per goal). After 3 product failures or `"needs-human-review"`, set the goal `status:"blocked"` (`[~]`), append `blocked` to the ledger, and **cascade `status:"blocked"`** (`note:"blocked-by:<goal_id>"`) to every downstream `pending` goal whose `depends_on` transitively includes this goal. Continue with remaining independent `pending` goals; if none remain and user input is required, write state `current_phase:"blocked"`, `active:false`, and ask.
 
 ## Explicit steering & stale-goal reconciliation
 

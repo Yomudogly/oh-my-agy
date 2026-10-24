@@ -20,8 +20,14 @@ Plan creates concise, actionable work plans. It auto-detects interview vs direct
 </Do_Not_Use_When>
 
 <Execution_Policy>
-- Auto-detect interview vs direct. `--interview` forces Socratic mode and `--direct` skips it.
-- Ask one question at a time with `ask_question`. Gather codebase facts first and never ask the user for discoverable facts.
+- **Explore Before Asking**: Always gather codebase facts (directly or via the `explore` subagent) before asking a single question or drafting a plan. Never ask the user for discoverable facts.
+- **Intent Classification (`CLEAR` vs `UNCLEAR`, ported from OmO `ulw-plan`)**:
+  - `CLEAR` intent (concrete target, specific feature/bug, or explicit `--interview`): ask only questions that survive the **Two-Filter + Owner-Decision Survival Gate** below, one question at a time via `ask_question`.
+  - `UNCLEAR` intent (open-ended "make X better", "improve Y", "you decide", or `--direct` on a broad prompt): do NOT interrogate the user with open-ended questionnaires. Research codebase patterns and official best practices, adopt and announce concrete defaults (naming each default + a 1-line rationale in an `Adopted Defaults` section), and recommend `$ralplan` / `critic` review.
+- **Two-Filter Question Gate + Owner-Decision Survival**:
+  - **Filter 1 (Material Fork)**: Would the answer change the architecture, schema, or touched files?
+  - **Filter 2 (Unresolvable by Repo/Docs)**: Can this be answered by inspecting the repo or official docs? If yes, inspect—do not ask.
+  - **Owner-Decision Survival**: Ask the user ONLY when the surviving fork is irreversible, destructive, spend-bearing, or changes an external/public contract. For reversible engineering choices, pick the strongest repo-aligned default and state it in the plan.
 - Plans must be evidence-backed: at least 80% of claims cite file/line, and at least 90% of acceptance criteria are testable.
 - Right-size the steps to the scope. Save plans to `.omagy/plans/<slug>.md`.
 - Standalone plan mode is a planning mode. While `.omagy/state/plan-state.json` is active, do not implement. Write state as `{"mode":"plan","active":true,"current_phase":"interview|drafting|review"}` and terminalize it when the plan is delivered.
@@ -32,20 +38,21 @@ Plan creates concise, actionable work plans. It auto-detects interview vs direct
 ### Mode selection
 | Mode | Trigger | Behavior |
 |------|---------|----------|
-| Interview | `--interview` or broad request | Socratic requirements gathering |
-| Direct | `--direct` or detailed request | Generate the plan immediately |
+| Interview (`CLEAR`) | `--interview` or concrete request with an owner-decision fork | Explore first, then ask only surviving owner-decision forks (1 per turn) |
+| Autonomous Default (`UNCLEAR`) | Open-ended ("improve X", "you decide") | Explore + research, adopt & announce best-practice defaults, generate plan |
+| Direct | `--direct` or fully specified request | Explore and generate the plan immediately |
 | Review | `--review` | Critic evaluation of an existing plan |
 
-### Interview (`--interview`)
-1. Classify the request. Gather codebase facts (directly or via the `explore` subagent).
-2. Ask one focused question per `ask_question` call, informed by those facts. Put the recommended option first.
+### Interview (`--interview` / `CLEAR` with owner-decision forks)
+1. Gather codebase facts (directly or via the `explore` subagent).
+2. Run candidate questions through the **Two-Filter + Owner-Decision Survival Gate**. Ask one surviving question per `ask_question` call, informed by repo facts. Put the recommended option first with `(Recommended)`.
 3. Build on the answers. Optionally invoke the `analyst` subagent to surface hidden requirements.
-4. Create the plan when the user signals readiness or requirements are clear.
+4. Create the plan when owner-decision forks are resolved or the user signals readiness.
 
-### Direct
-1. Quick analysis (the `analyst` subagent is optional).
-2. Generate the plan immediately.
-3. Optional `critic` subagent review if requested.
+### Direct / Autonomous Default (`--direct` or `UNCLEAR`)
+1. Gather codebase facts and (for `UNCLEAR`) best-practice evidence.
+2. Record any reversible choices under `Adopted Defaults` (`Decision | Default Chosen | 1-Line Rationale | Reversibility`).
+3. Generate the plan immediately. Optional `critic` subagent review if requested or if intent was `UNCLEAR`.
 
 ### Review (`--review`)
 1. Read the plan from `.omagy/plans/` (or the given path).
@@ -53,7 +60,15 @@ Plan creates concise, actionable work plans. It auto-detects interview vs direct
 3. If the plan's author is the current lane, the critic subagent provides the independent review. Never self-approve.
 
 ### Output
-Every plan includes: Requirements Summary, Acceptance Criteria (testable), Implementation Steps (with file refs, adaptive count), Risks/Mitigations, and Verification. Save it to `.omagy/plans/`.
+Every plan includes:
+1. **Requirements Summary & Adopted Defaults** (if any).
+2. **Affected User Ideal State & Gap Table**:
+   | Dimension | Current State | Ideal State | Gap | Approach | Verification Metric |
+   |-----------|---------------|-------------|-----|----------|---------------------|
+3. **Acceptance Criteria** (90%+ concretely testable).
+4. **Implementation Steps** (with `file:line` refs, adaptive count, and `LIGHT` vs `HEAVY` rigor tag per step).
+5. **Risks/Mitigations & Verification Commands**.
+Save it to `.omagy/plans/`.
 
 Use outcome-first framing and concise visible updates. Newer user updates override the active branch locally. If the user says `continue`, continue the current branch instead of restarting.
 

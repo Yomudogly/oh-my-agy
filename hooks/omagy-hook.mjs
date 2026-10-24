@@ -17,9 +17,9 @@ import { execFileSync, spawn } from 'node:child_process';
 
 const SKILLS = [
   'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'autoresearch', 'best-practice-research',
-  'cancel', 'code-review', 'configure-notifications', 'deep-interview', 'design', 'doctor', 'hud',
-  'loft', 'omagy-setup', 'performance-goal', 'plan', 'pr', 'ralplan', 'skill', 'team', 'ultragoal',
-  'ultraqa', 'visual-ralph', 'wiki',
+  'cancel', 'code-review', 'configure-notifications', 'deep-interview', 'design', 'doctor', 'handoff',
+  'hud', 'loft', 'omagy-setup', 'performance-goal', 'plan', 'pr', 'ralplan', 'skill', 'team',
+  'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
 ];
 // Antigravity built-in slash commands: `/name` belongs to Antigravity, only `$name` routes to us.
 const AGY_SLASH = new Set(['goal', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork-preview', 'learn', 'boost']);
@@ -94,10 +94,58 @@ function nonPlaceholderText(value) {
   return typeof value === 'string' && value.trim().length > 0
     && !/^(?:todo|tbd|placeholder|pending|not run)[.!]?$/i.test(value.trim());
 }
+function canonicalizePath(p, depth = 0) {
+  const abs = path.resolve(String(p || ''));
+  if (depth > 8) return abs;
+  let cur = abs;
+  const tail = [];
+  for (let i = 0; i < MAX_WORKSPACE_WALK_DEPTH * 4; i += 1) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) {
+        const linkTarget = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+        return canonicalizePath(path.join(linkTarget, ...tail), depth + 1);
+      }
+      return path.join(fs.realpathSync(cur), ...tail);
+    } catch { /* ignore */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+  return abs;
+}
+function hasSymlinkSegment(rootPath, targetPath) {
+  const rootReal = canonicalizePath(rootPath);
+  const rootAbs = path.resolve(String(rootPath || ''));
+  const targetAbs = path.resolve(String(targetPath || ''));
+  for (const base of [rootAbs, rootReal]) {
+    const rel = path.relative(base, targetAbs);
+    if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
+    let cur = rootReal;
+    for (const part of rel.split(/[/\\]/)) {
+      if (!part) continue;
+      cur = path.join(cur, part);
+      try {
+        if (fs.lstatSync(cur).isSymbolicLink()) return true;
+      } catch {
+        break;
+      }
+    }
+  }
+  return false;
+}
+const SUBAGENT_PROMPT_RE = /^(?:\s*TEAM\s+\S+\s+[—-]\s+TASK\b|\s*<identity>\s*\n\s*You are |\s*<antigravity_runtime>)/m;
+function isSubagentPayload(payload, userText = '') {
+  if (!payload || typeof payload !== 'object') return false;
+  if (payload.isSubagent === true || payload.is_subagent === true) return true;
+  if (payload.parentConversationId || payload.parent_conversation_id || payload.subagentType || payload.subagent_type) return true;
+  return Boolean(userText && (SUBAGENT_PROMPT_RE.test(userText) || userText.includes('<antigravity_runtime>')));
+}
 
-// ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root) ----------
+// ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root + OMX 0.21.31-32 symlink guard) ----------
 function stateRoot(root) {
-  let cur = path.resolve(root);
+  let cur = canonicalizePath(root);
   for (let i = 0; i < MAX_WORKSPACE_WALK_DEPTH; i += 1) {
     try {
       if (fs.existsSync(path.join(cur, '.omagy-workspace')) || fs.existsSync(path.join(cur, '.omc-workspace'))) {
@@ -108,9 +156,12 @@ function stateRoot(root) {
     if (parent === cur) break;
     cur = parent;
   }
-  return root;
+  return canonicalizePath(root);
 }
 function readStateDir(dir, root, convId) {
+  try {
+    if (fs.lstatSync(dir).isSymbolicLink()) return [];
+  } catch { return []; }
   let names = [];
   try { names = fs.readdirSync(dir); } catch { return []; }
   const out = [];
@@ -118,13 +169,15 @@ function readStateDir(dir, root, convId) {
     const m = /^(.+)-state\.json$/.exec(name);
     if (!m) continue;
     const file = path.join(dir, name);
+    let st;
+    try { st = fs.lstatSync(file); } catch { continue; }
+    if (st.isSymbolicLink() || !st.isFile()) continue;
     const data = readJson(file);
     if (!data || typeof data !== 'object') continue;
-    let mtimeMs = 0;
-    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { /* ignore */ }
+    const mtimeMs = st.mtimeMs || 0;
     const owner = data.owner_conversation_id || data.conversation_id || data.session_id || '';
     const foreignOwner = Boolean(convId && owner && String(owner) !== String(convId));
-    out.push({ mode: String(data.mode || m[1]), file, data, mtimeMs, root, foreignOwner });
+    out.push({ mode: String(data.mode || m[1]), file, data, mtimeMs, root, owner: String(owner || ''), foreignOwner });
   }
   return out;
 }
@@ -171,20 +224,32 @@ function activeStates(roots, modes, convId = '') {
   });
 }
 
-// ---------- wiki summary (ported from OMX 0.21.18 wiki/lifecycle.js) ----------
+// ---------- wiki & working agreements summary (ported from OMX 0.21.18 + OmO working-agreement ledger) ----------
 function loadWikiSummary(roots) {
   for (const rawRoot of roots) {
     const root = stateRoot(rawRoot);
     for (const dirName of ['omagy_wiki', 'omx_wiki']) {
       const indexPath = path.join(root, dirName, 'index.md');
-      let raw = '';
-      try { raw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { continue; }
-      if (!raw) continue;
-      const lines = raw.split('\n').slice(0, MAX_WIKI_CONTEXT_LINES);
-      const summary = [
-        `[oh-my-agy] Project Wiki index (${dirName}/index.md):`,
-        ...lines,
-      ].join('\n');
+      const agreementsPath = path.join(root, dirName, 'agreements.md');
+      let indexRaw = '';
+      let agreementsRaw = '';
+      try { indexRaw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { /* ignore */ }
+      try { agreementsRaw = fs.readFileSync(agreementsPath, 'utf8').trim(); } catch { /* ignore */ }
+      if (!indexRaw && !agreementsRaw) continue;
+      const parts = [];
+      if (agreementsRaw) {
+        parts.push(
+          `[oh-my-agy] Working Agreements (${dirName}/agreements.md):`,
+          ...agreementsRaw.split('\n').slice(0, 25),
+        );
+      }
+      if (indexRaw) {
+        parts.push(
+          `[oh-my-agy] Project Wiki index (${dirName}/index.md):`,
+          ...indexRaw.split('\n').slice(0, MAX_WIKI_CONTEXT_LINES),
+        );
+      }
+      const summary = parts.join('\n');
       if (summary.length <= MAX_WIKI_CONTEXT_CHARS) return summary;
       const notice = '\n[Wiki index truncated; use $wiki read or $wiki query for more.]';
       const bounded = summary.slice(0, MAX_WIKI_CONTEXT_CHARS - notice.length);
@@ -193,6 +258,51 @@ function loadWikiSummary(roots) {
     }
   }
   return null;
+}
+
+// ---------- hierarchical subdirectory AGENTS.md discovery (ported from OmO directory-agents-injector) ----------
+function discoverSubdirAgents(roots, text, seenList = []) {
+  if (!text || typeof text !== 'string' || !roots.length) return { messages: [], seen: seenList };
+  const seen = new Set(Array.isArray(seenList) ? seenList : []);
+  const messages = [];
+  const tokenRe = /(?:file:\/\/)?([A-Za-z0-9_./-]+\/[A-Za-z0-9_.-]+)/g;
+  const candidates = new Set();
+  let m;
+  while ((m = tokenRe.exec(text)) !== null) {
+    if (candidates.size >= 24) break;
+    candidates.add(m[1]);
+  }
+  for (const rawRoot of roots) {
+    const root = path.resolve(rawRoot);
+    for (const token of candidates) {
+      const resolved = path.isAbsolute(token) ? path.resolve(token) : path.resolve(root, token);
+      if (!resolved.startsWith(root + path.sep)) continue;
+      let dir = resolved;
+      try {
+        if (!fs.existsSync(dir) || fs.statSync(dir).isFile()) dir = path.dirname(dir);
+      } catch {
+        dir = path.dirname(dir);
+      }
+      const chain = [];
+      while (dir.startsWith(root + path.sep) && dir !== root && chain.length < MAX_WORKSPACE_WALK_DEPTH) {
+        chain.unshift(dir);
+        dir = path.dirname(dir);
+      }
+      for (const d of chain) {
+        const agentsFile = path.join(d, 'AGENTS.md');
+        if (seen.has(agentsFile)) continue;
+        let raw = '';
+        try { raw = fs.readFileSync(agentsFile, 'utf8').trim(); } catch { continue; }
+        if (!raw) continue;
+        seen.add(agentsFile);
+        const rel = path.relative(root, agentsFile);
+        const snippet = raw.split('\n').slice(0, 30).join('\n').slice(0, 1500);
+        messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
+        if (messages.length >= 2) return { messages, seen: [...seen] };
+      }
+    }
+  }
+  return { messages, seen: [...seen] };
 }
 
 // ---------- team completion evidence validator (ported from OMX 0.21.18) ----------
@@ -249,6 +359,60 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
     throw new Error('Evidence requires summary, passing verification checks (command/result:"passed"/output), and an unverified array.');
   }
   return { ok: true, file: target, taskId: evidence.taskId ?? null, team: teamVal ?? null };
+}
+
+// ---------- crash-resilient JSONL helpers (ported from OMX 0.21.33 PR #3893) ----------
+export function appendJsonlRecord(filePath, rawRecord) {
+  const resolved = path.resolve(String(filePath || ''));
+  let parsed;
+  try {
+    parsed = typeof rawRecord === 'string' ? JSON.parse(rawRecord) : rawRecord;
+  } catch {
+    throw new Error('Invalid JSON record for JSONL append.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('JSONL record must be a JSON object.');
+  }
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  let prefix = '';
+  try {
+    const st = fs.lstatSync(resolved);
+    if (st.isSymbolicLink()) throw new Error('Refusing to append to symlinked JSONL file.');
+    if (st.size > 0) {
+      const fd = fs.openSync(resolved, 'r');
+      try {
+        const b = Buffer.alloc(1);
+        fs.readSync(fd, b, 0, 1, st.size - 1);
+        if (b[0] !== 0x0a) prefix = '\n';
+      } finally { fs.closeSync(fd); }
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('symlink')) throw err;
+  }
+  const line = `${prefix}${JSON.stringify(parsed)}\n`;
+  fs.appendFileSync(resolved, line, { encoding: 'utf8', mode: 0o600 });
+  return { ok: true, file: resolved, isolatedNewline: prefix === '\n' };
+}
+
+export function readJsonlRecords(filePath) {
+  const resolved = path.resolve(String(filePath || ''));
+  const st = fs.lstatSync(resolved);
+  if (st.isSymbolicLink()) throw new Error('Refusing to read symlinked JSONL file.');
+  const raw = fs.readFileSync(resolved, 'utf8');
+  const records = [];
+  let skipped = 0;
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) records.push(obj);
+      else skipped += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { ok: true, file: resolved, records, skipped };
 }
 
 // ---------- transcript ----------
@@ -412,27 +576,36 @@ function preInvocation(payload) {
   // No transcript visibility: only remind on the first invocation of a run.
   if (!userKey && Number(payload.invocationNum ?? payload.invocation_num ?? 0) > 1) return {};
 
+  const isSubagent = Boolean(record.isSubagent) || isSubagentPayload(payload, user ? user.text : '');
   const messages = [];
-  const skills = user ? detectSkills(user.text) : [];
-  if (skills.length) {
-    messages.push(
-      `[oh-my-agy] Skill routing: the user explicitly invoked ${skills.map((s) => `$${s}`).join(', ')}. ` +
-      'Activate these oh-my-agy skills left-to-right: read each SKILL.md from the oh-my-agy plugin before acting, ' +
-      'and treat the rest of the user message as the task.',
-    );
-  }
-  const activeMsg = buildActiveModeMessage(roots, conv);
-  if (activeMsg) messages.push(activeMsg);
-
-  let wikiInjected = Boolean(record.wikiInjected);
-  if (!wikiInjected) {
-    const wikiMsg = loadWikiSummary(roots);
-    if (wikiMsg) {
-      messages.push(wikiMsg);
-      wikiInjected = true;
+  if (!isSubagent) {
+    const skills = user ? detectSkills(user.text) : [];
+    if (skills.length) {
+      messages.push(
+        `[oh-my-agy] Skill routing: the user explicitly invoked ${skills.map((s) => `$${s}`).join(', ')}. ` +
+        'Activate these oh-my-agy skills left-to-right: read each SKILL.md from the oh-my-agy plugin before acting, ' +
+        'and treat the rest of the user message as the task.',
+      );
     }
+    const activeMsg = buildActiveModeMessage(roots, conv);
+    if (activeMsg) messages.push(activeMsg);
+
+    let wikiInjected = Boolean(record.wikiInjected);
+    if (!wikiInjected) {
+      const wikiMsg = loadWikiSummary(roots);
+      if (wikiMsg) {
+        messages.push(wikiMsg);
+        wikiInjected = true;
+      }
+    }
+    const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
+    for (const m of subdir.messages) messages.push(m);
+    writeJson(recordFile, { lastUserKey: userKey, wikiInjected, isSubagent: false, seenAgents: subdir.seen, at: new Date().toISOString() });
+  } else {
+    const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
+    for (const m of subdir.messages) messages.push(m);
+    writeJson(recordFile, { lastUserKey: userKey, wikiInjected: Boolean(record.wikiInjected), isSubagent: true, seenAgents: subdir.seen, at: new Date().toISOString() });
   }
-  writeJson(recordFile, { lastUserKey: userKey, wikiInjected, at: new Date().toISOString() });
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
@@ -440,13 +613,25 @@ function preToolUse(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const call = payload.toolCall || payload.tool_call || {};
+  const toolName = String(call.name || payload.toolName || payload.tool_name || '');
   const args = call.args || call.arguments || {};
   const target = args.Path || args.path || args.TargetFile || args.targetFile || args.target_file || '';
   if (!target) return {};
-  const resolved = path.resolve(String(target));
+  const resolved = canonicalizePath(target);
+  const rawResolved = path.resolve(String(target));
+  const seenFile = runtimeFile(conv, 'seen');
+  if (/^(?:read|view)_/i.test(toolName)) {
+    const seen = readJson(seenFile) || { readFiles: [] };
+    const list = Array.isArray(seen.readFiles) ? seen.readFiles : [];
+    if (!list.includes(resolved)) {
+      writeJson(seenFile, { readFiles: [...list.slice(-199), resolved], at: new Date().toISOString() });
+    }
+    return {};
+  }
   const insideAllowed = roots.some((r) => {
-    const sr = path.resolve(stateRoot(r));
-    const wr = path.resolve(r);
+    const sr = canonicalizePath(stateRoot(r));
+    const wr = canonicalizePath(r);
+    if (hasSymlinkSegment(r, rawResolved) || hasSymlinkSegment(sr, rawResolved) || hasSymlinkSegment(wr, rawResolved)) return false;
     return resolved.startsWith(path.join(sr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(wr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(sr, 'omagy_wiki') + path.sep)
@@ -459,14 +644,38 @@ function preToolUse(payload) {
   const autopilotPlanning = autopilotStates.find((s) => PLANNING_MODES.includes(String(s.data.current_phase || '').toLowerCase()));
   const ralplanGate = autopilotStates.find((s) => s.data.ralplan_gate === true && !hasRalplanArtifacts(s.root));
   const s = planning[0] || autopilotPlanning || ralplanGate;
-  if (!s) return {};
+  if (s) {
+    const reason = ralplanGate && s === ralplanGate
+      ? `oh-my-agy: autopilot ralplan_gate is active without .omagy/plans/prd-*.md and test-spec-*.md. Writing ${resolved} outside .omagy/ requires completing ralplan artifacts first or user approval.`
+      : `oh-my-agy: ${s.mode} is in planning phase (${s.data.current_phase || 'unknown'}). ` +
+        `Writing ${resolved} is implementation work outside .omagy/. Approve only if you intend to leave planning; ` +
+        'otherwise finish the planning handoff or run $cancel.';
+    return { decision: 'force_ask', reason };
+  }
 
-  const reason = ralplanGate && s === ralplanGate
-    ? `oh-my-agy: autopilot ralplan_gate is active without .omagy/plans/prd-*.md and test-spec-*.md. Writing ${resolved} outside .omagy/ requires completing ralplan artifacts first or user approval.`
-    : `oh-my-agy: ${s.mode} is in planning phase (${s.data.current_phase || 'unknown'}). ` +
-      `Writing ${resolved} is implementation work outside .omagy/. Approve only if you intend to leave planning; ` +
-      'otherwise finish the planning handoff or run $cancel.';
-  return { decision: 'force_ask', reason };
+  // Write-existing-file guard (ported from OmO write-existing-file-guard):
+  // Escalates full-file Overwrite on a non-empty existing code file that has not been read in this session.
+  const isFullOverwrite = /^(?:write_file|write_to_file)$/i.test(toolName)
+    && (args.Overwrite === true || args.overwrite === true)
+    && args.Append !== true && args.append !== true;
+  if (isFullOverwrite && CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
+    let existsNonEmpty = false;
+    try {
+      const st = fs.statSync(resolved);
+      existsNonEmpty = st.isFile() && st.size > 0;
+    } catch { existsNonEmpty = false; }
+    if (existsNonEmpty) {
+      const seen = readJson(seenFile) || { readFiles: [] };
+      const readList = Array.isArray(seen.readFiles) ? seen.readFiles : [];
+      if (!readList.includes(resolved)) {
+        return {
+          decision: 'force_ask',
+          reason: `oh-my-agy: write-existing-file-guard — Overwriting existing source file ${resolved} without reading it first in this session. Read the file first or use edit_file to avoid accidental code deletion, or approve to overwrite.`,
+        };
+      }
+    }
+  }
+  return {};
 }
 
 async function stop(payload) {
@@ -478,7 +687,10 @@ async function stop(payload) {
 
   let decision = allow;
   if (isNormalStop && payload.fullyIdle !== false && !payload.error) {
-    const active = activeStates(roots, CONTINUATION_MODES, conv);
+    const routingRec = readJson(runtimeFile(conv, 'routing')) || {};
+    const isSubagent = Boolean(routingRec.isSubagent) || isSubagentPayload(payload);
+    const active = activeStates(roots, CONTINUATION_MODES, conv)
+      .filter((s) => !isSubagent || (conv && s.owner === String(conv)));
     const nudgeFile = runtimeFile(conv, 'nudge');
     if (active.length) {
       const s = active[0];
@@ -629,27 +841,36 @@ async function selftest() {
     writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
     check('terminal state is ignored', (await stop({ ...base, terminationReason: 'NO_TOOL_CALL' })).decision === 'stop');
 
-    // Wiki index bounded injection + routing test
+    // Wiki index + Working Agreements bounded injection + routing test
     const wikiDir = path.join(ws, 'omagy_wiki');
     fs.mkdirSync(wikiDir, { recursive: true });
     const longWiki = Array.from({ length: 80 }, (_, i) => `- [[page-${i}]] — Page ${i} — architecture — ${'x'.repeat(60)}`).join('\n');
     fs.writeFileSync(path.join(wikiDir, 'index.md'), longWiki);
+    fs.writeFileSync(path.join(wikiDir, 'agreements.md'), '- [v2] Never overwrite existing files without reading them first.\n');
+
+    // Subdirectory AGENTS.md discovery fixture
+    const subPkg = path.join(ws, 'packages', 'core');
+    fs.mkdirSync(subPkg, { recursive: true });
+    fs.writeFileSync(path.join(subPkg, 'AGENTS.md'), '# Core Package Rules\nKeep core zero-dependency.\n');
+    fs.writeFileSync(path.join(subPkg, 'index.ts'), 'export const ok = true;\n');
 
     const transcript = path.join(ws, 'transcript.jsonl');
-    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review, not /plan or $nonexistent' })}\n`);
+    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $handoff on packages/core/index.ts, not /plan or $nonexistent' })}\n`);
     const p1 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 1 });
     const stepTexts = (p1.injectSteps || []).map((s) => s.ephemeralMessage || '');
     const routeMsg = stepTexts[0] || '';
     const wikiMsg = stepTexts.find((t) => t.includes('Project Wiki index')) || '';
-    check('pre-invocation routes $skills in order', routeMsg.includes('$autopilot, $code-review') && !routeMsg.includes('$plan') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
-    check('pre-invocation injects bounded wiki index (<=3500 chars)', wikiMsg.length > 0 && wikiMsg.length <= MAX_WIKI_CONTEXT_CHARS && wikiMsg.includes('Wiki index truncated'), `len=${wikiMsg.length}`);
+    const subdirMsg = stepTexts.find((t) => t.includes('Subdirectory AGENTS.md')) || '';
+    check('pre-invocation routes $skills in order (including $handoff)', routeMsg.includes('$autopilot, $code-review, $handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
+    check('pre-invocation injects working agreements + bounded wiki index (<=3500 chars)', wikiMsg.includes('Working Agreements') && wikiMsg.length <= MAX_WIKI_CONTEXT_CHARS && wikiMsg.includes('Wiki index truncated'), `len=${wikiMsg.length}`);
+    check('pre-invocation discovers subdirectory AGENTS.md on touched path', subdirMsg.includes('packages/core/AGENTS.md') && subdirMsg.includes('Keep core zero-dependency'));
     check('pre-invocation injects once per user message', Object.keys(preInvocation({ ...base, transcriptPath: transcript, invocationNum: 2 })).length === 0);
 
-    // Next user message should not re-inject wiki index in the same session
-    fs.appendFileSync(transcript, `${JSON.stringify({ step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'now $analyze this' })}\n`);
+    // Next user message should not re-inject wiki index or already-seen subdirectory AGENTS.md in the same session
+    fs.appendFileSync(transcript, `${JSON.stringify({ step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'now $analyze packages/core/index.ts' })}\n`);
     const p2 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 3 });
     const p2Texts = (p2.injectSteps || []).map((s) => s.ephemeralMessage || '');
-    check('wiki index injects at most once per conversation', p2Texts.some((t) => t.includes('$analyze')) && !p2Texts.some((t) => t.includes('Project Wiki index')));
+    check('wiki index and subdirectory AGENTS.md inject at most once per conversation', p2Texts.some((t) => t.includes('$analyze')) && !p2Texts.some((t) => t.includes('Project Wiki index')) && !p2Texts.some((t) => t.includes('Subdirectory AGENTS.md')));
 
     writeJson(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { mode: 'ralplan', active: true, current_phase: 'architect-review', updated_at: new Date().toISOString() });
     const g1 = preToolUse({ ...base, toolCall: { name: 'write_to_file', args: { TargetFile: path.join(ws, 'src', 'index.ts') } } });
@@ -667,6 +888,16 @@ async function selftest() {
     fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'test-spec-demo.md'), '# Test Spec\n');
     const gRalplanPresent = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
     check('autopilot ralplan_gate blocks writes until prd + test-spec exist', gRalplanMissing.decision === 'force_ask' && !gRalplanPresent.decision);
+
+    // Write-existing-file guard (unread full Overwrite vs read-then-overwrite)
+    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
+    const existingSrc = path.join(ws, 'src', 'existing.ts');
+    fs.mkdirSync(path.dirname(existingSrc), { recursive: true });
+    fs.writeFileSync(existingSrc, 'export const v = 1;\n');
+    const gOverwriteUnread = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: existingSrc, Overwrite: true } } });
+    preToolUse({ ...base, toolCall: { name: 'read_file', args: { Path: existingSrc } } });
+    const gOverwriteAfterRead = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: existingSrc, Overwrite: true } } });
+    check('write-existing-file-guard escalates unread Overwrite and allows after read_file', gOverwriteUnread.decision === 'force_ask' && !gOverwriteAfterRead.decision);
 
     // Foreign conversation owner isolation
     writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', owner_conversation_id: 'other-conv', updated_at: new Date().toISOString() });
@@ -743,6 +974,42 @@ async function selftest() {
     const filteredRoots = workspaceRoots({ workspacePaths: [ path.join(ws, 'does-not-exist'), ws ] });
     check('workspaceRoots filters non-existent directories', filteredRoots.length === 1 && filteredRoots[0] === ws);
 
+    // Subagent prompt & hook isolation (OMX codex-native-hook parity)
+    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
+    const subTranscript = path.join(ws, 'subagent-transcript.jsonl');
+    fs.writeFileSync(subTranscript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'TEAM alpha — TASK 1: audit $autopilot and $cancel behavior' })}\n`);
+    const subPre = preInvocation({ conversationId: `${conv}-sub`, workspacePaths: [ws], transcriptPath: subTranscript, invocationNum: 1 });
+    const subPreTexts = (subPre.injectSteps || []).map((s) => s.ephemeralMessage || '');
+    const subStop = await stop({ conversationId: `${conv}-sub`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL' });
+    check('subagent prompt suppresses quoted $skill routing and unowned parent stop nudges', !subPreTexts.some((t) => t.includes('Skill routing')) && subStop.decision === 'stop');
+    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
+
+    // Symlink state & planning-guard escape protection (OMX 0.21.31-32 parity)
+    const symTargetState = path.join(ws, 'outside-state.json');
+    writeJson(symTargetState, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
+    const symStateLink = path.join(ws, '.omagy', 'state', 'symlinked-state.json');
+    fs.symlinkSync(symTargetState, symStateLink);
+    const sSym = await stop({ conversationId: `${conv}-sym`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL' });
+    fs.rmSync(symStateLink, { force: true });
+    check('readStateDir ignores symlinked state files', sSym.decision === 'stop');
+
+    writeJson(path.join(ws, '.omagy', 'state', 'plan-state.json'), { mode: 'plan', active: true, current_phase: 'drafting', updated_at: new Date().toISOString() });
+    const outsideFile = path.join(ws, 'src', 'secret.ts');
+    const symInsideOmagy = path.join(ws, '.omagy', 'plans', 'escape-link.ts');
+    fs.symlinkSync(outsideFile, symInsideOmagy);
+    const gSymEscape = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: symInsideOmagy } } });
+    fs.rmSync(symInsideOmagy, { force: true });
+    fs.rmSync(path.join(ws, '.omagy', 'state', 'plan-state.json'), { force: true });
+    check('preToolUse refuses symlink inside .omagy/ escaping to source file during planning', gSymEscape.decision === 'force_ask');
+
+    // Crash-resilient newline-isolated JSONL append & tolerant reader (OMX 0.21.33 PR #3893 parity)
+    const ledgerPath = path.join(ws, '.omagy', 'ultragoal', 'ledger.jsonl');
+    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    fs.writeFileSync(ledgerPath, '{"goal_id":"G1","event":"started"}\n{"goal_id":"G1","event":"torn');
+    const appRes = appendJsonlRecord(ledgerPath, { goal_id: 'G1', event: 'checkpoint', status: 'complete' });
+    const readRes = readJsonlRecords(ledgerPath);
+    check('appendJsonlRecord isolates torn tail with newline and readJsonlRecords recovers valid entries', appRes.isolatedNewline === true && readRes.records.length === 2 && readRes.skipped === 1);
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -769,6 +1036,30 @@ async function main() {
     const [, , , cwdArg, relArg, teamArg, taskIdArg] = process.argv;
     try {
       const res = validateCompletionEvidence(cwdArg || process.cwd(), relArg, { team: teamArg, taskId: taskIdArg });
+      process.stdout.write(`${JSON.stringify(res)}\n`);
+      process.exitCode = 0;
+    } catch (err) {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (event === 'append-jsonl') {
+    const [, , , fileArg, jsonArg] = process.argv;
+    try {
+      const res = appendJsonlRecord(fileArg, jsonArg || readStdin());
+      process.stdout.write(`${JSON.stringify(res)}\n`);
+      process.exitCode = 0;
+    } catch (err) {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (event === 'read-jsonl') {
+    const [, , , fileArg] = process.argv;
+    try {
+      const res = readJsonlRecords(fileArg);
       process.stdout.write(`${JSON.stringify(res)}\n`);
       process.exitCode = 0;
     } catch (err) {

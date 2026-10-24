@@ -49,7 +49,7 @@ Choose the lane before acting:
 - **`$plan`** for lightweight planning without a deep interview. **`$ralplan`** for Planner -> Architect -> Critic consensus planning.
 - **`$ultragoal`** for durable multi-goal execution with a ledger and resume semantics.
 - **`$team`** when an approved plan needs coordinated parallel execution across multiple subagent lanes.
-- **`$code-review`**, **`$ultraqa`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`** as bounded helpers inside the chosen lane. They do not compete with it.
+- **`$code-review`**, **`$ultraqa`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$handoff`** as bounded helpers inside the chosen lane. They do not compete with it.
 - Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$plan --interview`.
 - `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `swarm` are removed upstream. Do not route there.
 
@@ -86,8 +86,8 @@ Routing rules:
 
 - **Leader** (main lane): chooses mode, delegates bounded verifiable subtasks, integrates results, owns final verification and stop/escalate calls.
 - **Children**: execute the assigned slice, stay in scope, and report blockers, shared-file conflicts, scope expansion, or recommended handoffs upward. They do not orchestrate recursively.
-- Max 6 concurrent subagents. Use `Workspace: "branch"` or `"share"` for parallel writers that would otherwise touch the same files.
-- Prefer inherited model defaults (`Model: "inherit"`) unless a task has a concrete reason to override.
+- Max 6 concurrent subagents. Prefer `Workspace: "share"` (shares git object store like `git worktree` so worker branch commits survive worker termination) over `"branch"` (cloned workspace deleted by `manage_subagents kill`); before killing a branched worker, preserve unmerged commits, modified/untracked files, and `.omagy/evidence/`.
+- **Work-shape model routing**: use `Model: "flash"` for **Splittable/Quick** mechanical subtasks (isolated file lookup, single-file edit/rename), `Model: "inherit"` for **Cohesive/Deep** multi-file implementation or stateful debugging, and `Model: "pro"` (or `"inherit"`) for **Ultrabrain** architecture, critique, causal tracing, and security review.
 - Give every child a self-contained prompt: task, scope, owned files, acceptance criteria, verification command, and expected report shape.
 - Never put independent review lanes (e.g. architect then critic in `$ralplan`) in the same parallel batch when the contract says sequential.
 - After a server restart stops subagents, revive the ones you still need with `send_message` to their existing conversation IDs before spawning replacements. If one cannot be revived, continue in the leader lane rather than spawning a duplicate.
@@ -95,7 +95,7 @@ Routing rules:
 ## User questions
 
 - Use Antigravity's `ask_question` tool for structured questions (this replaces `omx question`). Put the recommended option first, prefixed with `(Recommended)`. Do not add an "Other" option: the UI provides one. Set `is_multi_select` only when several answers can be true at once.
-- Ask one interview round per call in Socratic workflows. Never ask the user for facts you can discover from the repository.
+- **Explore before asking & Two-Filter Gate**: gather repo/doc facts first and never ask for discoverable facts. Ask the user only when (1) the fork changes architecture/scope/files, (2) repo/docs cannot resolve it, AND (3) the decision is irreversible, destructive, spend-bearing, or alters an external contract. On open-ended requests ("improve X", "you decide"), adopt and announce best-practice defaults with 1-line rationales instead of interrogating the user.
 
 ## Durable state (`.omagy/`)
 
@@ -125,8 +125,8 @@ State file contract: write the whole file with `write_file` / `write_to_file` (O
 ## Hooks (bounded and fail-open)
 
 - `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal, the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`). If you are genuinely blocked on the user, write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
-- `PreToolUse` (planning guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path` or `TargetFile`) outside `.omagy/` and `omagy_wiki/` require user confirmation. Planning modes do not implement.
-- `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, and a bounded (`<=3,500` chars) `omagy_wiki/index.md` summary once per conversation.
+- `PreToolUse` (planning & overwrite guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path` or `TargetFile`) outside `.omagy/` and `omagy_wiki/` require user confirmation. Also escalates unread `write_file(Overwrite: true)` calls on non-empty existing code files (`write-existing-file-guard`).
+- `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per conversation, and any unseen subdirectory `AGENTS.md` along touched workspace paths.
 
 ## Verification
 

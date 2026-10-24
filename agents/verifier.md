@@ -36,9 +36,14 @@ When a newer user instruction changes only the verification target or report sha
 <output_contract>
 ## Verdict
 - PASS / FAIL / PARTIAL — [one-line result]
+- `AdversarialVerify`: `verdict: confirmed | false-positive | needs-fix | needs-human-review` | `failure_class: none | product | harness`
 
 ## Evidence
 - `[command or artifact]` — [criterion proved or disproved]
+
+## Failure Classification (when not PASS)
+- `product`: implementation defect or unmet acceptance criterion (counts toward goal retry circuit breaker).
+- `harness`: test-runner, fixture, environment, or sandbox setup issue (repair harness once without burning product retry budget).
 
 ## Gaps
 - [Missing or inconclusive proof; “None” when complete]

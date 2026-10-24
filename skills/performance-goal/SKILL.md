@@ -34,7 +34,7 @@ Also write `.omagy/state/performance-goal-state.json` (`mode:"performance-goal"`
 1. **Baseline**: run the evaluator (several runs if the metric is noisy) and record `baseline` with the raw numbers.
 2. **Optimize** in small, reversible patches, one hypothesis per patch. Use the `debugger` or `architect` subagent for profiling analysis when useful.
 3. **Evaluate**: run the evaluator and related regression tests after each patch.
-4. **Checkpoint** every result by appending to `checkpoints.jsonl`:
+4. **Checkpoint** every result by appending to `checkpoints.jsonl` (using newline-isolated appends via `sh <plugin>/hooks/run.sh append-jsonl .omagy/goals/performance/<slug>/checkpoints.jsonl '<json>'` or ensuring a leading newline if the file tail was torn):
    `{"at":"<ISO>","status":"pass|fail|blocked","evidence":"<numbers, command, exit code>","patch":"<summary>"}`
    Then update `lastValidation` in `state.json` and `updated_at`/`iteration` in the mode state. Revert patches that regress or do not help.
 5. **Complete** only when `lastValidation.status == "pass"` and the audit confirms no required work remains. Set `state.json` `status:"complete"` and write the mode state terminal (`active:false`, `current_phase:"complete"`, `completed_at`).

@@ -45,6 +45,10 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 - Durable doc/glossary/ADR updates are opt-in and public-safe only. Recommend them in the handoff; never auto-create them from interview transcripts.
 - If initial context is oversized, do not paste it into prompts. Make the first round a request for a prompt-safe summary (goals, constraints, success criteria, non-goals, decision boundaries, references to full sources). This gate blocks scoring, crystallizing, and handoff.
 - Route facts before judgment. Before each round, classify the needed information as a discoverable fact, a fact needing confirmation, or a human decision. The interview with the human is for judgment.
+- **Two-Filter Question Gate + Owner-Decision Survival (ported from OmO `ulw-plan`)**:
+  - **Filter 1 (Material Fork)**: Does the answer change architecture, scope, schema, or file boundaries?
+  - **Filter 2 (Unresolvable by Repo/Docs)**: Can this be answered by inspecting the repo or official docs? If yes, inspect—do not ask.
+  - **Owner-Decision Survival**: Unless the user explicitly asked for a deep Socratic grilling ("interview me", "ask me everything"), ask only decisions that are irreversible, destructive, spend-bearing, scope-defining, or change a public/external contract. For reversible engineering defaults, propose the recommended default and record it under `[adopted-default]` if the user says "you decide" / "use best practices".
 - When ambiguity depends on current external best practices or version-aware behavior, use `$best-practice-research` before crystallizing.
 - Transcript/spec labels:
   - `[from-code][auto-confirmed]`: exact, high-confidence codebase facts with no prescription attached. Record them as context, not interview rounds.
@@ -199,7 +203,8 @@ When threshold is met (or on early exit with a warning, or at the hard cap):
    - Metadata (profile, rounds, final ambiguity, threshold, context type) and the context snapshot path.
    - Prompt-safe initial-context summary (when oversized context was provided) with references to the full sources.
    - Clarity breakdown table.
-   - Intent; Desired Outcome; In-Scope; Out-of-Scope / Non-goals; Decision Boundaries (what the agent may decide without confirmation); Constraints; testable Acceptance Criteria.
+   - **Affected User Ideal State & Gap Table** (`Dimension | Current State | Ideal State | Gap | Approach | Verification Metric`).
+   - Intent; Desired Outcome; In-Scope; Out-of-Scope / Non-goals; Decision Boundaries (what the agent may decide without confirmation, plus any `[adopted-default]` choices); Constraints; testable Acceptance Criteria.
    - Assumptions exposed and their resolutions; pressure-pass findings (which answer was revisited and what changed).
    - Brownfield evidence vs inference notes; Docs/Terminology Ledger; scenario/edge-case findings.
    - Optional durable-doc recommendations (opt-in, public-safe, no raw transcript dumps).

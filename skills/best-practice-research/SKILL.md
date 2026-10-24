@@ -67,8 +67,8 @@ This skill is terminal and read-only by default. It gathers evidence and produce
 ### Version / Date Context
 <versions, dates, release channels, or unknowns>
 
-### Repo-Local Context
-<repo-local facts, or "not needed">
+### Repo-Local Context & Intent-vs-Reality Drift
+<repo-local facts, or "not needed". When comparing local usage against upstream/official guidance, classify each surface as `Match`, `Undocumented`, `Broken`, or `Stale` with `file:line` and upstream URL.>
 
 ### Boundaries / Non-goals
 <what this research does not decide>

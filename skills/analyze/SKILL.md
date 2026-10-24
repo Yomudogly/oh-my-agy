@@ -66,6 +66,11 @@ Restated question, briefly.
 - What the evidence most strongly implies.
 - Why weaker alternatives were down-ranked.
 
+### Intent-vs-Reality Diff (include when auditing docs, specs, or expected vs actual behavior; ported from OmO `ulw-research`)
+| Surface / Claim | Expected / Documented (`source`) | Actual Code Behavior (`file:line`) | Drift Classification |
+|-----------------|----------------------------------|------------------------------------|----------------------|
+| ... | ... | ... | `Match` / `Undocumented` / `Broken` / `Stale` |
+
 ### Unknowns / limits
 - What the repository does not establish.
 - The next discriminating read-only probe, when useful.

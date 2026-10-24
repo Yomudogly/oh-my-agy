@@ -1,11 +1,11 @@
 ---
 name: ralplan
-description: "[oh-my-agy] Consensus planning: Planner -> Architect -> Critic subagent review loop producing an execution-ready plan and a bound handoff to $ultragoal. Use for $ralplan, for high-stakes plans that need architectural review, or as the Autopilot planning stage. Flags: --interactive, --deliberate, --advisory."
+description: "[oh-my-agy] Consensus planning: Planner -> Architect -> Critic subagent review loop (plus --hyperplan 5-persona hostile cross-critique) producing an execution-ready plan and a bound handoff to $ultragoal. Use for $ralplan, for high-stakes plans that need architectural review, or as the Autopilot planning stage. Flags: --interactive, --deliberate, --hyperplan, --advisory."
 ---
 
 # Ralplan (Consensus Planning)
 
-Ralplan is the consensus-planning stage that Autopilot runs between `$deep-interview` and `$ultragoal`. It drives Planner, Architect, and Critic review with **RALPLAN-DR structured deliberation**: short mode by default, deliberate mode for high-risk work. Review evidence is local lifecycle evidence, not a security authority. Once the plan and sequential approvals are durable, progression to Ultragoal must stay reachable, and cancel/recovery must never be blocked.
+Ralplan is the consensus-planning stage that Autopilot runs between `$deep-interview` and `$ultragoal`. It drives Planner, Architect, and Critic review with **RALPLAN-DR structured deliberation**: short mode by default, deliberate mode for high-risk work, and `--hyperplan` for 5-persona hostile cross-critique before formal planning. Review evidence is local lifecycle evidence, not a security authority. Once the plan and sequential approvals are durable, progression to Ultragoal must stay reachable, and cancel/recovery must never be blocked.
 
 ## Usage
 
@@ -13,6 +13,7 @@ Ralplan is the consensus-planning stage that Autopilot runs between `$deep-inter
 $ralplan "task description"
 $ralplan --interactive "task description"
 $ralplan --deliberate "task description"
+$ralplan --hyperplan "task description"
 $ralplan --advisory "task description"
 ```
 
@@ -20,6 +21,14 @@ $ralplan --advisory "task description"
 
 - `--interactive`: pause at key decision points (draft review in step 2, final approval in step 6) using `ask_question`. Without it, the Planner -> Architect -> Critic loop runs fully automated.
 - `--deliberate`: force deliberate mode. It adds a pre-mortem (3 scenarios) and an expanded test plan (unit/integration/e2e/observability). Deliberate mode also turns on automatically when the request signals high risk: auth/security, migrations, destructive changes, production incidents, compliance/PII, public API breakage.
+- `--hyperplan` (ported from OmO `hyperplan`): run a 2-round, 5-persona hostile cross-critique tournament before the Planner drafts the PRD:
+  - **Round 1 (Independent Analysis)**: dispatch parallel read-only subagents across 5 adversarial lenses:
+    1. `skeptic` (`architect` or `research` subagent): attacks accidental complexity, speculative abstractions, and YAGNI violations.
+    2. `validator` (`test-engineer` or `verifier` subagent): attacks edge-case blast radius, data loss vectors, and untestable assumptions.
+    3. `researcher` (`researcher` subagent): attacks uncited API/version claims and stale training-weight assumptions.
+    4. `architect` (`architect` subagent): attacks coupling, state ownership, and boundary leaks.
+    5. `creative` (`analyst` subagent): proposes lateral inversions that achieve 80%+ of the outcome with a fraction of the moving parts.
+  - **Round 2 (Cross-Attack & Survival Distillation)**: evaluate each persona's Round 1 claims against the others, tagging every major design proposal as `SURVIVES`, `WEAKENED (with required mitigation)`, or `KILLED (with reason)` in `.omagy/plans/hyperplan-distillation-{slug}.md`. Feed only `SURVIVES` and mitigated `WEAKENED` proposals into Step 1 (`Planner`).
 - `--advisory`: standalone only. It runs the same review lifecycle and returns the reviewed plan, but never authorizes execution. Terminal state records `consensus_gate.complete:false` and `execution_handoff.authorized:false` explicitly. A later explicit execution request from the user is needed before any implementation. It cannot be combined with Autopilot, Ultragoal, or Team.
 
 ## Pre-context intake

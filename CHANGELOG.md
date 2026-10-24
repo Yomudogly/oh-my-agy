@@ -1,8 +1,36 @@
 # Changelog
 
-Versions follow `<oh-my-codex version>-agy.<port revision>`.
+Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
+
+## 0.3.1
+
+*Upstream references: **OMX** `v0.21.34` · **OMC** `v5.7.11` · **OMO** `v5.1.44`*
+
+- **Hooks (`omagy-hook.mjs`, adapted from OMX `v0.21.31`–`v0.21.34` & OMO `v5.1.44`)**:
+  - Added **Working-Agreement Ledger** auto-injection (`omagy_wiki/agreements.md` / `omx_wiki/agreements.md`) ahead of `index.md` on `SessionStart` and `PreInvocation`.
+  - Added **Hierarchical Subdirectory `AGENTS.md` Discovery** (`discoverSubdirAgents`) on `PreInvocation`, injecting unseen nested `AGENTS.md` files along touched workspace paths once per conversation.
+  - Added **`write-existing-file-guard`** in `PreToolUse`, escalating full-file `Overwrite: true` calls on non-empty existing source files that have not been read in the current session.
+  - Added **Subagent Prompt & Hook Isolation** (`isSubagentPayload`, from OMX `codex-native-hook.ts`) so delegated subagent prompts do not trigger leader `$skill` routing on quoted skill tokens and are not hijacked by unowned parent `.omagy/state/*-state.json` files.
+  - Added **Canonical Scope Root & Symlink Escape Guards** (`canonicalizePath`, `hasSymlinkSegment`, and `fs.lstatSync` checks in `readStateDir` and `preToolUse`, from OMX `v0.21.31`–`v0.21.32`) to block symlinked state files and symlink escapes out of `.omagy/` or `omagy_wiki/` during planning/overwrite guards.
+  - Added **Crash-Resilient JSONL Ledger Helpers** (`append-jsonl` and `read-jsonl` CLI subcommands, from OMX `v0.21.33` PR #3893) that prepend `\n` when existing non-empty `.jsonl` files lack a trailing newline and skip corrupted partial lines on read.
+  - Added `$handoff` skill routing (`30` selftests passing).
+- **New Skill (`skills/handoff/`, adapted from OMO `v5.1.44`)**:
+  - `$handoff`: generates a self-contained session continuation artifact (`.omagy/artifacts/handoff-<slug>-<UTC>.md` and `handoff-latest.md`) with objective, verified work, active `.omagy/state/` pointers, adopted defaults, and a copy-paste resume prompt before `/compact` or a fresh session.
+- **Planning, Execution & QA Upgrades (adapted from OMX `v0.21.34` & OMO `v5.1.44`)**:
+  - `$team`, `$cancel` & `rules/AGENTS.md`: added **Worktree / Branch Preservation on Shutdown, Kill, or Cancel** (from OMX `v0.21.34` PR #3896) — prefers `Workspace: "share"` over `"branch"`, preserves unmerged commits (`git merge-base --is-ancestor`), modified/untracked/ignored files, and tracked/staged `.omagy/evidence/` before `manage_subagents kill` or `git worktree remove`.
+  - `$plan` & `$deep-interview`: added **Explore-First Mandate**, **`CLEAR` vs `UNCLEAR` Intent Routing** (autonomous best-practice defaults on open-ended requests), **Two-Filter + Owner-Decision Survival Gate**, and **Affected User Ideal State & Gap Table**.
+  - `$ralplan`: added `--hyperplan` 2-round, 5-persona hostile cross-critique tournament (`skeptic`, `validator`, `researcher`, `architect`, `creative` -> `SURVIVES | WEAKENED | KILLED` distillation).
+  - `$ultragoal`, `$performance-goal` & `verifier`: added `"rigor": "light|heavy"` goal tiering, structured `DoneClaim` / `AdversarialVerify` (`failure_class: "none" | "product" | "harness"` so harness repairs do not burn the 3-attempt product circuit breaker), automatic `"blocked"` (`[~]`) dependency cascade, and crash-resilient `append-jsonl` / `read-jsonl` ledger appends.
+  - `$ultraqa`: mapped all 9 adversarial classes to explicit trigger conditions (`triggered` vs 1-line `not-applicable` logging).
+  - `$analyze` & `$best-practice-research`: added **Intent-vs-Reality Diff** table (`Match | Undocumented | Broken | Stale`).
+  - `$omagy-setup`: added canonical scope root (`realpath`) and symlink/dangling-symlink target checks before modifying `AGENTS.md` or plugin paths (from OMX `v0.21.31`–`v0.21.32`).
+  - `$team` & `rules/AGENTS.md`: added **Work-Shape Model Routing** (`Splittable/Quick -> flash`, `Cohesive/Deep -> inherit`, `Ultrabrain -> pro|inherit`) and **DAG Wave Scheduling with Fingerprint-Cached Amendment**.
+- **Documentation**:
+  - Added [`HOW_TO_USE.md`](HOW_TO_USE.md) covering all 26 skills (flags, inputs, outputs, examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/`, hooks, and end-to-end recipes.
 
 ## 0.21.33-agy.2
+
+*Upstream references: **OMX** `v0.21.33` · **OMC** `v5.7.11`*
 
 - **Hooks (`omagy-hook.mjs`)**:
   - `PreToolUse` planning guard now inspects `args.Path`/`args.path` (used by `write_file`/`edit_file`) in addition to legacy `TargetFile`, and enforces `autopilot` planning-phase and `ralplan_gate` (`prd-*.md` + `test-spec-*.md`) write guards.

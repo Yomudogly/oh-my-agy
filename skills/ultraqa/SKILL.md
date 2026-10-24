@@ -14,18 +14,21 @@ Use this explicit opt-in when runnable behavior needs adversarial dynamic end-to
 - If the user says `continue`, advance the current verified QA step rather than restarting.
 - A shallow build/lint/typecheck/test checklist does not satisfy UltraQA. Exercise the requested behavior through adversarial scenarios whenever it can be run, simulated, or harnessed safely.
 
-## Plan and scenario matrix
+## Plan and trigger-mapped scenario matrix
 
-Before running commands, record a matrix (in `.omagy/artifacts/ultraqa-<slug>/matrix.md`) with: scenario id, intent, user/attacker model, setup, command or harness, expected signal, actual result, fixes, evidence, and cleanup. Include a normal path and the relevant hostile classes:
+Before running commands, record a matrix (in `.omagy/artifacts/ultraqa-<slug>/matrix.md`) with: scenario id, class, trigger status (`triggered` or `not-applicable: <1-line reason>`), intent, user/attacker model, setup, command or harness, expected signal, actual result, `failure_class` (`none | product | harness`), fixes, evidence, and cleanup. Evaluate all **9 adversarial classes** against their concrete trigger conditions (ported from OmO `ulw-execute`):
 
-1. **Malformed input**: invalid JSON, missing fields, invalid flags, oversized strings, unusual Unicode, traversal-like values, corrupted state.
-2. **Repeated interruptions**: repeated `continue`, stop/cancel wording, partial output, retries.
-3. **Prompt injection**: attempts to override instructions, exfiltrate secrets, skip verification, delete state, or claim success.
-4. **Cancel/resume and stale state**: cleanup, resume detection, mismatched sessions, missing timestamps, contradictory phases.
-5. **Dirty worktree**: pre-existing changes and untracked files stay untouched.
-6. **Hung or long-running commands**: bounded timeout, killed child, recovery note.
-7. **Flaky tests**: capped reruns, failure clustering, quarantine evidence. A single lucky green does not count.
-8. **Misleading success output**: success text with a non-zero exit, hidden failures, skips, partial logs.
+| # | Adversarial Class | Trigger Condition (run when true; otherwise log 1-line `not-applicable`) | Probes |
+|---|---|---|---|
+| 1 | **Malformed input** | Code parses user, CLI, file, network, JSON, or env input | Invalid JSON, missing fields, bad flags, oversized strings, unusual Unicode, path traversal (`../`), corrupted state |
+| 2 | **Prompt injection** | Code ingests untrusted text, prompts, transcripts, or external content | Instruction overrides, secret exfiltration strings, verification-skip payloads, fake completion claims |
+| 3 | **Cancel / resume** | Workflow persists state, checkpoints, or supports stop/resume | Mid-run abort, resume from partial state, idempotent re-entry, `$cancel` cleanup |
+| 4 | **Stale state** | Code reads cached state, lockfiles, timestamps, or session IDs | Expired timestamps (`> STALE_MS`), foreign `owner_conversation_id`, schema-version mismatch, contradictory phases |
+| 5 | **Dirty worktree** | Code runs git commands, file generators, or cleanup steps | Pre-existing modified/untracked files outside scope remain untouched after run and rollback |
+| 6 | **Hung or long-running commands** | Code spawns child processes, network calls, or loops | Bounded timeout, clean process termination (`manage_task kill`), no orphan processes |
+| 7 | **Flaky tests** | Async timing, concurrency, temp files, or randomness in tests | Capped reruns (3x), shared-state isolation, deterministic ordering (a single lucky green does not count) |
+| 8 | **Misleading success output** | CLI/hook/API returns status text or exit codes | Non-zero exit with `"PASS"` text, zero exit with `"ERROR"`/`test.skip`, partial output truncation |
+| 9 | **Repeated interruptions** | Interactive loop, hook nudge, or retry state machine | Repeated `continue`, rapid duplicate invocations, retry budget exhaustion |
 
 ## Cycle (maximum 5)
 

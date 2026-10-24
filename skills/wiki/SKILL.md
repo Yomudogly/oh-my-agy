@@ -11,6 +11,7 @@ A persistent, self-maintained markdown knowledge base for project and session kn
 
 - Pages: `omagy_wiki/<page-slug>.md`
 - Index: `omagy_wiki/index.md` (one line per page: `- [[slug]] — title — category — tags`)
+- Working Agreements Ledger: `omagy_wiki/agreements.md` (persistent user corrections and repo invariants, e.g. `- [v1] Never use default exports in packages/core — <date>`; auto-injected ahead of `index.md` on `SessionStart`/`PreInvocation` by `omagy-hook.mjs`, ported from OmO Kibitzer `system/agreements.md`)
 - Log: `omagy_wiki/log.md` (append-only: `<ISO> <op> <slug> — note`)
 - Legacy: if `omagy_wiki/` does not exist but `omx_wiki/` does (from oh-my-codex), read it as compatibility input. Offer to migrate it with `mv omx_wiki omagy_wiki` before the first write.
 
