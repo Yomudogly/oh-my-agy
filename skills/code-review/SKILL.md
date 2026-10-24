@@ -33,8 +33,10 @@ git diff -- <scope>
 2. Launch both lanes **in parallel**, in one `invoke_subagent` call with two entries, each on a clean context with explicit scope and artifacts. Respect the user's model selection (`Model: "inherit"`).
    - `TypeName: "code-reviewer"`, prompt:
      ```text
-     CODE REVIEW TASK
-     Review the supplied scope for spec compliance, security, quality, performance, and maintainability.
+     CODE REVIEW TASK (Two-Axis: Spec Compliance & Project Standards)
+     Review the supplied scope on two axes:
+     1) Spec Axis: acceptance criteria, edge cases, and behavioral correctness.
+     2) Standards Axis: AGENTS.md, DESIGN.md, omagy_wiki/ conventions, security, quality, performance, and maintainability.
      Return files reviewed, severity-rated findings with file:line evidence and concrete fixes,
      and a recommendation: APPROVE / REQUEST CHANGES / COMMENT. Do not review architecture.
      Scope: <scope, diff command, spec/acceptance paths>
@@ -43,6 +45,8 @@ git diff -- <scope>
      ```text
      ARCHITECTURE / DEVIL'S-ADVOCATE REVIEW TASK
      Review the same scope for boundaries, interfaces, hidden coupling, long-term tradeoffs,
+     the Demolition Test ("if we deleted this boundary and inlined callers, would the code get simpler or harder?"),
+     the ADR Test (hard to reverse? surprising without context? real trade-off?),
      and the strongest counterargument against approval. Return file:line evidence,
      recommendations, and Architectural Status: CLEAR / WATCH / BLOCK.
      Scope: <same>

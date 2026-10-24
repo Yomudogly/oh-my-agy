@@ -49,7 +49,7 @@ Choose the lane before acting:
 - **`$plan`** for lightweight planning without a deep interview. **`$ralplan`** for Planner -> Architect -> Critic consensus planning.
 - **`$ultragoal`** for durable multi-goal execution with a ledger and resume semantics.
 - **`$team`** when an approved plan needs coordinated parallel execution across multiple subagent lanes.
-- **`$code-review`**, **`$ultraqa`**, **`$ai-slop-cleaner`** as bounded helpers inside the chosen lane. They do not compete with it.
+- **`$code-review`**, **`$ultraqa`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`** as bounded helpers inside the chosen lane. They do not compete with it.
 - Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$plan --interview`.
 - `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `swarm` are removed upstream. Do not route there.
 
@@ -64,10 +64,12 @@ This plugin ships role agents under `agents/`. Invoke them with `invoke_subagent
 | `dependency-expert` | whether/which package or SDK to adopt, upgrade, replace, or migrate |
 | `analyst` | hidden requirements and edge cases before planning |
 | `planner` | right-sized, evidence-backed plans |
-| `architect` | read-only architecture review, antithesis, CLEAR/WATCH/BLOCK |
+| `architect` | read-only architecture review, Demolition/ADR tests, antithesis, CLEAR/WATCH/BLOCK |
 | `critic` | APPROVE/ITERATE/REJECT plan gate (always after architect) |
 | `executor` | bounded implementation slices |
 | `debugger` | root cause, regression isolation |
+| `tracer` | competing-hypothesis causal tracing, 6-tier evidence ranking, rebuttal probes |
+| `code-simplifier` | post-modification clarity and de-abstraction without behavior change |
 | `test-engineer` | test strategy, regression locks, flaky tests |
 | `verifier` | independent completion evidence |
 | `code-reviewer`, `security-reviewer` | independent review lanes |
@@ -97,11 +99,11 @@ Routing rules:
 
 ## Durable state (`.omagy/`)
 
-Workflow state lives under `.omagy/` at the workspace root. Suggest adding `.omagy/` to `.gitignore`.
+Workflow state lives under `.omagy/` at the workspace root (or at a parent directory containing `.omagy-workspace` / `.omc-workspace` for multi-repo workspaces). Suggest adding `.omagy/` to `.gitignore`.
 
 | Path | Owner / purpose |
 |---|---|
-| `.omagy/state/<mode>-state.json` | active workflow state per mode (autopilot, deep-interview, ralplan, ultragoal, ultraqa, autoresearch, performance-goal, team) |
+| `.omagy/state/<mode>-state.json` (or `.omagy/state/sessions/<conversationId>/<mode>-state.json`) | active workflow state per mode (autopilot, deep-interview, ralplan, ultragoal, ultraqa, autoresearch, performance-goal, team) |
 | `.omagy/context/<slug>-<UTC>.md` | pre-flight context snapshots |
 | `.omagy/interviews/`, `.omagy/specs/` | deep-interview transcripts and execution-ready specs |
 | `.omagy/plans/` | plans, PRDs, test specs, ralplan review evidence |
@@ -109,21 +111,21 @@ Workflow state lives under `.omagy/` at the workspace root. Suggest adding `.oma
 | `.omagy/goals/performance/<slug>/` | performance-goal state and evidence |
 | `.omagy/state/team/<team>/` | team task board (leader-owned) |
 | `.omagy/evidence/` | structured verification evidence (`task-<id>.json`) for code-changing `$team` tasks |
-| `.omagy/artifacts/` | reusable outputs (ask, visual-ralph references, reports) |
+| `.omagy/artifacts/` | reusable outputs (ask, loft prototypes, pr bodies, visual-ralph references, reports) |
 
-State file contract: write the whole file with `write_to_file` (Overwrite) after reading it (read-modify-write). Minimum shape:
+State file contract: write the whole file with `write_file` / `write_to_file` (Overwrite) after reading it (read-modify-write). Minimum shape:
 ```json
-{"mode":"<mode>","active":true,"current_phase":"<phase>","iteration":1,"started_at":"<ISO>","updated_at":"<ISO>","state":{}}
+{"mode":"<mode>","active":true,"current_phase":"<phase>","iteration":1,"owner_conversation_id":"<conversationId>","started_at":"<ISO>","updated_at":"<ISO>","state":{}}
 ```
-- Always refresh `updated_at` on every write. Hooks use it to detect progress and staleness.
+- Always refresh `updated_at` on every write. Hooks use it to detect progress and staleness. Include `owner_conversation_id` when known so parallel sessions do not hijack each other's hooks.
 - Terminal phases are `complete`, `cancelled`, `failed`, `blocked`. Every terminal write sets `"active": false` and `completed_at`.
 - One writer per file: the leader. Children report evidence and never mutate leader-owned state.
 - Never delete or rewrite unrelated sessions' artifacts. `$cancel` and exact-mode clear must always remain possible.
 
 ## Hooks (bounded and fail-open)
 
-- `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state is active and non-terminal, the hook may re-enter the loop with a continuation reason. It stops nudging after 2 consecutive nudges without a state update, for stale (>6h) or terminal states, and on errors. If you are genuinely blocked on the user, write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
-- `PreToolUse` (planning guard): while `deep-interview`, `ralplan`, or `plan` state is active, file writes outside `.omagy/` require user confirmation. Planning modes do not implement.
+- `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal, the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`). If you are genuinely blocked on the user, write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
+- `PreToolUse` (planning guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path` or `TargetFile`) outside `.omagy/` and `omagy_wiki/` require user confirmation. Planning modes do not implement.
 - `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, and a bounded (`<=3,500` chars) `omagy_wiki/index.md` summary once per conversation.
 
 ## Verification

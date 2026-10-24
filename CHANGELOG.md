@@ -2,6 +2,26 @@
 
 Versions follow `<oh-my-codex version>-agy.<port revision>`.
 
+## 0.21.33-agy.2
+
+- **Hooks (`omagy-hook.mjs`)**:
+  - `PreToolUse` planning guard now inspects `args.Path`/`args.path` (used by `write_file`/`edit_file`) in addition to legacy `TargetFile`, and enforces `autopilot` planning-phase and `ralplan_gate` (`prd-*.md` + `test-spec-*.md`) write guards.
+  - Added conversation-scoped state isolation (`owner_conversation_id` and `.omagy/state/sessions/<conversationId>/`) so parallel conversations in the same workspace do not hijack each other's `Stop` or `PreToolUse` hooks.
+  - Added multi-repo parent root anchoring via `.omagy-workspace` / `.omc-workspace` markers (ported from `oh-my-claudecode`).
+  - Added deterministic `Stop`-hook completion drift guard scanning `git diff` added lines for unconditional `test.skip`, `test.only`, and placeholder `TODO: implement` / `throw new Error("Not implemented")` stubs when claiming completion.
+- **New Skills (`skills/loft/`, `skills/pr/`)**:
+  - `$loft`: shape-before-steel throwaway prototyping (pure zero-I/O logic module in an HTML harness or 3 structural UI variants behind a switcher) for settling design forks.
+  - `$pr`: PR body assembly from `.omagy/` paper-trail artifacts with Summary visual, Before/After verification evidence, and ADR-tested reversibility.
+- **New Role Subagents (`agents/tracer.md`, `agents/code-simplifier.md`)**:
+  - `tracer`: competing-hypothesis causal tracing with 6-tier Evidence Strength Hierarchy and rebuttal rounds.
+  - `code-simplifier`: post-modification code simplification preserving exact runtime behavior.
+- **Skill & Agent Upgrades**:
+  - `$analyze`: added 6-tier Evidence Strength Hierarchy, rebuttal pass, and `--deep` 3-lane parallel `tracer` mode.
+  - `$code-review` & `architect`: added Two-Axis Review (Spec + Standards axes), Demolition Test, and ADR Test.
+  - `$ultragoal`: added observable stale-goal reconciliation and `amend_criterion` ledger audit trail.
+  - `$skill`: added `$skill extract` with the 3-question Skillify quality gate.
+  - `$ai-slop-cleaner`: added `--review` pass separation and `code-simplifier` integration.
+
 ## 0.21.33-agy.1
 
 - `$team`: the leader sets `requires_code_change` from the task wording and the worker role (analysis-only tasks and read-only roles: `false`). Ported from OMX 0.21.33 task-evidence intent.

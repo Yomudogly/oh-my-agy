@@ -64,9 +64,11 @@ Repeat until every goal is `complete` (or `superseded`):
 4. Checkpoint: set the goal `status:"complete"` with `evidence`, then append a `checkpoint` ledger line containing commands and exit codes. Refresh `updated_at` in state.
 5. Blocked/failed goal: record `blocked|failed` with evidence. Continue with independent goals. Retry failed goals after the blocker is resolved. If the blocker needs the user, write the Ultragoal (or Autopilot) state as `current_phase:"blocked"`, `active:false`, and ask.
 
-## Explicit steering
+## Explicit steering & stale-goal reconciliation
 
-Change the decomposition only with evidence. Append a `steer` ledger entry with `kind`, `evidence`, and `rationale`, then edit `goals.json` accordingly. Supported kinds: `add_subgoal`, `split_subgoal`, `reorder_pending`, `revise_pending_wording`, `annotate_ledger`, `mark_blocked_superseded`. Never silently delete goals. Mark them `superseded` instead. Ordinary prose does not mutate the plan.
+- **Stale-Goal Reconciliation (on start/resume)**: Before executing a `pending` goal, run observable repo checks (`fileExists`, `fileContains`, `gitGrep`) against its target paths. If the repository already satisfies a goal's acceptance criteria from earlier work, verify with targeted tests and record a `checkpoint` with `note:"reconciled-from-repo"` instead of re-implementing.
+- **Explicit Steering**: Change the decomposition only with evidence. Append a `steer` ledger entry with `kind`, `evidence`, and `rationale`, then edit `goals.json` accordingly. Supported kinds: `add_subgoal`, `split_subgoal`, `reorder_pending`, `revise_pending_wording`, `amend_criterion`, `annotate_ledger`, `mark_blocked_superseded`. Never silently delete goals. Mark them `superseded` instead.
+- **Criterion Amendment Audit Trail**: When a goal's acceptance criterion must be adjusted due to newly discovered repo facts, append a `steer` (`kind:"amend_criterion"`) ledger entry recording `previous_criterion`, `amended_criterion`, and `evidence` so requirements changes remain auditable. Ordinary prose does not mutate the plan.
 
 ## Team bridge
 

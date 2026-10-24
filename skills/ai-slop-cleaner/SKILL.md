@@ -16,6 +16,7 @@ the user requests cleanup/refactor/deslop; or a follow-up left duplicate/dead co
 weak boundaries, missing tests, fallback-like paths, or wrappers. Inputs are the requested
 feature/files and behavior to preserve. A file list scope is valid; keep the pass bounded
 to it. Limit the pass to the calling task's changed files unless broader cleanup was requested.
+Supports `--review` for a read-only reviewer pass (separated from the writer pass) and delegates targeted post-edit simplification to the `code-simplifier` subagent when appropriate.
 
 ## Before editing
 

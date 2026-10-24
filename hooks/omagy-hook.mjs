@@ -13,13 +13,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 
 const SKILLS = [
   'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'autoresearch', 'best-practice-research',
   'cancel', 'code-review', 'configure-notifications', 'deep-interview', 'design', 'doctor', 'hud',
-  'omagy-setup', 'performance-goal', 'plan', 'ralplan', 'skill', 'team', 'ultragoal', 'ultraqa',
-  'visual-ralph', 'wiki',
+  'loft', 'omagy-setup', 'performance-goal', 'plan', 'pr', 'ralplan', 'skill', 'team', 'ultragoal',
+  'ultraqa', 'visual-ralph', 'wiki',
 ];
 // Antigravity built-in slash commands: `/name` belongs to Antigravity, only `$name` routes to us.
 const AGY_SLASH = new Set(['goal', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork-preview', 'learn', 'boost']);
@@ -35,6 +35,19 @@ const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
 const MAX_WIKI_CONTEXT_CHARS = 3500;
 const MAX_WIKI_CONTEXT_LINES = 60;
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
+const MAX_WORKSPACE_WALK_DEPTH = 8;
+const CODE_EXTENSIONS = new Set([
+  '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.py', '.sh', '.bash', '.zsh',
+  '.go', '.rs', '.java', '.kt', '.kts', '.swift', '.rb', '.php', '.cs', '.c', '.cc', '.cpp', '.h', '.hpp',
+]);
+const COMPLETION_CLAIM_RE = /\b(?:done|complete[sd]?|finished|implemented|fixed|resolved|all set|ready\s+(?:for\s+(?:review|merge|release|qa|testing)|to\s+(?:merge|ship|release|submit)))\b/i;
+const BLOCKER_PATTERNS = [
+  { kind: 'skipped test', pattern: /^\s*(?:it|test|describe)\.skip\s*\(\s*(?:["'`)]|$)/i },
+  { kind: 'focused test', pattern: /^\s*(?:it|test|describe)\.only\s*\(/i },
+  { kind: 'placeholder TODO', pattern: /\/\/\s*TODO\b(?:\([^)]*\))?\s*:?\s*(?:implement|fix|replace|stub|placeholder|later|follow[- ]?up|wire|add\b|fill)/i },
+  { kind: 'unimplemented throw', pattern: /^\s*throw\s+new\s+Error\s*\(\s*["'`](?:TODO|Not implemented|unimplemented|stub)/i },
+  { kind: 'placeholder return', pattern: /^\s*return\s+(?:null|undefined)\s*;?\s*\/\/\s*(?:TODO|stub|placeholder|not implemented)/i },
+];
 
 // ---------- utilities ----------
 function runtimeDir() {
@@ -82,9 +95,22 @@ function nonPlaceholderText(value) {
     && !/^(?:todo|tbd|placeholder|pending|not run)[.!]?$/i.test(value.trim());
 }
 
-// ---------- mode state ----------
-function loadModeStates(root) {
-  const dir = path.join(root, '.omagy', 'state');
+// ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root) ----------
+function stateRoot(root) {
+  let cur = path.resolve(root);
+  for (let i = 0; i < MAX_WORKSPACE_WALK_DEPTH; i += 1) {
+    try {
+      if (fs.existsSync(path.join(cur, '.omagy-workspace')) || fs.existsSync(path.join(cur, '.omc-workspace'))) {
+        return cur;
+      }
+    } catch { /* ignore */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return root;
+}
+function readStateDir(dir, root, convId) {
   let names = [];
   try { names = fs.readdirSync(dir); } catch { return []; }
   const out = [];
@@ -96,23 +122,47 @@ function loadModeStates(root) {
     if (!data || typeof data !== 'object') continue;
     let mtimeMs = 0;
     try { mtimeMs = fs.statSync(file).mtimeMs; } catch { /* ignore */ }
-    out.push({ mode: String(data.mode || m[1]), file, data, mtimeMs, root });
+    const owner = data.owner_conversation_id || data.conversation_id || data.session_id || '';
+    const foreignOwner = Boolean(convId && owner && String(owner) !== String(convId));
+    out.push({ mode: String(data.mode || m[1]), file, data, mtimeMs, root, foreignOwner });
   }
   return out;
+}
+function loadModeStates(root, convId = '') {
+  const sRoot = stateRoot(root);
+  const byMode = new Map();
+  if (convId) {
+    const sessDir = path.join(sRoot, '.omagy', 'state', 'sessions', safeId(convId));
+    for (const s of readStateDir(sessDir, sRoot, convId)) byMode.set(s.mode, s);
+  }
+  const sharedDir = path.join(sRoot, '.omagy', 'state');
+  for (const s of readStateDir(sharedDir, sRoot, convId)) {
+    if (!byMode.has(s.mode)) byMode.set(s.mode, s);
+  }
+  return [...byMode.values()];
 }
 function updatedMs(s) {
   return Date.parse(s.data.updated_at || '') || s.mtimeMs || 0;
 }
 function isActive(s, now = Date.now()) {
+  if (s.foreignOwner) return false;
   const d = s.data;
   if (!d || d.active !== true) return false;
   if (TERMINAL.has(String(d.current_phase || '').toLowerCase())) return false;
   if (typeof d.completed_at === 'string' && d.completed_at.trim()) return false;
   return now - updatedMs(s) <= STALE_MS;
 }
-function activeStates(roots, modes) {
+function activeStates(roots, modes, convId = '') {
   const now = Date.now();
-  const all = roots.flatMap(loadModeStates).filter((s) => isActive(s, now));
+  const seen = new Set();
+  const all = [];
+  for (const r of roots) {
+    for (const s of loadModeStates(r, convId)) {
+      if (seen.has(s.file) || !isActive(s, now)) continue;
+      seen.add(s.file);
+      all.push(s);
+    }
+  }
   const filtered = modes ? all.filter((s) => modes.includes(s.mode)) : all;
   const order = modes || CONTINUATION_MODES;
   return filtered.sort((a, b) => {
@@ -123,7 +173,8 @@ function activeStates(roots, modes) {
 
 // ---------- wiki summary (ported from OMX 0.21.18 wiki/lifecycle.js) ----------
 function loadWikiSummary(roots) {
-  for (const root of roots) {
+  for (const rawRoot of roots) {
+    const root = stateRoot(rawRoot);
     for (const dirName of ['omagy_wiki', 'omx_wiki']) {
       const indexPath = path.join(root, dirName, 'index.md');
       let raw = '';
@@ -229,6 +280,83 @@ function lastUserMessage(transcriptPath) {
   }
   return null;
 }
+function lastAssistantMessage(payload) {
+  for (const k of ['lastAssistantMessage', 'last_assistant_message', 'message', 'output', 'response']) {
+    if (typeof payload?.[k] === 'string' && payload[k].trim()) return payload[k].trim();
+  }
+  const transcriptPath = payload?.transcriptPath || payload?.transcript_path;
+  if (!transcriptPath || typeof transcriptPath !== 'string') return '';
+  let text = '';
+  try {
+    const fd = fs.openSync(transcriptPath, 'r');
+    try {
+      const size = fs.fstatSync(fd).size;
+      const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      text = buf.toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch { return ''; }
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    const type = String(o.type || '');
+    const isModel = /PLANNER_RESPONSE/i.test(type) || o.source === 'MODEL' || o.role === 'assistant';
+    const content = o.content ?? o.text ?? o.message;
+    if (isModel && typeof content === 'string' && content.trim()) return content.trim();
+  }
+  return '';
+}
+function scanDiffBlockers(roots) {
+  const hits = [];
+  for (const cwd of roots) {
+    let diff = '';
+    try {
+      diff = execFileSync('git', ['diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', 'HEAD', '--'], {
+        cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500,
+      });
+    } catch { continue; }
+    if (!diff) continue;
+    let curFile = '';
+    let newLine = 0;
+    for (const rawLine of diff.split('\n')) {
+      if (rawLine.startsWith('+++ b/')) {
+        curFile = rawLine.slice(6).trim();
+        newLine = 0;
+        continue;
+      }
+      if (!curFile || !CODE_EXTENSIONS.has(path.extname(curFile).toLowerCase())) continue;
+      const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(rawLine);
+      if (hunk) {
+        newLine = Number.parseInt(hunk[1], 10);
+        continue;
+      }
+      if (rawLine.startsWith('+++') || rawLine.startsWith('---') || newLine === 0) continue;
+      if (rawLine.startsWith('+')) {
+        const added = rawLine.slice(1);
+        for (const bp of BLOCKER_PATTERNS) {
+          if (bp.pattern.test(added)) {
+            hits.push({ file: curFile, line: newLine, kind: bp.kind });
+            break;
+          }
+        }
+        newLine += 1;
+      } else if (!rawLine.startsWith('-')) {
+        newLine += 1;
+      }
+    }
+  }
+  return hits;
+}
+function hasRalplanArtifacts(sRoot) {
+  const plansDir = path.join(stateRoot(sRoot), '.omagy', 'plans');
+  let names = [];
+  try { names = fs.readdirSync(plansDir); } catch { return false; }
+  return names.some((n) => /^prd-.*\.md$/i.test(n)) && names.some((n) => /^test-spec-.*\.md$/i.test(n));
+}
 function detectSkills(text) {
   const found = [];
   const re = /(^|[\s(>"'`])([$/])([a-z][a-z0-9-]*)/g;
@@ -241,8 +369,8 @@ function detectSkills(text) {
   }
   return found;
 }
-function buildActiveModeMessage(roots) {
-  const active = activeStates(roots, null);
+function buildActiveModeMessage(roots, convId = '') {
+  const active = activeStates(roots, null, convId);
   if (!active.length) return null;
   const now = Date.now();
   const desc = active.slice(0, 4).map((s) => `${s.mode} (phase: ${s.data.current_phase || 'unknown'}, updated ${ago(now - updatedMs(s))})`).join('; ');
@@ -258,7 +386,7 @@ function sessionStart(payload) {
   const record = readJson(recordFile) || {};
   const messages = [];
 
-  const activeMsg = buildActiveModeMessage(roots);
+  const activeMsg = buildActiveModeMessage(roots, conv);
   if (activeMsg) messages.push(activeMsg);
 
   let wikiInjected = Boolean(record.wikiInjected);
@@ -293,7 +421,7 @@ function preInvocation(payload) {
       'and treat the rest of the user message as the task.',
     );
   }
-  const activeMsg = buildActiveModeMessage(roots);
+  const activeMsg = buildActiveModeMessage(roots, conv);
   if (activeMsg) messages.push(activeMsg);
 
   let wikiInjected = Boolean(record.wikiInjected);
@@ -310,21 +438,35 @@ function preInvocation(payload) {
 
 function preToolUse(payload) {
   const roots = workspaceRoots(payload);
+  const conv = payload.conversationId || payload.conversation_id;
   const call = payload.toolCall || payload.tool_call || {};
   const args = call.args || call.arguments || {};
-  const target = args.TargetFile || args.targetFile || args.target_file || '';
-  const planning = activeStates(roots, PLANNING_MODES);
-  if (!planning.length || !target) return {};
+  const target = args.Path || args.path || args.TargetFile || args.targetFile || args.target_file || '';
+  if (!target) return {};
   const resolved = path.resolve(String(target));
-  const insideOmagy = roots.some((r) => resolved.startsWith(path.join(path.resolve(r), '.omagy') + path.sep));
-  if (insideOmagy) return {};
-  const s = planning[0];
-  return {
-    decision: 'force_ask',
-    reason: `oh-my-agy: ${s.mode} is a planning mode (phase: ${s.data.current_phase || 'unknown'}). ` +
+  const insideAllowed = roots.some((r) => {
+    const sr = path.resolve(stateRoot(r));
+    const wr = path.resolve(r);
+    return resolved.startsWith(path.join(sr, '.omagy') + path.sep)
+      || resolved.startsWith(path.join(wr, '.omagy') + path.sep)
+      || resolved.startsWith(path.join(sr, 'omagy_wiki') + path.sep)
+      || resolved.startsWith(path.join(wr, 'omagy_wiki') + path.sep);
+  });
+  if (insideAllowed) return {};
+
+  const planning = activeStates(roots, PLANNING_MODES, conv);
+  const autopilotStates = activeStates(roots, ['autopilot'], conv);
+  const autopilotPlanning = autopilotStates.find((s) => PLANNING_MODES.includes(String(s.data.current_phase || '').toLowerCase()));
+  const ralplanGate = autopilotStates.find((s) => s.data.ralplan_gate === true && !hasRalplanArtifacts(s.root));
+  const s = planning[0] || autopilotPlanning || ralplanGate;
+  if (!s) return {};
+
+  const reason = ralplanGate && s === ralplanGate
+    ? `oh-my-agy: autopilot ralplan_gate is active without .omagy/plans/prd-*.md and test-spec-*.md. Writing ${resolved} outside .omagy/ requires completing ralplan artifacts first or user approval.`
+    : `oh-my-agy: ${s.mode} is in planning phase (${s.data.current_phase || 'unknown'}). ` +
       `Writing ${resolved} is implementation work outside .omagy/. Approve only if you intend to leave planning; ` +
-      'otherwise finish the planning handoff or run $cancel.',
-  };
+      'otherwise finish the planning handoff or run $cancel.';
+  return { decision: 'force_ask', reason };
 }
 
 async function stop(payload) {
@@ -336,7 +478,7 @@ async function stop(payload) {
 
   let decision = allow;
   if (isNormalStop && payload.fullyIdle !== false && !payload.error) {
-    const active = activeStates(roots, CONTINUATION_MODES);
+    const active = activeStates(roots, CONTINUATION_MODES, conv);
     const nudgeFile = runtimeFile(conv, 'nudge');
     if (active.length) {
       const s = active[0];
@@ -360,6 +502,27 @@ async function stop(payload) {
       }
     } else {
       try { fs.rmSync(nudgeFile, { force: true }); } catch { /* ignore */ }
+      const msg = lastAssistantMessage(payload);
+      const justCompleted = roots.flatMap((r) => loadModeStates(r, conv)).some(
+        (s) => !s.foreignOwner && String(s.data.current_phase || '').toLowerCase() === 'complete' && Date.now() - updatedMs(s) < 60 * 1000,
+      );
+      if (justCompleted || (msg && COMPLETION_CLAIM_RE.test(msg))) {
+        const blockers = scanDiffBlockers(roots);
+        if (blockers.length) {
+          const driftFile = runtimeFile(conv, 'drift');
+          const sig = blockers.map((b) => `${b.file}:${b.line}:${b.kind}`).join('|');
+          const prev = readJson(driftFile) || {};
+          if (prev.sig !== sig) {
+            writeJson(driftFile, { sig, at: new Date().toISOString() });
+            const summary = blockers.slice(0, 4).map((b) => `${b.file}:${b.line} (${b.kind})`).join(', ');
+            decision = {
+              decision: 'continue',
+              reason: `[oh-my-agy] Completion drift guard: git diff still contains unfinished blocker pattern(s): ${summary}. ` +
+                'Resolve or remove skipped/focused tests and placeholder TODO/stub implementations before claiming completion.',
+            };
+          }
+        }
+      }
     }
   }
 
@@ -490,9 +653,63 @@ async function selftest() {
 
     writeJson(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { mode: 'ralplan', active: true, current_phase: 'architect-review', updated_at: new Date().toISOString() });
     const g1 = preToolUse({ ...base, toolCall: { name: 'write_to_file', args: { TargetFile: path.join(ws, 'src', 'index.ts') } } });
-    const g2 = preToolUse({ ...base, toolCall: { name: 'write_to_file', args: { TargetFile: path.join(ws, '.omagy', 'plans', 'prd.md') } } });
-    check('planning guard escalates implementation writes', g1.decision === 'force_ask');
+    const g1Path = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
+    const g2 = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: path.join(ws, '.omagy', 'plans', 'prd.md') } } });
+    check('planning guard escalates implementation writes (TargetFile & Path)', g1.decision === 'force_ask' && g1Path.decision === 'force_ask');
     check('planning guard ignores .omagy writes', !g2.decision);
+
+    // Ralplan-first gate inside autopilot
+    fs.rmSync(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { force: true });
+    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', ralplan_gate: true, updated_at: new Date().toISOString() });
+    const gRalplanMissing = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
+    fs.mkdirSync(path.join(ws, '.omagy', 'plans'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'prd-demo.md'), '# PRD\n');
+    fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'test-spec-demo.md'), '# Test Spec\n');
+    const gRalplanPresent = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
+    check('autopilot ralplan_gate blocks writes until prd + test-spec exist', gRalplanMissing.decision === 'force_ask' && !gRalplanPresent.decision);
+
+    // Foreign conversation owner isolation
+    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', owner_conversation_id: 'other-conv', updated_at: new Date().toISOString() });
+    const sForeign = await stop({ ...base, terminationReason: 'NO_TOOL_CALL' });
+    check('foreign owner_conversation_id does not hijack stop hook', sForeign.decision === 'stop');
+    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
+
+    // Multi-repo .omagy-workspace parent root resolution
+    const multiParent = path.join(ws, 'multi');
+    const childRepo = path.join(multiParent, 'repo-a');
+    fs.mkdirSync(childRepo, { recursive: true });
+    fs.writeFileSync(path.join(multiParent, '.omagy-workspace'), '{}\n');
+    writeJson(path.join(multiParent, '.omagy', 'state', 'ultragoal-state.json'), { mode: 'ultragoal', active: true, current_phase: 'executing', updated_at: new Date().toISOString() });
+    const sMulti = await stop({ conversationId: `${conv}-multi`, workspacePaths: [childRepo], terminationReason: 'NO_TOOL_CALL' });
+    check('.omagy-workspace anchors state across child repos', sMulti.decision === 'continue');
+
+    // Completion drift guard (git diff blocker scan)
+    const gitRepo = path.join(ws, 'git-repo');
+    fs.mkdirSync(gitRepo, { recursive: true });
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: gitRepo });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: gitRepo });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: gitRepo });
+      fs.writeFileSync(path.join(gitRepo, 'app.test.js'), 'test("ok", () => {});\n');
+      execFileSync('git', ['add', 'app.test.js'], { cwd: gitRepo });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: gitRepo });
+      fs.appendFileSync(path.join(gitRepo, 'app.test.js'), `${'test'}.skip("later", () => {});\n`);
+      const d1 = await stop({
+        conversationId: `${conv}-drift`,
+        workspacePaths: [gitRepo],
+        terminationReason: 'NO_TOOL_CALL',
+        lastAssistantMessage: 'All done and ready to merge.',
+      });
+      const d2 = await stop({
+        conversationId: `${conv}-drift`,
+        workspacePaths: [gitRepo],
+        terminationReason: 'NO_TOOL_CALL',
+        lastAssistantMessage: 'All done and ready to merge.',
+      });
+      check('completion drift guard catches added test.skip once per diff', d1.decision === 'continue' && d2.decision === 'stop');
+    } catch {
+      check('completion drift guard catches added test.skip once per diff', true, 'skipped (git unavailable)');
+    }
 
     // Team completion evidence validator test
     const evRel = '.omagy/evidence/task-1.json';

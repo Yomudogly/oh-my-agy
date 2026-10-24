@@ -42,6 +42,7 @@ Name collisions resolve by priority: project > declared > user (global) > built-
 | `$skill sync` | Compare user and project skills (user-only / project-only / common) and confirm every copy or overwrite. |
 | `$skill setup` | Ensure both roots exist, scan them, then offer add, list, scan, import, or done. |
 | `$skill scan` | Run setup's inventory without the interactive menu. |
+| `$skill extract [name]` | Extract a repeatable workflow discovered in the current session into a project/user `SKILL.md` after passing the 3-question Skillify quality gate: (1) *"Could someone Google this in 5 minutes?"* -> No; (2) *"Is this specific to this codebase, project, or workflow?"* -> Yes; (3) *"Did this take real debugging, design, or operational effort to discover?"* -> Yes. |
 | `$skill validate` | Validate every skill in both roots and report pass/fail per path. Never rewrite files. |
 
 With an argument, use direct command mode. Without one, use the guided setup menu.

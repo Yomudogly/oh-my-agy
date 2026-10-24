@@ -8,7 +8,8 @@ It brings OMX's workflows to Antigravity:
 - durable goal ledgers
 - adversarial QA
 - dual-lane code review
-- 16 role subagents
+- 18 role subagents
+- 25 workflow skills (including `$loft` prototyping and `$pr` paper-trail assembly)
 
 There is **no runtime dependency on the `omx` CLI**. State is plain JSON and Markdown under `.omagy/`, and the hooks are a single dependency-free Node script.
 
@@ -30,8 +31,8 @@ oh-my-agy/
 ├── hooks/
 │   ├── run.sh             # finds Node (homebrew/volta/fnm/nvm), fails open if absent
 │   └── omagy-hook.mjs     # hook runtime + `verify-evidence` + `selftest`
-├── agents/                # 16 role subagents (explore, researcher, architect, critic, executor, ...)
-└── skills/                # 23 workflow skills
+├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
+└── skills/                # 25 workflow skills
 ```
 
 ## Install
@@ -83,9 +84,9 @@ Type `$<skill>` in a message (e.g. `$autopilot build X`, `$code-review`, `$cance
 | `plan` / `ralplan` | lightweight plan / Planner -> Architect -> Critic consensus |
 | `ultragoal` | durable goals.json + ledger.jsonl execution with a final review gate |
 | `team` | parallel subagent workers on a leader-owned task board |
-| `code-review` | independent code-reviewer + architect lanes, deterministic verdict |
+| `code-review` | independent code-reviewer + architect lanes (Two-Axis + Demolition/ADR tests), deterministic verdict |
 | `ultraqa` | adversarial e2e QA cycles |
-| `ai-slop-cleaner`, `analyze`, `best-practice-research`, `design`, `visual-ralph` | methodology skills |
+| `ai-slop-cleaner`, `analyze`, `best-practice-research`, `design`, `loft`, `pr`, `visual-ralph` | methodology, prototyping, and PR paper-trail skills |
 | `autoresearch`, `performance-goal` | validator-gated loops |
 | `ask` | second opinion from local `claude` / `gemini` / `codex` CLIs |
 | `wiki` | repo markdown wiki in `omagy_wiki/` |

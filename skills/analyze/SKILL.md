@@ -22,8 +22,9 @@ Do not use it for edits, implementation, a new product plan, a simple one-file l
 1. Restate the question and define the evidence-backed scope.
 2. Identify the smallest files, tests, configs, and docs likely to answer it.
 3. Read direct code paths and contracts first; trace boundaries only as far as needed.
-4. Compare competing explanations, rank them by support, and mark unresolved points.
-5. Stop when the question is answered with sufficient evidence, or name the smallest read-only probe that would resolve the remaining uncertainty.
+4. Compare competing explanations across distinct frames (code path, config/env/orchestration, measurement/artifact mismatch), rank them by the **6-tier Evidence Strength Hierarchy**, and run a **Rebuttal Pass** against the leading explanation before synthesis.
+5. For `--deep` or high-ambiguity multi-subsystem mysteries, dispatch up to 3 parallel `tracer` subagents via `invoke_subagent` (one per causal frame: Code-path, Config/env/orchestration, Measurement/artifact mismatch) and synthesize their findings after cross-rebuttal.
+6. Stop when the question is answered with sufficient evidence, or name the smallest read-only probe that would resolve the remaining uncertainty.
 
 ## Evidence discipline
 
@@ -33,7 +34,15 @@ Label every material claim as one of:
 - **Inference** — a reasoned conclusion drawn from cited evidence.
 - **Unknown** — not settled by the repository evidence.
 
-Prefer direct paths and independent corroboration over contextual clues. Never present guesses as evidence or inference, and never overclaim certainty.
+Rank evidence using the **6-tier Evidence Strength Hierarchy** (strongest to weakest):
+1. **Tier 1**: Controlled reproduction, direct test/probe output, or source-of-truth artifact that uniquely discriminates between hypotheses.
+2. **Tier 2**: Primary artifact with tight provenance (`file:line` behavior, timestamped logs, git history, config snapshot).
+3. **Tier 3**: Multiple independent sources converging on the same mechanism.
+4. **Tier 4**: Single-source code-path inference that fits the symptom but is not uniquely discriminating.
+5. **Tier 5**: Weak circumstantial clues (naming, temporal proximity, stack order).
+6. **Tier 6**: Intuition, analogy, or speculation.
+
+Prefer direct paths and higher-tier corroboration over lower-tier clues. Never present guesses as evidence or inference, and never overclaim certainty.
 
 ## Output contract
 
