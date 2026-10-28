@@ -14,8 +14,9 @@ Replaces `omx setup`. Antigravity discovers plugins by directory, so setup consi
 ## 2. Install
 Resolve `SRC` (this plugin's directory, two levels up from this `SKILL.md`).
 - Prefer keeping the **real directory** at the target and, if you want a working copy elsewhere, symlink that copy to the target (`ln -s "<target>" "<checkout>"`). A target that is itself a symlink into `~/Documents`, `~/Desktop`, or `~/Downloads` is unreadable from Antigravity's sandboxed terminal on macOS.
-- Copy with `cp -R "<SRC>" "<target>"`. Antigravity's file tools and hook runner load the plugin regardless of the terminal sandbox. Shell-based checks (`selftest`) may need `BypassSandbox: true`.
 - Check the target first: canonicalize the parent scope root (`realpath`, e.g. macOS `/var` -> `/private/var`) and inspect the target with `ls -ld`. Refuse dangling symlinks or symlinked `.omagy/state` / `.gitignore` destinations that point outside the repository (ported from OMX 0.21.31–0.21.32). If a valid target exists, ask before replacing it, and never delete a non-oh-my-agy directory.
+- **Symlink-safe copy (ported from OMC v5.7.19 #4631)**: before copying hook or plugin files into an existing target, remove any existing or dangling symlinks at the destination (`[ -L "<target>" ] && rm -f "<target>"`, and if `<target>/hooks` exists, `find "<target>/hooks" -type l -exec rm -f {} +`) so `cp -R "<SRC>" "<target>"` never fails with `ENOENT` on a broken symlink or writes through a live symlink into an external path.
+- Copy with `cp -R "<SRC>" "<target>"`. Antigravity's file tools and hook runner load the plugin regardless of the terminal sandbox. Shell-based checks (`selftest`) may need `BypassSandbox: true`.
 - Writing under `~/.gemini/config` is outside the workspace sandbox, so run that one command with `BypassSandbox: true` (the user approves it).
 - Make the hook scripts executable: `chmod +x <target>/hooks/run.sh <target>/hooks/omagy-hook.mjs`.
 

@@ -39,12 +39,15 @@ Stop after generation or capture and get approval of one reference image/state (
 ### 4. Hand off to `$ultragoal`
 Pass the approved reference, URL and permission note when applicable, viewport/content state, interaction parity and exclusions, the user's description, detected frontend context, screenshot command/viewport, and the completion checklist (template below). The Ultragoal execution lane edits, runs, captures, and iterates until matched or blocked.
 
-### 5. Verdict before every edit
-For each iteration: capture the current screenshot with the same viewport/state, then run a Visual Ralph verdict by invoking the `vision` subagent with both images (reference and current). Treat its JSON as authoritative:
+### 5. Verdict before every edit & bounded QA loop
+For each iteration (ported from OmO `visual-qa` `#10685`, `#11023`):
+- **Pre-edit Before/After baseline**: when restyling an existing screen, capture fixed before-edit screenshots across target viewports/states first so each round compares before vs after side-by-side.
+- **Scroll-owner probe (`A12`) & Brief/Subtraction check (`B7`)**: verify in the DOM that the actual main scrolling element matches the `scroll owner: <selector>` declared in `DESIGN.md` (`Layout:` line) with no unintended nested/sibling scrollbars, that the **Draft Guard** passes (no one-side accent stripes, stateless hype badges, emoji icons, vanity stats, or promo filler), and that every item in **Required content** remains intact and unmerged after subtraction.
+- Capture the current screenshot with the same viewport/state, then run a Visual Ralph verdict by invoking the `vision` subagent with both images (reference and current). Treat its JSON as authoritative:
 ```json
 {"score": 0, "verdict": "match|close|mismatch", "category_match": true, "differences": [], "suggestions": [], "reasoning": ""}
 ```
-If `score < 90`, turn `differences[]` and `suggestions[]` into the next edit plan, then edit and re-verdict.
+- **Bounded 2–3 round stop rule**: layout, function, accessibility, scroll-owner (`A12`), and missing-content (`B7`) defects earn another fix round (scoped to the affected region). Once `score >= 90` or after 2–3 rounds where only subjective taste notes remain, record the taste notes and stop iterating.
 
 ### 6. Secondary diff evidence
 Use a pixel diff (e.g. `pixelmatch`/ImageMagick `compare`, when available in the repo or system) only to locate hotspots and turn them into edits. It never replaces the verdict. Record the final reference, screenshot, and diff artifacts under `.omagy/artifacts/visual-ralph/<slug>/`.

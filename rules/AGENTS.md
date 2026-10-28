@@ -10,7 +10,8 @@ and Antigravity system instructions always take precedence over this file.
 ## Autonomy
 
 - Execute clear, already-requested, low-risk, reversible, local work to completion: inspect, edit, test, verify, without permission-handoff phrasing ("Should I proceed?").
-- If blocked, try an alternative approach before asking.
+- If blocked by a technical error, try an alternative approach before asking.
+- **Permission denial or user refusal is final** (ported from OmO `v5.1.49` `#11371`): a permission denial or a refusal by the user is not a blocker to work around — it is final for what that call was meant to do. Never reach that result with another tool, command, path, or host; mark the task/goal blocked and ask the user.
 - Ask only for destructive, irreversible, credential-gated, external-production, or materially scope-changing actions, or when missing information would materially change the result.
 - Use Antigravity subagents (`invoke_subagent`) for independent, bounded parallel subtasks when that materially improves throughput or quality.
 
@@ -35,7 +36,7 @@ and Antigravity system instructions always take precedence over this file.
 ## Invocation conventions
 
 - `$name` (or `/name` when Antigravity does not claim it) in a user message means: activate the oh-my-agy skill `name`. Load its `SKILL.md` before following the workflow.
-- Explicit `$name` invocations run left-to-right and override implicit keywords.
+- Explicit `$name` invocations run left-to-right and override implicit keywords. A direct leading `$name` / `/name` invocation still activates even when followed by pasted reference material, whereas quoted, code-fenced, blockquote, URL, relay-header, negated (`"do not use $autopilot"`), and informational help mentions (`"what does $ralplan do?"`) stay informational and never arm a mode.
 - Bare skill names do not activate skills by themselves. Natural-language phrases may still route: "analyze"/"investigate"/"why does" -> `$analyze`; "deep interview"/"interview me"/"don't assume" -> `$deep-interview`; "cancel"/"stop the workflow" -> `$cancel`.
 - The oh-my-agy `PreInvocation` hook may inject routing context such as `[oh-my-agy] Skill routing: ...`. Treat it as authoritative for the current turn. If the hook is unavailable, apply these rules yourself.
 - Skills read the task from the user message that activated them. There is no `{{ARGUMENTS}}` substitution.
@@ -99,11 +100,12 @@ Routing rules:
 
 ## Durable state (`.omagy/`)
 
-Workflow state lives under `.omagy/` at the workspace root (or at a parent directory containing `.omagy-workspace` / `.omc-workspace` for multi-repo workspaces). Suggest adding `.omagy/` to `.gitignore`.
+Workflow state lives under `.omagy/` at the workspace root (or at `OMAGY_ROOT` / `OMAGY_STATE_ROOT` when set, or at a parent directory containing `.omagy-workspace` / `.omc-workspace` for multi-repo workspaces). Suggest adding `.omagy/` to `.gitignore`.
 
 | Path | Owner / purpose |
 |---|---|
 | `.omagy/state/<mode>-state.json` (or `.omagy/state/sessions/<conversationId>/<mode>-state.json`) | active workflow state per mode (autopilot, deep-interview, ralplan, ultragoal, ultraqa, autoresearch, performance-goal, team) |
+| `.omagy/logs/hook-errors.jsonl` | diagnostic hook error log (written when `OMAGY_ROOT` / `OMAGY_STATE_ROOT` is set or `.omagy/logs/` exists) |
 | `.omagy/context/<slug>-<UTC>.md` | pre-flight context snapshots |
 | `.omagy/interviews/`, `.omagy/specs/` | deep-interview transcripts and execution-ready specs |
 | `.omagy/plans/` | plans, PRDs, test specs, ralplan review evidence |
@@ -124,9 +126,9 @@ State file contract: write the whole file with `write_file` / `write_to_file` (O
 
 ## Hooks (bounded and fail-open)
 
-- `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal, the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`). If you are genuinely blocked on the user, write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
-- `PreToolUse` (planning & overwrite guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path` or `TargetFile`) outside `.omagy/` and `omagy_wiki/` require user confirmation. Also escalates unread `write_file(Overwrite: true)` calls on non-empty existing code files (`write-existing-file-guard`).
-- `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per conversation, and any unseen subdirectory `AGENTS.md` along touched workspace paths.
+- `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal, the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`). If you are genuinely blocked on the user (including any permission denial or user refusal), write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
+- `PreToolUse` (planning, agreements & overwrite guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path`, `TargetFile`, `filePath`, `rename`/`MoveTo`, `edits[]`, `apply_patch`, or targetless file-mutation calls) outside `.omagy/` and `omagy_wiki/` require user confirmation. Also escalates unread `write_file(Overwrite: true)` calls on non-empty existing code files (`write-existing-file-guard`) and full overwrites of `omagy_wiki/agreements.md` that would drop `[by:human]` entries (`agreements-guard`).
+- `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per conversation, and any unseen subdirectory `AGENTS.md` or child-project `omagy_wiki/` along touched workspace paths.
 
 ## Verification
 

@@ -14,6 +14,7 @@ Own implementation, focused validation, and an evidence-backed completion report
 - Read relevant code, tests, callers, and configuration before editing.
 - Update directly affected tests or callsites when the requested behavior requires it.
 - Report uncertainty or a bounded blocker instead of inventing requirements.
+- **Permission denial or user refusal is final** (OmO `v5.1.49` `#11371`): never reach a refused result with another tool, command, path, or host. Report the blocker upward and ask the user.
 
 - Use outcome-first, quality-focused execution: identify the target result, constraints, success criteria, validation path, and stop condition.
 - Keep the implementation plan and progress updates concise; name the first concrete action before tool-heavy work.

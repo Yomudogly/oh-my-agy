@@ -84,9 +84,12 @@ Concrete invocation, edge cases, and failure recovery.
 
 Progressive disclosure: keep `SKILL.md` concise. Put bulky reference material in `references/` and helper scripts in `scripts/`, and link to them relatively. Prefer hard-won, non-obvious knowledge over generic advice. Include exact paths, commands, error text, and expected evidence.
 
-## Validation and errors
+## Validation, symlink boundary, and sync hygiene
 
 Before reporting success, check that the file exists, starts with `---` frontmatter, has a non-empty `name` and `description`, uses a valid name that matches its directory, and has a non-empty body. Reject malformed YAML, multiline required scalars, duplicate names in one scope, missing directories/files, permission failures, and invalid arguments.
+
+- **Symlink boundary check (ported from OMO v5.1.45 #10716)**: when scanning or validating project skills (`.agents/skills/*`), resolve `fs.realpathSync` on both the project root and each skill directory/file. Reject any project skill symlink whose canonical target escapes the canonical project root (unless it explicitly points into the user skill root `~/.gemini/config/skills/`).
+- **Read-only cache/bytecode exclusion (ported from OMO v5.1.49 #11376/#11377)**: when running `$skill sync`, `$skill validate`, or helper scripts inside a skill directory, never write bytecode or test caches into the skill or plugin directory (`PYTHONDONTWRITEBYTECODE=1`), and ignore/exclude `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, and `*.pyc` when syncing skills between scopes.
 
 ```text
 ✗ Error: <clear message>

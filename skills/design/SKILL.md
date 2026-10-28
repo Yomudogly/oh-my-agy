@@ -45,9 +45,19 @@ Goals, non-goals, success signals.
 ## Personas and jobs
 Primary personas, user jobs, contexts of use.
 ## Information architecture
-Navigation, routes/screens, content hierarchy.
+Navigation, routes/screens, content hierarchy, and per-screen **Brief & Layout Contract** (ported from OmO `frontend` `#10685`, `#11023`):
+- **Primary action**: exactly one per screen; peer actions differ by style, never size.
+- **Information priorities 1–3**: in reading order.
+- **Left out on purpose**: explicit exclusions to prevent feature/card bloat.
+- **Required content**: every input, datum, label, and copy listed by name so subtraction never drops or merges required fields.
+- **Data shape -> component**: map data structure to the lightest native/house component before reaching for cards.
+- **Mandatory `Layout:` line**: for any structural screen or region change, record:
+  `Layout: <screen or region> - <spatial problem> -> <pattern name> (<pattern URL or reference>); scroll owner: <CSS selector>; anti-patterns: <what to avoid>`
 ## Design principles
-Principles and tradeoffs.
+Principles, tradeoffs, and **Draft Guard anti-slop rules** (ported from OmO `check-draft-guard.ts` `#11022`, `#11314`):
+- No one-side coloured border/shadow/gradient stripes (`edge-stripe`, `pseudo-bar`, `inset-shadow-stripe`, `gradient-stripe`) or `>=2px` accent outlines on rounded cards (`accent-outline`), whether decorative or marking selected/focused/active state.
+- No decorative badges without a changing state (`decorative-badge`, e.g. "New", "AI-powered"), no stat tiles with marketing-form numbers (`vanity-stat`, e.g. `10x`, `500+`, `24/7` — only measured figures pass), and no emoji used as icons (`emoji-icon`).
+- No invented proof/testimonials, prop decoration, subtitle-under-every-heading, duplicate facts, or promotional filler copy ("seamlessly", "effortlessly", "supercharge", "at a glance").
 ## Visual language
 Color, typography, spacing, shape/elevation, motion, imagery/iconography.
 ## Components
@@ -65,9 +75,10 @@ Framework/styling, tokens, performance, compatibility, test/screenshot expectati
 ## Open questions
 `[ ]` question, owner, and impact.
 
-### 4. Apply the contract
+### 4. Apply the contract & external reference hygiene
 
 Before UI decisions, cite relevant `DESIGN.md` sections, reuse documented components/tokens, and update the file or add an open question when implementation exposes a contradiction. Do not invent a parallel design-system layer.
+- **External design reference fetch rule (ported from OmO `#11323`, `#11338`)**: when inspecting external design systems or component catalogs, fetch only published agent surfaces (`llms.txt`, `llms-full.txt`, same-origin pages linked from that site's own `llms.txt`, registry JSON, or `.md` docs). Never follow off-site links from `llms.txt`, and `robots.txt` disallow rules always take precedence over `llms.txt` links.
 
 ### 5. Handoff
 

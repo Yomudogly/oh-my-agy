@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// oh-my-agy lifecycle hook runner for Antigravity (tracks oh-my-codex 0.21.33).
+// oh-my-agy lifecycle hook runner for Antigravity (tracks OMX v0.21.37, OMC v5.7.19, OMO v5.1.49).
 // Replaces oh-my-codex's codex-native-hook.mjs (which delegated to the `omx` CLI) with a
 // dependency-free, fail-open implementation of the parts that map onto Antigravity hooks:
 //   session-start   : bounded project wiki index + active-mode reminder on new session start
@@ -29,8 +29,16 @@ const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'cancele
 // Antigravity passes "NO_TOOL_CALL" on normal turn completion (ExecutorTerminationReason);
 // also accept "model_stop" and "" for compatibility and offline tests.
 const NORMAL_STOP_REASONS = new Set(['no_tool_call', 'model_stop', '']);
-const STALE_MS = Number(process.env.OMAGY_STALE_MS) || 6 * 3600 * 1000;
-const MAX_NUDGES = Number(process.env.OMAGY_MAX_NUDGES) || 2;
+function intOr(val, fallback, min = 1) {
+  if (typeof val === 'number') return Number.isSafeInteger(val) && val >= min ? val : fallback;
+  if (typeof val !== 'string') return fallback;
+  const trimmed = val.trim();
+  if (!/^\d+$/.test(trimmed)) return fallback;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed >= min ? parsed : fallback;
+}
+const STALE_MS = intOr(process.env.OMAGY_STALE_MS, 6 * 3600 * 1000, 1);
+const MAX_NUDGES = intOr(process.env.OMAGY_MAX_NUDGES, 2, 1);
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
 const MAX_WIKI_CONTEXT_CHARS = 3500;
 const MAX_WIKI_CONTEXT_LINES = 60;
@@ -143,9 +151,15 @@ function isSubagentPayload(payload, userText = '') {
   return Boolean(userText && (SUBAGENT_PROMPT_RE.test(userText) || userText.includes('<antigravity_runtime>')));
 }
 
-// ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root + OMX 0.21.31-32 symlink guard) ----------
+// ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root + OMX 0.21.31-36 symlink & OMX_ROOT guard) ----------
 function stateRoot(root) {
-  let cur = canonicalizePath(root);
+  const baseRoot = canonicalizePath(root || process.cwd());
+  const envOverride = (process.env.OMAGY_ROOT || process.env.OMAGY_STATE_ROOT || '').trim();
+  if (envOverride) {
+    const resolved = canonicalizePath(path.isAbsolute(envOverride) ? envOverride : path.resolve(baseRoot, envOverride));
+    return path.basename(resolved) === '.omagy' ? path.dirname(resolved) : resolved;
+  }
+  let cur = baseRoot;
   for (let i = 0; i < MAX_WORKSPACE_WALK_DEPTH; i += 1) {
     try {
       if (fs.existsSync(path.join(cur, '.omagy-workspace')) || fs.existsSync(path.join(cur, '.omc-workspace'))) {
@@ -156,7 +170,10 @@ function stateRoot(root) {
     if (parent === cur) break;
     cur = parent;
   }
-  return canonicalizePath(root);
+  return baseRoot;
+}
+function omagyLogsDir(root) {
+  return path.join(stateRoot(root), '.omagy', 'logs');
 }
 function readStateDir(dir, root, convId) {
   try {
@@ -290,15 +307,32 @@ function discoverSubdirAgents(roots, text, seenList = []) {
       }
       for (const d of chain) {
         const agentsFile = path.join(d, 'AGENTS.md');
-        if (seen.has(agentsFile)) continue;
-        let raw = '';
-        try { raw = fs.readFileSync(agentsFile, 'utf8').trim(); } catch { continue; }
-        if (!raw) continue;
-        seen.add(agentsFile);
-        const rel = path.relative(root, agentsFile);
-        const snippet = raw.split('\n').slice(0, 30).join('\n').slice(0, 1500);
-        messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
-        if (messages.length >= 2) return { messages, seen: [...seen] };
+        if (!seen.has(agentsFile)) {
+          let raw = '';
+          try { raw = fs.readFileSync(agentsFile, 'utf8').trim(); } catch { raw = ''; }
+          if (raw) {
+            seen.add(agentsFile);
+            const rel = path.relative(root, agentsFile);
+            const snippet = raw.split('\n').slice(0, 30).join('\n').slice(0, 1500);
+            messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
+          }
+        }
+        for (const wikiDirName of ['omagy_wiki', 'omx_wiki']) {
+          const childWikiDir = path.join(d, wikiDirName);
+          if (seen.has(childWikiDir)) continue;
+          let agRaw = '';
+          let idxRaw = '';
+          try { agRaw = fs.readFileSync(path.join(childWikiDir, 'agreements.md'), 'utf8').trim(); } catch { agRaw = ''; }
+          try { idxRaw = fs.readFileSync(path.join(childWikiDir, 'index.md'), 'utf8').trim(); } catch { idxRaw = ''; }
+          if (!agRaw && !idxRaw) continue;
+          seen.add(childWikiDir);
+          const relWiki = path.relative(root, childWikiDir);
+          const parts = [`[oh-my-agy] Child-project Wiki (${relWiki}):`];
+          if (agRaw) parts.push(...agRaw.split('\n').slice(0, 12));
+          if (idxRaw) parts.push(...idxRaw.split('\n').slice(0, 15));
+          messages.push(parts.join('\n').slice(0, 1500));
+        }
+        if (messages.length >= 3) return { messages, seen: [...seen] };
       }
     }
   }
@@ -521,11 +555,40 @@ function hasRalplanArtifacts(sRoot) {
   try { names = fs.readdirSync(plansDir); } catch { return false; }
   return names.some((n) => /^prd-.*\.md$/i.test(n)) && names.some((n) => /^test-spec-.*\.md$/i.test(n));
 }
+function stripQuotedAndNegatedRegions(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
+    .replace(/`[^`\n]+`/g, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^\s*\[[^\][\r\n]+?->[^\][\r\n]+?\]\s*/gm, ' ')
+    .replace(/^\s*>[^\r\n]*/gm, ' ')
+    .replace(/\bhttps?:\/\/\S+/gi, ' ')
+    .replace(/"[^"\n]{1,200}"/g, ' ')
+    .replace(/(?<![\w'])'[^'\n]{1,200}'(?![\w'])/g, ' ')
+    .replace(/\b(?:do\s+not|don't|dont|never|avoid|without|instead\s+of|rather\s+than|skip|stop|no\s+need\s+to|not)\s+(?:(?:load|use|run|invoke|call|activate|trigger|start)(?:ing)?\s+)?(?:the\s+)?[$/][a-z][a-z0-9-]*(?:\s+skill|\s+mode)?/gi, ' ');
+}
+function isInformationalHelpPrompt(text) {
+  return /^\s*(?:what\s+(?:is|does|are)|how\s+(?:do\s+i|to|does|can\s+i)|can\s+you\s+explain|explain|tell\s+me\s+about|describe)\b/i.test(String(text || ''))
+    && !/\b(?:and\s+then|then\s+(?:run|execute|use)|please\s+(?:run|execute))\b/i.test(String(text || ''));
+}
 function detectSkills(text) {
+  const raw = String(text || '');
   const found = [];
-  const re = /(^|[\s(>"'`])([$/])([a-z][a-z0-9-]*)/g;
+  const lead = /^\s*([$/])([a-z][a-z0-9-]*)\b/.exec(raw);
+  if (lead) {
+    const [, sigil, name] = lead;
+    if (SKILLS.includes(name) && !(sigil === '/' && AGY_SLASH.has(name))) {
+      const afterLead = raw.slice(lead[0].length).replace(/^\s*[:,-]?\s*/, '');
+      if (!isInformationalHelpPrompt(afterLead)) found.push(name);
+      else return [];
+    }
+  } else if (isInformationalHelpPrompt(raw)) {
+    return [];
+  }
+  const cleaned = stripQuotedAndNegatedRegions(raw);
+  const re = /(^|[\s(])([$/])([a-z][a-z0-9-]*)/g;
   let m;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = re.exec(cleaned)) !== null) {
     const [, , sigil, name] = m;
     if (!SKILLS.includes(name)) continue;
     if (sigil === '/' && AGY_SLASH.has(name)) continue;
@@ -609,26 +672,35 @@ function preInvocation(payload) {
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
-function preToolUse(payload) {
-  const roots = workspaceRoots(payload);
-  const conv = payload.conversationId || payload.conversation_id;
-  const call = payload.toolCall || payload.tool_call || {};
-  const toolName = String(call.name || payload.toolName || payload.tool_name || '');
-  const args = call.args || call.arguments || {};
-  const target = args.Path || args.path || args.TargetFile || args.targetFile || args.target_file || '';
-  if (!target) return {};
-  const resolved = canonicalizePath(target);
-  const rawResolved = path.resolve(String(target));
-  const seenFile = runtimeFile(conv, 'seen');
-  if (/^(?:read|view)_/i.test(toolName)) {
-    const seen = readJson(seenFile) || { readFiles: [] };
-    const list = Array.isArray(seen.readFiles) ? seen.readFiles : [];
-    if (!list.includes(resolved)) {
-      writeJson(seenFile, { readFiles: [...list.slice(-199), resolved], at: new Date().toISOString() });
-    }
-    return {};
+const FILE_MUTATION_TOOLS_RE = /^(?:write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|multiedit|multi_edit|apply_patch|delete_file|move_file|rename_file)$/i;
+function extractToolTargets(toolName, args) {
+  const out = [];
+  const push = (v) => {
+    if (typeof v === 'string' && v.trim() && !out.includes(v.trim())) out.push(v.trim());
+  };
+  for (const k of ['Path', 'path', 'TargetFile', 'targetFile', 'target_file', 'filePath', 'file_path', 'file',
+    'rename', 'MoveTo', 'moveTo', 'move_to', 'destination', 'newPath', 'new_path', 'delete']) {
+    push(args?.[k]);
   }
-  const insideAllowed = roots.some((r) => {
+  if (Array.isArray(args?.edits)) {
+    for (const e of args.edits) {
+      if (e && typeof e === 'object') {
+        for (const k of ['Path', 'path', 'filePath', 'file_path', 'file', 'rename', 'newPath']) push(e[k]);
+      }
+    }
+  }
+  const patchBody = args?.patchText ?? args?.patch ?? (/(?:apply_patch|^patch$)/i.test(toolName) ? args?.input : '');
+  if (typeof patchBody === 'string' && patchBody) {
+    const headerRe = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s*(.+)$/gm;
+    let m;
+    while ((m = headerRe.exec(patchBody)) !== null) push(m[1]);
+  }
+  return out;
+}
+function isPathInsideAllowedOmagy(roots, rawTarget) {
+  const resolved = canonicalizePath(rawTarget);
+  const rawResolved = path.resolve(String(rawTarget));
+  return roots.some((r) => {
     const sr = canonicalizePath(stateRoot(r));
     const wr = canonicalizePath(r);
     if (hasSymlinkSegment(r, rawResolved) || hasSymlinkSegment(sr, rawResolved) || hasSymlinkSegment(wr, rawResolved)) return false;
@@ -637,13 +709,70 @@ function preToolUse(payload) {
       || resolved.startsWith(path.join(sr, 'omagy_wiki') + path.sep)
       || resolved.startsWith(path.join(wr, 'omagy_wiki') + path.sep);
   });
-  if (insideAllowed) return {};
+}
+function preToolUse(payload) {
+  const roots = workspaceRoots(payload);
+  const conv = payload.conversationId || payload.conversation_id;
+  const call = payload.toolCall || payload.tool_call || {};
+  const toolName = String(call.name || payload.toolName || payload.tool_name || '');
+  const args = call.args || call.arguments || {};
+  const targets = extractToolTargets(toolName, args);
+  const seenFile = runtimeFile(conv, 'seen');
+
+  if (/^(?:read|view)_/i.test(toolName)) {
+    if (!targets.length) return {};
+    const resolved = canonicalizePath(targets[0]);
+    const seen = readJson(seenFile) || { readFiles: [] };
+    const list = Array.isArray(seen.readFiles) ? seen.readFiles : [];
+    if (!list.includes(resolved)) {
+      writeJson(seenFile, { readFiles: [...list.slice(-199), resolved], at: new Date().toISOString() });
+    }
+    return {};
+  }
 
   const planning = activeStates(roots, PLANNING_MODES, conv);
   const autopilotStates = activeStates(roots, ['autopilot'], conv);
   const autopilotPlanning = autopilotStates.find((s) => PLANNING_MODES.includes(String(s.data.current_phase || '').toLowerCase()));
   const ralplanGate = autopilotStates.find((s) => s.data.ralplan_gate === true && !hasRalplanArtifacts(s.root));
   const s = planning[0] || autopilotPlanning || ralplanGate;
+
+  // Fail closed when an explicit file-mutation tool has no recognizable target argument during active planning (OMO v5.1.49 #11369).
+  if (!targets.length) {
+    if (s && FILE_MUTATION_TOOLS_RE.test(toolName)) {
+      return {
+        decision: 'force_ask',
+        reason: `oh-my-agy: ${s.mode} planning guard could not verify a target path for ${toolName}. Approve only if you intend to write outside .omagy/.`,
+      };
+    }
+    return {};
+  }
+
+  const primaryResolved = canonicalizePath(targets[0]);
+
+  // Working Agreements human-entry protection (OMO v5.1.45-49 #11112):
+  // Escalates full Overwrite on omagy_wiki/agreements.md if it would drop existing [by:human] / (by: human) entries.
+  const isFullOverwrite = /^(?:write_file|write_to_file)$/i.test(toolName)
+    && (args.Overwrite === true || args.overwrite === true)
+    && args.Append !== true && args.append !== true;
+  const newContent = typeof (args.Content ?? args.content) === 'string' ? (args.Content ?? args.content) : null;
+  if (isFullOverwrite && newContent !== null && /(?:^|[/\\])(?:omagy_wiki|omx_wiki)[/\\]agreements\.md$/i.test(primaryResolved)) {
+    try {
+      const prevRaw = fs.readFileSync(primaryResolved, 'utf8');
+      const humanLines = prevRaw.split('\n').map((l) => l.trim()).filter((l) => /(?:\[by:\s*human\]|\(by:\s*human\)|\bby:\s*human\b)/i.test(l));
+      const dropped = humanLines.find((hl) => !newContent.includes(hl));
+      if (dropped) {
+        return {
+          decision: 'force_ask',
+          reason: `oh-my-agy: agreements-guard — Overwriting ${primaryResolved} would remove or alter a human-authored agreement (${dropped.slice(0, 80)}). Preserve [by:human] entries or approve explicitly.`,
+        };
+      }
+    } catch { /* ignore if file does not exist yet */ }
+  }
+
+  const outsideTarget = targets.find((t) => !isPathInsideAllowedOmagy(roots, t));
+  if (!outsideTarget) return {};
+  const resolved = canonicalizePath(outsideTarget);
+
   if (s) {
     const reason = ralplanGate && s === ralplanGate
       ? `oh-my-agy: autopilot ralplan_gate is active without .omagy/plans/prd-*.md and test-spec-*.md. Writing ${resolved} outside .omagy/ requires completing ralplan artifacts first or user approval.`
@@ -655,9 +784,6 @@ function preToolUse(payload) {
 
   // Write-existing-file guard (ported from OmO write-existing-file-guard):
   // Escalates full-file Overwrite on a non-empty existing code file that has not been read in this session.
-  const isFullOverwrite = /^(?:write_file|write_to_file)$/i.test(toolName)
-    && (args.Overwrite === true || args.overwrite === true)
-    && args.Append !== true && args.append !== true;
   if (isFullOverwrite && CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
     let existsNonEmpty = false;
     try {
@@ -703,8 +829,8 @@ async function stop(payload) {
         decision = {
           decision: 'continue',
           reason: `[oh-my-agy] ${s.mode} is still active (phase: ${d.current_phase || 'unknown'}` +
-            `${d.iteration ? `, iteration ${d.iteration}` : ''}) per ${s.file}. Continue from current_phase under the ` +
-            `${s.mode} skill contract and refresh updated_at as you progress. If the work is verified complete, write the ` +
+            `${d.iteration ? `, iteration ${d.iteration}` : ''}) per ${s.file}. Proceed without asking whether to continue from current_phase under the ` +
+            `${s.mode} skill contract and refresh updated_at as you progress. A permission denial or a refusal by the user is final for what that call was meant to do: never reach that result with another tool, command, path, or host — mark that task/goal blocked and ask the user. If the work is verified complete, write the ` +
             'state terminal (active:false, current_phase:"complete", completed_at). If you need the user, write ' +
             'current_phase:"blocked" with active:false and ask. To abandon the workflow, run $cancel.' +
             (count === MAX_NUDGES ? ' (Final automatic nudge: without a state update the next stop is allowed.)' : ''),
@@ -770,7 +896,7 @@ async function notify(payload, roots) {
   const cfg = loadNotificationConfig(roots);
   if (cfg.enabled !== true) return;
   const conv = payload.conversationId || 'unknown';
-  const cooldown = Number(process.env.OMAGY_IDLE_COOLDOWN_SECONDS ?? cfg.idleCooldownSeconds ?? 60) * 1000;
+  const cooldown = intOr(process.env.OMAGY_IDLE_COOLDOWN_SECONDS, intOr(cfg.idleCooldownSeconds, 60, 0), 0) * 1000;
   const recFile = runtimeFile(conv, 'notify');
   const rec = readJson(recFile) || {};
   if (rec.at && Date.now() - Date.parse(rec.at) < cooldown) return;
@@ -1010,6 +1136,71 @@ async function selftest() {
     const readRes = readJsonlRecords(ledgerPath);
     check('appendJsonlRecord isolates torn tail with newline and readJsonlRecords recovers valid entries', appRes.isolatedNewline === true && readRes.records.length === 2 && readRes.skipped === 1);
 
+    // Whole-integer env/config parser (OMC v5.7.15 #4599/#4600 parity)
+    check('intOr validates whole safe integers and falls back on empty/negative/float/Infinity/NaN',
+      intOr('120', 60) === 120 && intOr('0', 60, 0) === 0 && intOr('0', 60, 1) === 60
+      && intOr('', 60, 0) === 60 && intOr('-5', 60, 0) === 60 && intOr('1.5', 60, 0) === 60
+      && intOr('Infinity', 60, 0) === 60 && intOr('60s', 60, 0) === 60);
+
+    // OMAGY_ROOT / OMAGY_STATE_ROOT override & omagyLogsDir (OMX v0.21.36 #3909 parity)
+    const customStateRoot = path.join(ws, 'custom-omagy-root');
+    fs.mkdirSync(customStateRoot, { recursive: true });
+    process.env.OMAGY_STATE_ROOT = path.join(customStateRoot, '.omagy');
+    const resolvedLogs = omagyLogsDir(ws);
+    delete process.env.OMAGY_STATE_ROOT;
+    check('OMAGY_STATE_ROOT overrides stateRoot and omagyLogsDir', resolvedLogs === path.join(canonicalizePath(customStateRoot), '.omagy', 'logs'));
+
+    // detectSkills quote/code/blockquote/URL/negated/help-question suppression (OMC v5.7.13 & OMO v5.1.45 parity)
+    const suppressedSkills = detectSkills('What does `$autopilot` or "$ralplan" do?\n> $team\n[a -> b] $ultragoal\ndo not use $ultraqa or https://example.com/$plan');
+    const preservedLead = detectSkills('$ralplan: design the API using ```js\nconst s = "$team";\n``` and do not use $autopilot');
+    const suppressedLeadHelp = detectSkills('$ralplan: how do I use this skill?');
+    check('detectSkills suppresses quoted/code/negated/help mentions while preserving leading invocation',
+      suppressedSkills.length === 0 && preservedLead.length === 1 && preservedLead[0] === 'ralplan' && suppressedLeadHelp.length === 0);
+
+    // Child-project omagy_wiki discovery (OMO v5.1.45-47 #10921/#11165 parity)
+    const childPkgWiki = path.join(ws, 'packages', 'billing', 'omagy_wiki');
+    fs.mkdirSync(childPkgWiki, { recursive: true });
+    fs.writeFileSync(path.join(childPkgWiki, 'agreements.md'), '- [by:human] All billing amounts use integer cents.\n');
+    const childDisc = discoverSubdirAgents([ws], 'inspect packages/billing/src/charge.ts', []);
+    check('discoverSubdirAgents surfaces child-project omagy_wiki once',
+      childDisc.messages.some((m) => m.includes('Child-project Wiki') && m.includes('integer cents')));
+
+    // Planning guard multi-target (rename / apply_patch) & fail-closed on missing target (OMO v5.1.49 #11369 parity)
+    writeJson(path.join(ws, '.omagy', 'state', 'plan-state.json'), { mode: 'plan', active: true, current_phase: 'drafting', updated_at: new Date().toISOString() });
+    const gRenameEscape = preToolUse({
+      ...base,
+      toolCall: { name: 'edit_file', args: { Path: path.join(ws, '.omagy', 'plans', 'draft.md'), rename: path.join(ws, 'src', 'escaped.ts') } },
+    });
+    const gPatchEscape = preToolUse({
+      ...base,
+      toolCall: { name: 'apply_patch', args: { patchText: `*** Update File: ${path.join(ws, 'src', 'index.ts')}\n@@\n` } },
+    });
+    const gMissingTarget = preToolUse({
+      ...base,
+      toolCall: { name: 'write_file', args: {} },
+    });
+    fs.rmSync(path.join(ws, '.omagy', 'state', 'plan-state.json'), { force: true });
+    check('planning guard catches rename/apply_patch escapes and fails closed on targetless write_file',
+      gRenameEscape.decision === 'force_ask' && gPatchEscape.decision === 'force_ask' && gMissingTarget.decision === 'force_ask');
+
+    // Working Agreements [by:human] overwrite protection (OMO v5.1.45-49 #11112 parity)
+    const agFile = path.join(ws, 'omagy_wiki', 'agreements.md');
+    fs.writeFileSync(agFile, '- [by:human] Never mutate production tables directly.\n');
+    const gDropHuman = preToolUse({
+      ...base,
+      toolCall: { name: 'write_file', args: { Path: agFile, Overwrite: true, Content: '- [v2] Only automated rule.\n' } },
+    });
+    const gKeepHuman = preToolUse({
+      ...base,
+      toolCall: { name: 'write_file', args: { Path: agFile, Overwrite: true, Content: '- [by:human] Never mutate production tables directly.\n- [v2] Added rule.\n' } },
+    });
+    check('agreements-guard blocks Overwrite dropping [by:human] line and allows preserving it',
+      gDropHuman.decision === 'force_ask' && !gKeepHuman.decision);
+
+    // Stop continuation includes refusal-is-final rule (OMO v5.1.49 #11371 parity)
+    check('stop continuation prompt includes refusal-is-final rule',
+      typeof s1.reason === 'string' && s1.reason.includes('permission denial or a refusal by the user is final'));
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -1076,7 +1267,15 @@ async function main() {
     else if (event === 'pre-tool-use') result = preToolUse(payload);
     else if (event === 'stop') result = await stop(payload);
   } catch (err) {
-    process.stderr.write(`[oh-my-agy] hook ${event} failed open: ${err instanceof Error ? err.message : String(err)}\n`);
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[oh-my-agy] hook ${event} failed open: ${msg}\n`);
+    try {
+      const roots = workspaceRoots(payload);
+      const logDir = omagyLogsDir(roots[0] || process.cwd());
+      if (process.env.OMAGY_ROOT || process.env.OMAGY_STATE_ROOT || fs.existsSync(logDir)) {
+        appendJsonlRecord(path.join(logDir, 'hook-errors.jsonl'), { at: new Date().toISOString(), event, error: msg });
+      }
+    } catch { /* fail open */ }
     result = event === 'stop' ? { decision: 'stop' } : {};
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);

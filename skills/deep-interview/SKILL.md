@@ -213,11 +213,16 @@ When threshold is met (or on early exit with a warning, or at the hard cap):
 3. Standalone: write state `current_phase:"complete"`, `active:false`, `completed_at`. Inside Autopilot: set `handoff_artifacts.deep_interview` to the spec path and advance Autopilot to `ralplan`.
 
 ### Autoresearch specialization (`--autoresearch`)
-- Focus the interview on mission clarity, evaluator readiness, keep policy, slug naming, and launch-now vs refine-further.
+- Focus the interview on mission clarity, evaluator readiness, keep policy, slug naming, **research fidelity rules**, and launch-now vs refine-further.
 - Accepted seed inputs: `topic`, `evaluator`, `keep-policy`, `slug`, a mission draft, evaluator examples.
-- Canonical spec: `.omagy/specs/deep-interview-autoresearch-{slug}.md` with sections `Mission Draft`, `Evaluator Draft`, `Launch Readiness`, `Seed Inputs`, `Confirmation Bridge`.
-- Launch bundle under `.omagy/specs/autoresearch-{slug}/`: `mission.md`, `sandbox.md`, `result.json` (`topic`, `evaluatorCommand`, `keepPolicy`, `slug`, `launchReady`, `blockedReasons`).
-- Mark the draft **not launch-ready** while the evaluator command contains placeholders (`<...>`, `TODO`, `TBD`, `REPLACE_ME`, `CHANGEME`, `your-command-here`).
+- Canonical spec: `.omagy/specs/deep-interview-autoresearch-{slug}.md` with sections `Mission Draft`, `Evaluator Draft`, `Fidelity`, `Launch Readiness`, `Seed Inputs`, `Confirmation Bridge`.
+- **Locked `## Fidelity` block (ported from OmO `ulw-research` `#11166`, `#11289`)**: infer first from the prompt and ask only triggered fields:
+  - `as of`: version/release/commit/date anchor (default: latest at run start).
+  - `meaning check`: `on` (full rigor) or `off` (light rigor).
+  - `source floor`: `standard`, `primary only`, or `pointed only: <URLs/paths>`.
+  - `derived numbers`: `allowed` or `none` (when `none`, only direct measured/quoted figures are permitted).
+- Launch bundle under `.omagy/specs/autoresearch-{slug}/`: `mission.md`, `sandbox.md`, `result.json` (`topic`, `evaluatorCommand`, `keepPolicy`, `slug`, `fidelity`, `launchReady`, `blockedReasons`).
+- Mark the draft **not launch-ready** while the evaluator command contains placeholders (`<...>`, `TODO`, `TBD`, `REPLACE_ME`, `CHANGEME`, `your-command-here`) or any required `## Fidelity` field is undecided.
 - After generating artifacts, offer `refine further` vs `launch` via `ask_question`. Hand off to `$autoresearch` only after explicit confirmation.
 
 ## Phase 5: Execution bridge

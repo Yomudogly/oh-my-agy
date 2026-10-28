@@ -48,8 +48,12 @@ Invoke the `architect` subagent with the validator prompt, the mission, and the 
 ```
 
 ## Recommended flow
-1. Run `$deep-interview --autoresearch` to clarify the mission and evaluator.
-2. Use the materialized `.omagy/specs/autoresearch-{slug}/mission.md`, `sandbox.md`, and `result.json`. Refuse to launch while `result.json` has `launchReady:false`.
+1. Run `$deep-interview --autoresearch` to clarify the mission, evaluator, and locked `## Fidelity` block (`as of`, `meaning check`, `source floor`, `derived numbers`).
+2. Use the materialized `.omagy/specs/autoresearch-{slug}/mission.md`, `sandbox.md`, and `result.json`. Refuse to launch while `result.json` has `launchReady:false` or the `## Fidelity` block is unlocked (ported from OmO `ulw-research` `#11166`).
 3. Write the autoresearch state with the chosen validation mode.
 4. Iterate: research (`researcher` subagent, `search_web`, `read_url_content`, context7, repo reads), update the output artifact, run the validator, and refresh `updated_at` and `iteration`.
-5. Finish only after the completion artifact satisfies the mode. Then write the state terminal (`active:false`, `current_phase:"complete"`, `completed_at`).
+5. **Claim-kind discipline & meaning/polish preservation (ported from OmO `ulw-research` `#11151`, `#11152`, `#11160`, `#11289`, `#11302`)**:
+   - Distinguish claim kinds explicitly: **`[VERIFIED]`** (`V`: backed by a command/test output executed in this run), **`[DERIVED]`** (`D`: computed from cited inputs with the formula shown, forbidden when `derived numbers: none`), and **`[ASSUMED]`** (`A`: explicit assumption). Never write first-person "we verified/measured" unless backed by a command output from the run.
+   - **Meaning check**: verify that report sentences preserve the exact scope, subject, direction, and hedges/qualifiers of their sources (no `scope_widened`, `hedge_dropped`, `certainty_added`, or `causality_added`).
+   - **Polish pass guard**: any final prose polish must change text only — never alter numbers, units, hedges, qualifiers, links, or claim tags.
+6. Finish only after the completion artifact satisfies the mode. Then write the state terminal (`active:false`, `current_phase:"complete"`, `completed_at`).

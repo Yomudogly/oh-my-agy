@@ -61,6 +61,7 @@ The main agent cannot process visual content directly. These rules exist because
 - For PDFs: extract text, structure, tables, data from specific sections.
 - For images: describe layouts, UI elements, text, diagrams, charts.
 - For diagrams: explain relationships, flows, architecture depicted.
+- For Visual Ralph / UI QA comparisons (OmO `visual-qa` `#10685`, `#11022`, `#11023`): distinguish objective defects (layout breakage, scroll-owner `A12` mismatch, missing/merged required content `B7`, accessibility/contrast failures, or Draft Guard violations like one-side accent stripes, emoji icons, stateless hype badges, and vanity stats) from subjective taste notes so the caller can stop after 2–3 rounds once objective defects are resolved.
 </tools>
 
 <style>

@@ -1,9 +1,19 @@
 {
-  // oh-my-agy: Multi-agent workflow layer for Google Antigravity (MIT).
+  // oh-my-agy: Multi-agent workflow layer for Google Antigravity (MIT License).
   "name": "oh-my-agy",
   "displayName": "oh-my-agy",
-  "description": "Multi-agent workflow layer for Google Antigravity: /autopilot delivery, /deep-interview Socratic specs, /ralplan & --hyperplan consensus planning, /ultragoal durable ledgers, /team parallel subagent waves, /ultraqa adversarial QA, 26 skills, and 18 role subagents.",
-  "version": "0.3.1",
+  "version": "0.3.2",
+  "description": "Multi-agent workflow layer for Google Antigravity: /autopilot delivery, /deep-interview Socratic specs, /ralplan & --hyperplan consensus planning, /ultragoal durable ledgers, /team parallel subagent waves, /ultraqa adversarial QA, /wiki project knowledge & working agreements, 26 skills, and 18 role subagents.",
+  "logo": "assets/logo.png",
+  "author": {
+    "name": "Yomudogly",
+    "url": "https://github.com/Yomudogly"
+  },
+  "homepage": "https://github.com/Yomudogly/oh-my-agy#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Yomudogly/oh-my-agy.git"
+  },
   "suggestedPrompts": [
     "/autopilot build a CLI that converts CSV files to JSON with schema validation",
     "/deep-interview I want to add authentication to this app",

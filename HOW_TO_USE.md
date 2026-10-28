@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.1`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.2`)** for Google Antigravity.
 
 ---
 
@@ -292,7 +292,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics & Health Check
-Verifies plugin placement, `hooks/run.sh selftest` (`30/30` checks), live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `rules/AGENTS.md` size budget, skills/agents integrity, and stale `.omagy/state/` files.
+Verifies plugin placement, `hooks/run.sh selftest` (`37/37` checks), live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `rules/AGENTS.md` size budget, skills/agents integrity, manifest version consistency, and stale `.omagy/state/` files.
 - **Example**:
   ```text
   /doctor
@@ -392,11 +392,11 @@ All runtime state lives in your workspace under `.omagy/` (add `.omagy/` to `.gi
 Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wiki/`** is meant to be **committed to git** so project memory compounds across sessions and teammates:
 
 1. **`omagy_wiki/agreements.md` (Working-Agreement Ledger)**:
-   Stores explicit user preferences, architectural boundaries, and "do not touch" guardrails. Automatically injected **ahead of `index.md`** on `SessionStart` and `PreInvocation`.
+   Stores explicit user preferences, architectural boundaries, and "do not touch" guardrails. Automatically injected **ahead of `index.md`** on `SessionStart` and `PreInvocation`. Human-authored entries (`[by:human]`) are protected by the `PreToolUse` `agreements-guard` so agents cannot silently overwrite or delete them.
 2. **`omagy_wiki/index.md` & `<slug>.md`**:
    Catalog and topic pages for architecture decisions, debugging notes, and conventions.
-3. **Hierarchical Subdirectory `AGENTS.md` Discovery**:
-   When your prompt references a file or path inside a subdirectory (e.g., `packages/billing/src/invoice.ts`), the `PreInvocation` hook automatically walks from the workspace root down to that directory and injects any nested `AGENTS.md` files once per conversation.
+3. **Hierarchical Subdirectory `AGENTS.md` & Child-Project `omagy_wiki/` Discovery**:
+   When your prompt references a file or path inside a subdirectory or nested package (e.g., `packages/billing/src/invoice.ts`), the `PreInvocation` hook automatically walks from the workspace root down to that directory and injects any nested `AGENTS.md` files and child-project `omagy_wiki/` (`agreements.md` and `index.md`) once per conversation.
 
 ---
 
@@ -405,22 +405,23 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 `oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs):
 
 - **`SessionStart` & `PreInvocation` (Enabled by default)**:
-  - Detects `/skill` and `$skill` triggers and natural-language routing keywords.
-  - Injects a 1-line reminder of active `.omagy/state/*-state.json` modes owned by the current conversation.
+  - Detects `/skill` and `$skill` triggers and natural-language routing keywords while stripping code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), and preserving leading `$skill` invocations on reference-heavy prompts.
+  - Injects a 1-line reminder of active `.omagy/state/*-state.json` modes owned by the current conversation (honoring `OMAGY_ROOT` / `OMAGY_STATE_ROOT` overrides).
   - Injects bounded (`<= 3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` once per session.
-  - Injects unseen subdirectory `AGENTS.md` files along touched workspace paths.
+  - Injects unseen subdirectory `AGENTS.md` files and child-project `omagy_wiki/` along touched workspace paths.
   - Automatically skips leader skill routing and unowned parent states when invoked inside a delegated subagent prompt (`isSubagentPayload`).
 - **`Stop` (Enabled by default)**:
-  - Continues active `autopilot`, `ultragoal`, `ultraqa`, `autoresearch`, or `performance-goal` loops on normal stops (`NO_TOOL_CALL`), bounded to at most 2 consecutive nudges without a state update.
+  - Continues active `autopilot`, `ultragoal`, `ultraqa`, `autoresearch`, or `performance-goal` loops on normal stops (`NO_TOOL_CALL`), bounded to at most 2 consecutive nudges without a state update, while enforcing that a permission denial or user refusal is final (must mark the task/goal `blocked` instead of retrying via another tool/path).
   - Scans `git diff` on completion claims for left-behind blocker patterns (`test.skip`, `test.only`, `TODO: implement`, `throw new Error("Not implemented")`).
 - **`PreToolUse` (Opt-in in `hooks.json`)**:
-  - Blocks file writes outside `.omagy/` and `omagy_wiki/` while a planning mode (`deep-interview`, `ralplan`, `plan`, or `autopilot` planning phase) is active, including canonical `realpath` and symlink-escape protection.
+  - Blocks file writes outside `.omagy/` and `omagy_wiki/` while a planning mode (`deep-interview`, `ralplan`, `plan`, or `autopilot` planning phase) is active, inspecting all target paths across `Path`, `TargetFile`, `filePath`, rename/move destinations, `edits[]`, and `apply_patch` (`*** Add/Update/Delete File:` and `*** Move to:`) headers, and failing closed when an explicit file-mutation tool omits its path argument.
+  - Enforces `agreements-guard`: blocks full overwrites of `omagy_wiki/agreements.md` that drop `[by:human]` entries.
   - Enforces `write-existing-file-guard`: requires user confirmation before a full-file `Overwrite: true` on an existing non-empty source file that hasn't been read yet in the current session.
 
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 30-check offline hook selftest
+# 1. Run the 37-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Validate a /team task's completion evidence file

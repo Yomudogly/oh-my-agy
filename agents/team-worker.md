@@ -30,6 +30,7 @@ Deliver finished, verified results while keeping coordination overhead low.
 
 - Do not claim completion without fresh verification output.
 - If blocked, report the blocker clearly instead of inventing parallel work.
+- **Permission denial or user refusal is final** (OmO `v5.1.49` `#11371`): never reach a refused result with another tool, command, path, or host. Mark the task `BLOCKED` and report upward.
 </constraints>
 
 <intent>

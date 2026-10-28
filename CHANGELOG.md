@@ -2,6 +2,32 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.3.2
+
+*Upstream references: **OMX** `v0.21.37` · **OMC** `v5.7.19` · **OMO** `v5.1.49`*
+
+- **Hooks (`hooks/omagy-hook.mjs`, adapted from OMX `v0.21.35`–`v0.21.37`, OMC `v5.7.12`–`v5.7.19`, & OMO `v5.1.45`–`v5.1.49`)**:
+  - **Skill Detection Sanitization & Leading-Invocation Priority** (`stripQuotedAndNegatedRegions`, `isInformationalHelpPrompt`, `detectSkills`, from OMC `v5.7.13` `#4551`/`#4553`/`#4564` & OMO `v5.1.45` `#10822`): strips fenced code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), while preserving direct leading `$skill` invocations on reference-heavy prompts.
+  - **Multi-Target, Rename/Move, `apply_patch` & Fail-Closed Planning Write Guard** (`extractToolTargets`, `isPathInsideAllowedOmagy`, `FILE_MUTATION_TOOLS_RE` in `preToolUse`, from OMO `v5.1.49` `#11369`): inspects all target paths across `Path`, `TargetFile`, `filePath`, rename/move destinations, `edits[]`, and `apply_patch` (`*** Add/Update/Delete File:` and `*** Move to:`) headers; blocks any target outside `.omagy/` or `omagy_wiki/`; and fails closed (`force_ask`) when an explicit file-mutation tool omits its path argument while planning is active.
+  - **Human Working-Agreement Overwrite Guard** (`agreements-guard` in `preToolUse`, from OMO `v5.1.47` `#11112`): escalates full overwrites of `omagy_wiki/agreements.md` that would delete existing `[by:human]` entries.
+  - **Child-Project `omagy_wiki/` Discovery** (`discoverSubdirAgents`, from OMO `v5.1.45`–`v5.1.47` `#10921`/`#11165`): when touched file paths cross into a nested subpackage with its own `omagy_wiki/agreements.md` or `omagy_wiki/index.md`, injects a bounded child-wiki digest once per conversation alongside nested `AGENTS.md` files.
+  - **Environment Root Overrides & Structured Hook Error Logging** (`OMAGY_ROOT`, `OMAGY_STATE_ROOT`, `omagyLogsDir`, from OMX `v0.21.36` `#3909`): honors `OMAGY_ROOT` (precedence 1) and `OMAGY_STATE_ROOT` (precedence 2) for `.omagy/` state resolution and appends uncaught hook error records to `.omagy/logs/hook-errors.jsonl` when opted in, while keeping hook execution fail-open (`exit 0`).
+  - **Strict Whole-Integer Numeric Validation** (`intOr`, from OMC `v5.7.12`–`v5.7.15` `#4543`/`#4599`/`#4600`): validates `OMAGY_STALE_MS`, `OMAGY_MAX_STOP_NUDGES`, and notification `cooldownSeconds` with `/^\d+$/` + `Number.isSafeInteger` so partial strings (`15abc`) or floats (`1.5`) fall back cleanly.
+  - **Permission-Denial / User-Refusal Finality in `Stop` Continuation** (from OMO `v5.1.49` `#11371`): continuation prompts now explicitly instruct the agent that a permission denial or user refusal is final for that operation and must be marked `blocked` rather than retried via an alternative tool, command, path, or host.
+  - Expanded offline hook selftest suite from `30` to `37` checks (`hooks/omagy-hook.mjs selftest`).
+- **Design & Visual QA (`skills/design/`, `skills/visual-ralph/`, `agents/designer.md`, `agents/vision.md`, adapted from OMO `v5.1.45`–`v5.1.49`)**:
+  - Added **Per-Screen Brief & Subtraction Contract** (`Primary action`, `Information priorities 1-3`, `Left out on purpose`, `Required content`, `Data shape -> component`), mandatory `Layout:` line with explicit `scroll owner` (`window` or one named container; never nested vertical scrollbars), and **Draft Guard** anti-slop rules (from OMO `#10889`, `#11044`, `#11056`, `#11160`, `#11284`, `#11375`).
+  - Added same-origin `llms.txt` discovery (`robots.txt` disallow wins; `<= 16 KiB` cap) for live URL references in `$design` and `$visual-ralph` (from OMO `#11197`).
+  - Added **Pre-edit Baseline Mode** (Before/After comparison without requiring an external mockup), `A12` scroll-owner DOM probe, `B7` required-content check, and a bounded 2–3 round visual QA fix loop in `$visual-ralph` and `vision` (from OMO `#10913`, `#10970`, `#11056`, `#11284`).
+- **Research, Deep-Interview & Wiki Guardrails (`skills/deep-interview/`, `skills/autoresearch/`, `skills/best-practice-research/`, `skills/wiki/`, adapted from OMO `v5.1.47`–`v5.1.48`)**:
+  - Added locked `## Fidelity` contract (`as of`, `meaning check`, `source floor`, `derived numbers`) in `$deep-interview --autoresearch`, plus `[VERIFIED]` / `[DERIVED]` / `[ASSUMED]` claim-kind tags, meaning-drift check, and text-only polish-pass guard in `$autoresearch` and `$best-practice-research` (from OMO `#11108`, `#11196`).
+  - Updated `$wiki` with `[by:human]` vs `[by:agent]` working-agreement preservation, child-project `omagy_wiki/` discovery, and secret-reference exclusion rules (`process.env.X`, `$VAR`, `{{slot}}`, `[FILTERED]`, bare `Bearer`, `null`/`example` placeholders) during `$wiki lint` (from OMO `#10921`, `#11112`, `#11165`).
+- **Team, Setup, Doctor & Skill Management (`skills/team/`, `skills/omagy-setup/`, `skills/doctor/`, `skills/skill/`, `agents/executor.md`, `agents/team-worker.md`)**:
+  - `$team`, `executor`, `team-worker`, and `rules/AGENTS.md`: enforced permission-denial / user-refusal finality rule (from OMO `v5.1.49` `#11371`).
+  - `$team`: hardened `git status --porcelain` parsing (`.trimEnd()` instead of `.trim()`) and unmerged conflict detection across all 7 git unmerged porcelain prefixes (`DD|AU|UD|UA|DU|AA|UU`, from OMC `v5.7.16` `#4607`/`#4608`).
+  - `$omagy-setup` & `$doctor`: added symlink-safe copy (`rm -f` on existing/dangling symlinks before `cp -R`, from OMC `v5.7.19` `#4631`) and manifest version consistency check against `CHANGELOG.md` (from OMX `v0.21.37` `#3923`).
+  - `$skill`: added project skill symlink boundary check (`realpath` within canonical project root, from OMO `v5.1.45` `#10716`) and bytecode/test-cache exclusion (`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `*.pyc`, from OMO `v5.1.49` `#11376`/`#11377`).
+
 ## 0.3.1
 
 *Upstream references: **OMX** `v0.21.34` · **OMC** `v5.7.11` · **OMO** `v5.1.44`*
