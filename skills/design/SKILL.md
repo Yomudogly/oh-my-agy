@@ -54,12 +54,15 @@ Navigation, routes/screens, content hierarchy, and per-screen **Brief & Layout C
 - **Mandatory `Layout:` line**: for any structural screen or region change, record:
   `Layout: <screen or region> - <spatial problem> -> <pattern name> (<pattern URL or reference>); scroll owner: <CSS selector>; anti-patterns: <what to avoid>`
 ## Design principles
-Principles, tradeoffs, and **Draft Guard anti-slop rules** (ported from OmO `check-draft-guard.ts` `#11022`, `#11314`):
+Principles, tradeoffs, and **Draft Guard & Craft Floor rules** (ported from OmO `check-draft-guard.ts` `#11022`, `#11314` & Impeccable `craft-floor.md` `#11811`, `#11820`):
 - No one-side coloured border/shadow/gradient stripes (`edge-stripe`, `pseudo-bar`, `inset-shadow-stripe`, `gradient-stripe`) or `>=2px` accent outlines on rounded cards (`accent-outline`), whether decorative or marking selected/focused/active state.
 - No decorative badges without a changing state (`decorative-badge`, e.g. "New", "AI-powered"), no stat tiles with marketing-form numbers (`vanity-stat`, e.g. `10x`, `500+`, `24/7` — only measured figures pass), and no emoji used as icons (`emoji-icon`).
+- No generated scaffolds (`F9`): no kicker label above a heading, no icon tile stacked over a heading in a grid of same-size cards, no decisionless hero metric, no card nested inside a card, no neutral gray text on a coloured surface (`E7` — use a tint/shade of that hue or foreground alpha), no monospace used as a "technical" costume, and no zero-offset coloured glow standing in for a shadow.
 - No invented proof/testimonials, prop decoration, subtitle-under-every-heading, duplicate facts, or promotional filler copy ("seamlessly", "effortlessly", "supercharge", "at a glance").
 ## Visual language
-Color, typography, spacing, shape/elevation, motion, imagery/iconography.
+Color, typography, spacing, shape/elevation, motion, imagery/iconography, plus the **Numeric Type, Spacing & Browser Surfaces Floor** (`A13`, `B8`, `F8`, ported from OmO `#11811`):
+- **Type & spacing floor (`A13`, `B8`)**: each heading step in use differs by `>=1.25x` in computed `font-size`; space above a section heading is `>=1.5x` the space below it; gap between groups is `>=2x` the gap inside a group; desktop body measure is `65-75ch` (`>=45ch` on mobile); display headings stay `<=6rem` and tracking `>=-0.04em` unless the chosen style route specifies otherwise.
+- **Themed browser surfaces (`F8`)**: `::selection`, `caret-color`, visible scrollbars (`scrollbar-color`/`scrollbar-width`), `:focus-visible` ring, `text-underline-offset`, and `font-variant-numeric: tabular-nums` are themed from the palette in both light and dark modes (never left as raw browser defaults).
 ## Components
 Existing/new components, variants/states, token ownership.
 ## Accessibility

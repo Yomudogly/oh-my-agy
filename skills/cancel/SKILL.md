@@ -36,4 +36,4 @@ Terminal write shape (read-modify-write the existing file):
 
 ## Exit and evidence
 
-Report one line per selected mode: mode, terminal phase, what was preserved, linked cleanup (subagents killed, tasks stopped, files removed), and any refusal reason. A clean no-op reports `No active oh-my-agy modes detected.`
+Report one line per selected mode: mode, terminal phase, what was preserved, linked cleanup (subagents killed, tasks stopped, files removed), and any refusal reason. A clean no-op reports `No active oh-my-agy modes detected.` When reporting checked missing-state paths on a no-op, limit the output to the current conversation's session paths (or cap checked paths at 10 with `... and N more checked paths`, ported from OMC `v5.7.21` `#4654`).

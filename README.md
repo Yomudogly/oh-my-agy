@@ -22,14 +22,14 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── plugin.json            # Antigravity manifest (v0.3.2)
+├── plugin.json            # Antigravity manifest (v0.3.3)
 ├── assets/logo.png        # Plugin icon
 ├── HOW_TO_USE.md          # Complete guide to all 26 skills, 18 subagents, hooks & recipes
 ├── rules/AGENTS.md        # always-on operating contract (~13 KB)
 ├── hooks.json             # SessionStart + PreInvocation routing/wiki, Stop continuation, opt-in PreToolUse guard
 ├── hooks/
 │   ├── run.sh             # finds Node (homebrew/volta/fnm/nvm), fails open if absent
-│   └── omagy-hook.mjs     # hook runtime + `verify-evidence` + `append-jsonl` + `read-jsonl` + `selftest`
+│   └── omagy-hook.mjs     # hook runtime + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
 ├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
 └── skills/                # 26 workflow skills
 ```
@@ -63,7 +63,7 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 Run the offline hook selftest at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":37,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":42,"failed":0}
 ```
 
 Antigravity's sandboxed terminal may deny reading plugin files directly. If the selftest prints `Operation not permitted`, run it with sandbox bypass. The hooks themselves are unaffected: they write `$TMPDIR/oh-my-agy/<conversationId>.routing.json` on every user message, which is the quickest live health check.
@@ -96,7 +96,7 @@ In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot 
 
 ## Architecture & Runtime Notes
 
-- **Hooks & State Isolation**: `SessionStart` and `PreInvocation` inject `/skill` (and `$skill`) routing (while stripping code fences, blockquotes, relay headers, URLs, quoted strings, negations, and help queries), active `.omagy/state/` reminders, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per session, and unseen subdirectory `AGENTS.md` files and child-project `omagy_wiki/` along touched workspace paths. State files support conversation-owner isolation (`owner_conversation_id` and `.omagy/state/sessions/<conversationId>/`), environment overrides (`OMAGY_ROOT` / `OMAGY_STATE_ROOT`), and multi-repo workspace anchoring (`.omagy-workspace`).
+- **Hooks & State Isolation**: `SessionStart` and `PreInvocation` inject `/skill` (and `$skill`) routing (while stripping code fences, blockquotes, relay headers, URLs, quoted strings, negations, and help queries), active `.omagy/state/` reminders, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per session (with `expires: <ISO 8601>` time-boxed expiry filtering and standalone secret redaction), and unseen subdirectory `AGENTS.md` files and child-project `omagy_wiki/` along touched workspace paths. State files support conversation-owner isolation (`owner_conversation_id` and `.omagy/state/sessions/<conversationId>/`), environment overrides (`OMAGY_ROOT` / `OMAGY_STATE_ROOT`), and multi-repo workspace anchoring (`.omagy-workspace`).
 - **Bounded Continuation & Drift Guard**: The `Stop` hook re-enters active autonomous loops at most 2 consecutive times without a state update, never on errors or while background tasks are running, enforces permission-denial / user-refusal finality (`blocked`), and ignores states older than 6 hours. On completion claims, it scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`).
 - **Opt-In PreToolUse Guard**: `PreToolUse` ships disabled in `hooks.json` because Antigravity requires a `decision` when enabled. When opted in, it enforces the planning-phase write boundary across `Path`, `TargetFile`, `filePath`, rename/move, `edits[]`, and `apply_patch` (failing closed on targetless file-mutation tools), `agreements-guard` (preserving `[by:human]` lines in `omagy_wiki/agreements.md`), and `write-existing-file-guard` (requiring confirmation before overwriting an unread non-empty source file) without ever emitting `allow`.
 - **Subagents & Fallbacks**: `agents/*.md` defines 18 specialized subagents invoked via `invoke_subagent`. If a custom role is unavailable in a session, workflows fall back to Antigravity's built-in `self` or `research` subagent with the role's prompt preamble.

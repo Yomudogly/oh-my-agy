@@ -66,6 +66,7 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 <Asking_Questions>
 Use Antigravity's `ask_question` tool for every interview round. It replaces `omx question`.
 
+- **No-Questions Override (ported from OmO `v5.1.52` `#11556`)**: do not call `ask_question` or ask the user when they have explicitly said not to (`"don't ask"`, `"no questions"`, `"do not ask me"`, `"hands-off"`). Instead, adopt best-practice defaults, record them as `[adopted-default]`, and crystallize the spec directly.
 - One question per `ask_question` call. Header line in the question text:
   `Round {n} | Target: {weakest_dimension} | Ambiguity: {score}%`, then the question.
 - `is_multi_select: false` (single-answer) when exactly one answer should drive the next branch or the options are mutually exclusive: lane selection, primary failure mode, competing interpretations.
@@ -198,6 +199,7 @@ If ambiguity stalls for 3 rounds (±0.05), force Ontologist once.
 
 When threshold is met (or on early exit with a warning, or at the hard cap):
 
+0. **Configurable Custom Quality Gates (`qualityGates["deep-interview"]`, ported from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`)**: after writing the spec in step 2, if `.omagy/config.json` defines `qualityGates["deep-interview"]` (strict no-op when absent/empty; reserved controller skills like `deep-interview`, `ralplan`, `code-review`, `ai-slop-cleaner` are rejected to prevent self-recursion), run each configured gate skill in an independent subagent (`Model: gate.model || "inherit"`). Any `blocking` gate returning `reject`/`iterate` requires revising the spec before step 3; `advisory` or `unavailable` gates are recorded without blocking.
 1. Write the transcript summary to `.omagy/interviews/{slug}-{timestamp}.md`.
 2. Write the execution-ready spec to `.omagy/specs/deep-interview-{slug}.md` containing:
    - Metadata (profile, rounds, final ambiguity, threshold, context type) and the context snapshot path.

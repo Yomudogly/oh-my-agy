@@ -72,7 +72,8 @@ Repeat until every goal is `complete` (or `superseded`):
      - `verdict`: `"confirmed" | "false-positive" | "needs-fix" | "needs-human-review"`
      - `failure_class`: `"none" | "product" | "harness"`
 4. Checkpoint: when `verdict` is `"confirmed"` (or `"light"` checks pass), set the goal `status:"complete"` with `evidence`, then append a `checkpoint` ledger line containing commands and exit codes. Refresh `updated_at` in state.
-5. **Failure triage (`product` vs `harness`) & blocked-goal cascade**:
+5. **Failure triage (`product` vs `harness`), unavailable verification & blocked-goal cascade (ported from OMX `v0.21.42` `#3964` & OmO `ulw-execute`)**:
+   - **Unavailable verification never fabricates completion (OMX `#3964`)**: if the required test runner, verifier subagent, or external environment is unavailable or indeterminate, never mark the goal `complete` and never fabricate passing evidence. Record a truthful non-terminal `blocked` ledger entry (`event:"blocked"`, `status:"blocked"`, `note:"verification-unavailable:<reason>"`) and keep the goal `in_progress` or `blocked` until verification can actually run.
    - If verification fails with `failure_class: "harness"` (test runner setup, missing fixture, port/env glitch), run up to 1 bounded harness-repair attempt without incrementing `product_failures`.
    - If verification fails with `failure_class: "product"`, increment `product_failures` (max 3 attempts per goal). After 3 product failures or `"needs-human-review"`, set the goal `status:"blocked"` (`[~]`), append `blocked` to the ledger, and **cascade `status:"blocked"`** (`note:"blocked-by:<goal_id>"`) to every downstream `pending` goal whose `depends_on` transitively includes this goal. Continue with remaining independent `pending` goals; if none remain and user input is required, write state `current_phase:"blocked"`, `active:false`, and ask.
 
@@ -101,3 +102,4 @@ Report goal ids/statuses, ledger path, review verdicts, and any blocker. Never c
 ## Resume
 
 On `continue`/`resume`, read `goals.json`, the tail of `ledger.jsonl`, and the state file, then resume from the first non-complete goal. Do not re-decompose an existing plan unless steering is justified.
+- **Resumed-run `started`-edge closeout bound (ported from OMC `v5.7.20` `#4646`, `#4650`)**: when resuming an interrupted or previously blocked goal, append a fresh `started` ledger entry (`event:"started"`). Only verification runs and `checkpoint` entries recorded **strictly after** that latest unmatched `started` entry count toward closing out the resumed goal — pre-resume notes or stale artifacts from an earlier attempt never satisfy closeout.

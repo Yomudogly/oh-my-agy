@@ -96,6 +96,7 @@ Routing rules:
 ## User questions
 
 - Use Antigravity's `ask_question` tool for structured questions (this replaces `omx question`). Put the recommended option first, prefixed with `(Recommended)`. Do not add an "Other" option: the UI provides one. Set `is_multi_select` only when several answers can be true at once.
+- **No-Questions Override (ported from OmO `v5.1.52` `#11556`)**: do not call `ask_question` or ask the user when they have explicitly said not to (`"don't ask"`, `"no questions"`, `"do not ask me"`, `"hands-off"`). Adopt best-practice defaults and record them under `[adopted-default]`.
 - **Explore before asking & Two-Filter Gate**: gather repo/doc facts first and never ask for discoverable facts. Ask the user only when (1) the fork changes architecture/scope/files, (2) repo/docs cannot resolve it, AND (3) the decision is irreversible, destructive, spend-bearing, or alters an external contract. On open-ended requests ("improve X", "you decide"), adopt and announce best-practice defaults with 1-line rationales instead of interrogating the user.
 
 ## Durable state (`.omagy/`)
@@ -112,7 +113,8 @@ Workflow state lives under `.omagy/` at the workspace root (or at `OMAGY_ROOT` /
 | `.omagy/ultragoal/` | `brief.md`, `goals.json`, `ledger.jsonl` (leader-owned) |
 | `.omagy/goals/performance/<slug>/` | performance-goal state and evidence |
 | `.omagy/state/team/<team>/` | team task board (leader-owned) |
-| `.omagy/evidence/` | structured verification evidence (`task-<id>.json`) for code-changing `$team` tasks |
+| `.omagy/evidence/` | structured verification evidence (`task-<id>.json`, validated against non-echo test commands) for code-changing `$team` tasks |
+| `.omagy/config.json` | optional repo config (`hud`, `wiki`, `deepInterview`, and per-stage `qualityGates` for `deep-interview`, `ralplan`, `code-review`) |
 | `.omagy/artifacts/` | reusable outputs (ask, loft prototypes, pr bodies, visual-ralph references, reports) |
 
 State file contract: write the whole file with `write_file` / `write_to_file` (Overwrite) after reading it (read-modify-write). Minimum shape:
@@ -128,7 +130,7 @@ State file contract: write the whole file with `write_file` / `write_to_file` (O
 
 - `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal, the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`). If you are genuinely blocked on the user (including any permission denial or user refusal), write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
 - `PreToolUse` (planning, agreements & overwrite guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path`, `TargetFile`, `filePath`, `rename`/`MoveTo`, `edits[]`, `apply_patch`, or targetless file-mutation calls) outside `.omagy/` and `omagy_wiki/` require user confirmation. Also escalates unread `write_file(Overwrite: true)` calls on non-empty existing code files (`write-existing-file-guard`) and full overwrites of `omagy_wiki/agreements.md` that would drop `[by:human]` entries (`agreements-guard`).
-- `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per conversation, and any unseen subdirectory `AGENTS.md` or child-project `omagy_wiki/` along touched workspace paths.
+- `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per conversation (filtering expired `expires: <ISO 8601>` entries without deleting files and redacting standalone secret tokens), and any unseen subdirectory `AGENTS.md` or child-project `omagy_wiki/` along touched workspace paths.
 
 ## Verification
 

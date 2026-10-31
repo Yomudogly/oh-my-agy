@@ -27,9 +27,10 @@ If the plugin directory is outside every discovery root, Antigravity will not lo
 | Name collisions | other plugins/skills named `plan`, `design`, `code-review`, `team`, ... at a higher priority shadow ours | WARN |
 | Rules integrity & size | only `rules/AGENTS.md` exists in `rules/` (no duplicate `.md` files) and `wc -c rules/AGENTS.md` < 24000 bytes | WARN if duplicate rule files or over 24000 bytes |
 | Skills | every `skills/*/SKILL.md` has frontmatter `name` matching its directory and a non-empty `description` | CRITICAL per broken skill |
-| Agents | every `agents/*.md` has `name` and `description` | CRITICAL per broken agent |
+| Agents | every `agents/*.md` has `name` and `description` and no unrecognized top-level frontmatter keys such as `level` (ported from OMC v5.7.21 #4657) | CRITICAL per broken agent; WARN on unknown frontmatter keys |
 | Hooks JSON & symlinks | `hooks.json` parses; commands reference `./hooks/run.sh`; no broken/dangling symlinks in `hooks/` (ported from OMC v5.7.19 #4631) | CRITICAL if invalid or dangling symlink |
-| Node | `cd /tmp && sh "<PLUGIN_DIR>/hooks/run.sh" selftest` prints `{"selftest":"PASS","passed":37,"failed":0}` (runs offline in a temp dir). If the sandbox denies it, rerun this one command with `BypassSandbox: true` | CRITICAL if node is missing or the selftest fails |
+| Node | `cd /tmp && sh "<PLUGIN_DIR>/hooks/run.sh" selftest` prints `{"selftest":"PASS","passed":42,"failed":0}` (runs offline in a temp dir). If the sandbox denies it, rerun this one command with `BypassSandbox: true` | CRITICAL if node is missing or the selftest fails |
+| Quality gates | if `.omagy/config.json` defines `qualityGates`, `sh "<PLUGIN_DIR>/hooks/run.sh" quality-gates "<workspace>"` returns `"ok":true` (ported from OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671) | WARN if invalid gate config |
 | Live hooks | `$TMPDIR/oh-my-agy/<conversationId>.routing.json` exists and its `at` matches the latest user message time (the PreInvocation hook wrote it). This needs no plugin-file access | WARN if missing or stale |
 | Hook PATH | if the selftest passes in your shell but hooks never fire, Antigravity's hook shell may lack nvm/homebrew in PATH. Set `OMAGY_NODE` or check that `run.sh` finds Node | WARN |
 | Workspace state | `.omagy/state/*-state.json` parse; list active modes; flag stale (>6h), terminal-but-active, or orphaned team boards | WARN |

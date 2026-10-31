@@ -52,6 +52,7 @@ git diff -- <scope>
      Scope: <same>
      ```
    - For security-sensitive scopes (auth, crypto, input handling, secrets), add a third `security-reviewer` lane.
+   - **Configurable Custom Quality Gates (`qualityGates["code-review"]`, ported from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`)**: if `.omagy/config.json` defines `qualityGates["code-review"]` (strict no-op when absent/empty; reserved controller skills like `code-review`, `ralplan`, `deep-interview`, `ai-slop-cleaner` are rejected to prevent self-recursion), launch each configured gate skill in its own independent subagent (`Model: gate.model || "inherit"`).
 3. If a role agent is unavailable, use the `self` subagent with the role's `agents/<role>.md` body as a preamble. If a lane still cannot run or returns no evidence, report `independent review unavailable`. Do **not** substitute the current/authoring lane, and do **not** approve.
 
 ## Review taxonomy
@@ -71,6 +72,7 @@ git diff -- <scope>
 
 - Architect **BLOCK** -> **REQUEST CHANGES**.
 - Else code-reviewer **REQUEST CHANGES** -> **REQUEST CHANGES**.
+- Else any configured `blocking` custom quality gate returning **REQUEST CHANGES** / **REJECT** / **BLOCK** -> **REQUEST CHANGES** (configured `advisory` gates record findings without blocking).
 - Else architect **WATCH** -> **COMMENT**.
 - Else follow the code-reviewer recommendation.
 

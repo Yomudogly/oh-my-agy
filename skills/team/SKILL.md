@@ -76,10 +76,10 @@ Only the leader edits the board. Workers report results in their final message, 
    - the file is inside `<workspace>/.omagy/evidence/`, is not a symlink, and is valid JSON of at most 1 MiB;
    - `team` and `taskId` match this task;
    - `summary` is real text (not `TODO`/`TBD`/`placeholder`/`pending`/`not run`);
-   - `verification` is a non-empty array whose every entry has a real `command`, `result: "passed"`, and a real `output`;
+   - `verification` is a non-empty array whose every entry has a real non-echo `command` (`echo`, `printf`, `true`, `:`, and `rem` are rejected even when wrapped in `env`/`time`/`nice`, ported from OMO `v5.1.52` `#11542`), `result: "passed"`, and a real `output`;
    - `unverified` is an array (empty, or listing checks that were not run).
 
-   Then re-run the verification command for anything non-trivial, transition the task to `completed`/`failed`/`blocked` with `result`, and refresh `updated_at`. Launch newly unblocked tasks.
+   Then re-run the verification command for anything non-trivial, transition the task to `completed`/`failed`/`blocked` with `result`, and refresh `updated_at`. Launch newly unblocked tasks. When merely inspecting team status (`$hud` or status check), stay strictly read-only and never mutate `tasks.json` or reassign tasks (OMX `v0.21.42` `#3963`).
    (Optional scripted check: `sh <plugin>/hooks/run.sh verify-evidence <workspace> .omagy/evidence/task-<id>.json <team> <id>`. Antigravity's terminal sandbox may deny reading plugin files, in which case it needs `BypassSandbox: true`. The `read_file` check above is the default.)
 5. **Blocked worker**: answer via `send_message` to the same conversation ID rather than spawning a replacement. For a stuck or looping worker, **preserve its work before killing** (since `manage_subagents kill` deletes `"branch"` workspaces): if it ran in `"share"` or `"branch"`, ask it once via `send_message` to commit/report its branch or salvage reachable commits in the leader lane before calling `manage_subagents kill` on that worker only, then set the task `pending` and relaunch with a sharper prompt.
 6. **Integrate & Shutdown Worktree Preservation (ported from OMX 0.21.34 PR #3896 & OMC v5.7.16 #4607/#4608)**:

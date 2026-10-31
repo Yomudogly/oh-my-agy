@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.2`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.3`)** for Google Antigravity.
 
 ---
 
@@ -292,7 +292,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics & Health Check
-Verifies plugin placement, `hooks/run.sh selftest` (`37/37` checks), live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `rules/AGENTS.md` size budget, skills/agents integrity, manifest version consistency, and stale `.omagy/state/` files.
+Verifies plugin placement, `hooks/run.sh selftest` (`42/42` checks), live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget, skills/agents integrity (including agent frontmatter keys), manifest version consistency, and stale `.omagy/state/` files.
 - **Example**:
   ```text
   /doctor
@@ -392,11 +392,11 @@ All runtime state lives in your workspace under `.omagy/` (add `.omagy/` to `.gi
 Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wiki/`** is meant to be **committed to git** so project memory compounds across sessions and teammates:
 
 1. **`omagy_wiki/agreements.md` (Working-Agreement Ledger)**:
-   Stores explicit user preferences, architectural boundaries, and "do not touch" guardrails. Automatically injected **ahead of `index.md`** on `SessionStart` and `PreInvocation`. Human-authored entries (`[by:human]`) are protected by the `PreToolUse` `agreements-guard` so agents cannot silently overwrite or delete them.
+   Stores explicit user preferences, architectural boundaries, and "do not touch" guardrails. Automatically injected **ahead of `index.md`** on `SessionStart` and `PreInvocation`. Human-authored entries (`[by:human]`) are protected by the `PreToolUse` `agreements-guard` so agents cannot silently overwrite or delete them. Entries or pages with an expired `expires: <ISO 8601>` tag (`[expires: YYYY-MM-DD]` or YAML frontmatter) are automatically skipped during prompt injection without deleting the underlying files, and standalone secret tokens (`sk-...`, `ghp_...`, `github_pat_...`, `glpat-...`, `xoxb-...`, `AKIA...`, JWTs) are masked before injection.
 2. **`omagy_wiki/index.md` & `<slug>.md`**:
    Catalog and topic pages for architecture decisions, debugging notes, and conventions.
 3. **Hierarchical Subdirectory `AGENTS.md` & Child-Project `omagy_wiki/` Discovery**:
-   When your prompt references a file or path inside a subdirectory or nested package (e.g., `packages/billing/src/invoice.ts`), the `PreInvocation` hook automatically walks from the workspace root down to that directory and injects any nested `AGENTS.md` files and child-project `omagy_wiki/` (`agreements.md` and `index.md`) once per conversation.
+   When your prompt references a file or path inside a subdirectory or nested package (e.g., `packages/billing/src/invoice.ts`), the `PreInvocation` hook automatically walks from the workspace root down to that directory and injects any nested `AGENTS.md` files and child-project `omagy_wiki/` (`agreements.md` and `index.md`) once per conversation (applying the same expiry filtering and secret redaction).
 
 ---
 
@@ -407,7 +407,7 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 - **`SessionStart` & `PreInvocation` (Enabled by default)**:
   - Detects `/skill` and `$skill` triggers and natural-language routing keywords while stripping code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), and preserving leading `$skill` invocations on reference-heavy prompts.
   - Injects a 1-line reminder of active `.omagy/state/*-state.json` modes owned by the current conversation (honoring `OMAGY_ROOT` / `OMAGY_STATE_ROOT` overrides).
-  - Injects bounded (`<= 3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` once per session.
+  - Injects bounded (`<= 3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` once per session, skipping expired `expires: <ISO 8601>` entries/pages and redacting standalone secret tokens.
   - Injects unseen subdirectory `AGENTS.md` files and child-project `omagy_wiki/` along touched workspace paths.
   - Automatically skips leader skill routing and unowned parent states when invoked inside a delegated subagent prompt (`isSubagentPayload`).
 - **`Stop` (Enabled by default)**:
@@ -421,16 +421,19 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 37-check offline hook selftest
+# 1. Run the 42-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
-# 2. Validate a /team task's completion evidence file
+# 2. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh verify-evidence .omagy/evidence/task-1.json
 
-# 3. Append a crash-resilient newline-isolated JSONL record (auto-prepends \n if missing)
+# 3. Validate optional .omagy/config.json qualityGates (deep-interview, ralplan, code-review)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh quality-gates .
+
+# 4. Append a crash-resilient newline-isolated JSONL record (auto-prepends \n if missing)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh append-jsonl .omagy/ultragoal/ledger.jsonl '{"ts":"2026-10-24T00:00:00Z","goal_id":"G1","event":"start"}'
 
-# 4. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
+# 5. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl
 ```
 

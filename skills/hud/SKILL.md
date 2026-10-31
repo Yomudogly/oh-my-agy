@@ -14,10 +14,11 @@ oh-my-codex's HUD had two layers: a Codex TUI statusline (`[tui] status_line` in
 
 Accept `$hud --preset=<name>`. A default can be stored in `.omagy/config.json` as `{"hud": {"preset": "focused"}}`.
 
-## Sources (read-only)
-- `.omagy/state/*-state.json`: mode, active, current_phase, iteration, updated_at
+## Sources (strictly read-only, ported from OMX `v0.21.42` `#3963` & OMC `v5.7.21` `#4649`/`#4661`/`#4662`)
+- **Zero-mutation invariant (OMX `#3963`)**: `$hud` is strictly observational. Never write state files, reclaim or reassign team tasks, or mutate `.omagy/` while rendering the status board.
+- `.omagy/state/*-state.json` and `.omagy/state/sessions/*/*-state.json`: mode, active, current_phase, iteration, updated_at (aggregate across the 5 newest session directories by default, or filter to a requested `--session=<id>`).
 - `.omagy/ultragoal/goals.json` and the tail of `ledger.jsonl`: goal counts by status, current goal
-- `.omagy/state/team/*/tasks.json`: task counts by status, worker assignments
+- `.omagy/state/team/*/tasks.json`: task counts by status, worker assignments. Show active team boards even when no session `team-state.json` snapshot exists, and hide completed team runs whose `updated_at` is older than 20 minutes in team-only views (OMC `#4661`, `#4662`).
 - `.omagy/goals/performance/*/state.json`: baseline vs `lastValidation`
 - `manage_subagents list` and `manage_task list`: live subagents and background tasks
 

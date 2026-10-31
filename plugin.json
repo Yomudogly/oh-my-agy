@@ -2,7 +2,7 @@
   // oh-my-agy: Multi-agent workflow layer for Google Antigravity (MIT License).
   "name": "oh-my-agy",
   "displayName": "oh-my-agy",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Multi-agent workflow layer for Google Antigravity: /autopilot delivery, /deep-interview Socratic specs, /ralplan & --hyperplan consensus planning, /ultragoal durable ledgers, /team parallel subagent waves, /ultraqa adversarial QA, /wiki project knowledge & working agreements, 26 skills, and 18 role subagents.",
   "logo": "assets/logo.png",
   "author": {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// oh-my-agy lifecycle hook runner for Antigravity (tracks OMX v0.21.37, OMC v5.7.19, OMO v5.1.49).
+// oh-my-agy lifecycle hook runner for Antigravity (tracks OMX v0.21.43, OMC v5.7.22, OMO v5.1.52).
 // Replaces oh-my-codex's codex-native-hook.mjs (which delegated to the `omx` CLI) with a
 // dependency-free, fail-open implementation of the parts that map onto Antigravity hooks:
 //   session-start   : bounded project wiki index + active-mode reminder on new session start
@@ -241,8 +241,40 @@ function activeStates(roots, modes, convId = '') {
   });
 }
 
-// ---------- wiki & working agreements summary (ported from OMX 0.21.18 + OmO working-agreement ledger) ----------
-function loadWikiSummary(roots) {
+// ---------- wiki & working agreements summary (ported from OMX 0.21.18 + OmO v5.1.52 expiry & secret redaction) ----------
+export function redactSecrets(text) {
+  return String(text || '')
+    .replace(/\bsk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_KEY]')
+    .replace(/\b(?:gh[pousr]|github_pat|glpat|xox[baprs])_[A-Za-z0-9_-]{16,}\b/g, '[REDACTED_TOKEN]')
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]');
+}
+function filterAndRedactWikiLines(raw, maxLines, nowMs = Date.now()) {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+  const fmMatch = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+  let body = text;
+  if (fmMatch) {
+    const expMatch = /^\s*expires\s*:\s*['"]?([^\r\n'"]+)['"]?\s*$/im.exec(fmMatch[1]);
+    if (expMatch) {
+      const expMs = Date.parse(expMatch[1].trim());
+      if (Number.isFinite(expMs) && expMs <= nowMs) return [];
+    }
+    body = text.slice(fmMatch[0].length).trim();
+  }
+  const out = [];
+  for (const line of body.split('\n')) {
+    const inlineExp = /(?:\[|\()\s*expires\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[^\])\s]+)?)\s*(?:\]|\))/i.exec(line);
+    if (inlineExp) {
+      const expMs = Date.parse(inlineExp[1]);
+      if (Number.isFinite(expMs) && expMs <= nowMs) continue;
+    }
+    out.push(redactSecrets(line));
+    if (out.length >= maxLines) break;
+  }
+  return out;
+}
+function loadWikiSummary(roots, nowMs = Date.now()) {
   for (const rawRoot of roots) {
     const root = stateRoot(rawRoot);
     for (const dirName of ['omagy_wiki', 'omx_wiki']) {
@@ -252,18 +284,20 @@ function loadWikiSummary(roots) {
       let agreementsRaw = '';
       try { indexRaw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { /* ignore */ }
       try { agreementsRaw = fs.readFileSync(agreementsPath, 'utf8').trim(); } catch { /* ignore */ }
-      if (!indexRaw && !agreementsRaw) continue;
+      const agLines = filterAndRedactWikiLines(agreementsRaw, 25, nowMs);
+      const idxLines = filterAndRedactWikiLines(indexRaw, MAX_WIKI_CONTEXT_LINES, nowMs);
+      if (!agLines.length && !idxLines.length) continue;
       const parts = [];
-      if (agreementsRaw) {
+      if (agLines.length) {
         parts.push(
           `[oh-my-agy] Working Agreements (${dirName}/agreements.md):`,
-          ...agreementsRaw.split('\n').slice(0, 25),
+          ...agLines,
         );
       }
-      if (indexRaw) {
+      if (idxLines.length) {
         parts.push(
           `[oh-my-agy] Project Wiki index (${dirName}/index.md):`,
-          ...indexRaw.split('\n').slice(0, MAX_WIKI_CONTEXT_LINES),
+          ...idxLines,
         );
       }
       const summary = parts.join('\n');
@@ -278,7 +312,7 @@ function loadWikiSummary(roots) {
 }
 
 // ---------- hierarchical subdirectory AGENTS.md discovery (ported from OmO directory-agents-injector) ----------
-function discoverSubdirAgents(roots, text, seenList = []) {
+function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.now()) {
   if (!text || typeof text !== 'string' || !roots.length) return { messages: [], seen: seenList };
   const seen = new Set(Array.isArray(seenList) ? seenList : []);
   const messages = [];
@@ -313,7 +347,7 @@ function discoverSubdirAgents(roots, text, seenList = []) {
           if (raw) {
             seen.add(agentsFile);
             const rel = path.relative(root, agentsFile);
-            const snippet = raw.split('\n').slice(0, 30).join('\n').slice(0, 1500);
+            const snippet = redactSecrets(raw.split('\n').slice(0, 30).join('\n')).slice(0, 1500);
             messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
           }
         }
@@ -324,12 +358,12 @@ function discoverSubdirAgents(roots, text, seenList = []) {
           let idxRaw = '';
           try { agRaw = fs.readFileSync(path.join(childWikiDir, 'agreements.md'), 'utf8').trim(); } catch { agRaw = ''; }
           try { idxRaw = fs.readFileSync(path.join(childWikiDir, 'index.md'), 'utf8').trim(); } catch { idxRaw = ''; }
-          if (!agRaw && !idxRaw) continue;
+          const agLines = filterAndRedactWikiLines(agRaw, 12, nowMs);
+          const idxLines = filterAndRedactWikiLines(idxRaw, 15, nowMs);
+          if (!agLines.length && !idxLines.length) continue;
           seen.add(childWikiDir);
           const relWiki = path.relative(root, childWikiDir);
-          const parts = [`[oh-my-agy] Child-project Wiki (${relWiki}):`];
-          if (agRaw) parts.push(...agRaw.split('\n').slice(0, 12));
-          if (idxRaw) parts.push(...idxRaw.split('\n').slice(0, 15));
+          const parts = [`[oh-my-agy] Child-project Wiki (${relWiki}):`, ...agLines, ...idxLines];
           messages.push(parts.join('\n').slice(0, 1500));
         }
         if (messages.length >= 3) return { messages, seen: [...seen] };
@@ -339,7 +373,23 @@ function discoverSubdirAgents(roots, text, seenList = []) {
   return { messages, seen: [...seen] };
 }
 
-// ---------- team completion evidence validator (ported from OMX 0.21.18) ----------
+// ---------- team completion evidence validator (ported from OMX 0.21.18 + OMO v5.1.52 #11542 echo-argv receipt guard) ----------
+const NOOP_VERIFICATION_BINS = new Set(['echo', 'printf', 'true', ':', 'rem', 'noop']);
+const PASSTHROUGH_BINS = new Set(['env', 'time', 'nice', 'nohup', 'command']);
+function isRealVerificationCommand(cmd) {
+  if (!nonPlaceholderText(cmd)) return false;
+  const tokens = String(cmd).trim().split(/\s+/);
+  for (const rawTok of tokens) {
+    const tok = rawTok.replace(/^['"]|['"]$/g, '');
+    if (!tok) continue;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue;
+    if (tok.startsWith('-')) continue;
+    const bin = path.basename(tok).toLowerCase();
+    if (PASSTHROUGH_BINS.has(bin)) continue;
+    return !NOOP_VERIFICATION_BINS.has(bin);
+  }
+  return false;
+}
 export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
   if (!cwd || !nonPlaceholderText(evidenceRelPath)) {
     throw new Error('Include EVIDENCE_RECORDED: .omagy/evidence/<file>.json with a valid path.');
@@ -386,13 +436,92 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
       || evidence.verification.length === 0
       || evidence.verification.some((check) => {
         if (!check || typeof check !== 'object') return true;
-        return !nonPlaceholderText(check.command) || check.result !== 'passed' || !nonPlaceholderText(check.output);
+        return !isRealVerificationCommand(check.command) || check.result !== 'passed' || !nonPlaceholderText(check.output);
       })
       || !Array.isArray(evidence.unverified)
       || evidence.unverified.some((item) => !nonPlaceholderText(item))) {
-    throw new Error('Evidence requires summary, passing verification checks (command/result:"passed"/output), and an unverified array.');
+    throw new Error('Evidence requires summary, real non-echo passing verification checks (command/result:"passed"/output), and an unverified array.');
   }
   return { ok: true, file: target, taskId: evidence.taskId ?? null, team: teamVal ?? null };
+}
+
+// ---------- configurable custom quality gates (ported from OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671) ----------
+const QUALITY_GATE_STAGES = new Set(['deep-interview', 'ralplan', 'code-review']);
+const RESERVED_GATE_SKILLS = new Set([
+  'deep-interview', 'ralplan', 'code-review', 'ai-slop-cleaner', 'autopilot',
+  'ultragoal', 'team', 'plan', 'ultraqa', 'cancel', 'verification',
+]);
+const SUNSET_GATE_SKILLS = new Set(['ralph', 'ultrawork', 'pipeline', 'ecomode', 'swarm']);
+const VALID_GATE_MODELS = new Set(['inherit', 'flash', 'pro']);
+export function validateQualityGates(cwd, requestedStage = '') {
+  const sRoot = stateRoot(cwd || process.cwd());
+  const cfgPath = fs.existsSync(path.join(sRoot, '.omagy', 'config.json'))
+    ? path.join(sRoot, '.omagy', 'config.json')
+    : path.join(sRoot, '.omx-config.json');
+  if (!fs.existsSync(cfgPath)) {
+    return { ok: true, stage: requestedStage || null, gates: [], errors: [] };
+  }
+  const cfg = readJson(cfgPath);
+  if (!cfg || typeof cfg !== 'object' || cfg.qualityGates === undefined) {
+    return { ok: true, stage: requestedStage || null, gates: [], errors: [] };
+  }
+  const errors = [];
+  if (!cfg.qualityGates || typeof cfg.qualityGates !== 'object' || Array.isArray(cfg.qualityGates)) {
+    return { ok: false, stage: requestedStage || null, gates: [], errors: ['qualityGates must be an object keyed by stage (deep-interview, ralplan, code-review).'] };
+  }
+  for (const key of Object.keys(cfg.qualityGates)) {
+    if (!QUALITY_GATE_STAGES.has(key)) {
+      errors.push(`Unsupported qualityGates stage '${key}'. Valid stages: deep-interview, ralplan, code-review.`);
+    }
+  }
+  if (requestedStage && !QUALITY_GATE_STAGES.has(requestedStage)) {
+    errors.push(`Unsupported requested stage '${requestedStage}'. Valid stages: deep-interview, ralplan, code-review.`);
+    return { ok: false, stage: requestedStage, gates: [], errors };
+  }
+  const stagesToRead = requestedStage ? [requestedStage] : [...QUALITY_GATE_STAGES];
+  const gates = [];
+  for (const stage of stagesToRead) {
+    const rawList = cfg.qualityGates[stage];
+    if (rawList === undefined) continue;
+    if (!Array.isArray(rawList)) {
+      errors.push(`qualityGates.${stage} must be an array.`);
+      continue;
+    }
+    const seenInStage = new Set();
+    for (const entry of rawList) {
+      const rawSkill = typeof entry === 'string' ? entry : (entry && typeof entry === 'object' ? entry.skill : '');
+      const normalized = String(rawSkill || '').trim().replace(/^[$/]+/, '').toLowerCase();
+      if (!/^[a-z][a-z0-9-]*$/.test(normalized)) {
+        errors.push(`Invalid quality gate skill '${rawSkill}' in stage '${stage}'.`);
+        continue;
+      }
+      if (RESERVED_GATE_SKILLS.has(normalized)) {
+        errors.push(`Workflow-controller skill '${normalized}' is reserved and cannot be configured as a quality gate for stage '${stage}'.`);
+        continue;
+      }
+      if (SUNSET_GATE_SKILLS.has(normalized)) {
+        errors.push(`Sunset skill '${normalized}' cannot be configured as a quality gate for stage '${stage}'.`);
+        continue;
+      }
+      if (seenInStage.has(normalized)) {
+        errors.push(`Duplicate quality gate skill '${normalized}' in stage '${stage}'.`);
+        continue;
+      }
+      seenInStage.add(normalized);
+      const mode = (entry && typeof entry === 'object' && entry.mode !== undefined) ? String(entry.mode).trim().toLowerCase() : 'blocking';
+      if (mode !== 'blocking' && mode !== 'advisory') {
+        errors.push(`Invalid mode '${mode}' for gate '${normalized}' in stage '${stage}' (expected 'blocking' or 'advisory').`);
+        continue;
+      }
+      const model = (entry && typeof entry === 'object' && entry.model !== undefined) ? String(entry.model).trim().toLowerCase() : 'inherit';
+      if (!VALID_GATE_MODELS.has(model)) {
+        errors.push(`Invalid model '${model}' for gate '${normalized}' in stage '${stage}' (expected 'inherit', 'flash', or 'pro').`);
+        continue;
+      }
+      gates.push({ stage, skill: normalized, mode, model });
+    }
+  }
+  return { ok: errors.length === 0, stage: requestedStage || null, gates, errors };
 }
 
 // ---------- crash-resilient JSONL helpers (ported from OMX 0.21.33 PR #3893) ----------
@@ -1201,6 +1330,73 @@ async function selftest() {
     check('stop continuation prompt includes refusal-is-final rule',
       typeof s1.reason === 'string' && s1.reason.includes('permission denial or a refusal by the user is final'));
 
+    // Echo / printf / true no-op verification command guard (OMO v5.1.52 #11542 parity)
+    const echoRel = '.omagy/evidence/task-echo.json';
+    writeJson(path.join(ws, echoRel), {
+      team: 'alpha',
+      taskId: '1',
+      summary: 'Implemented feature',
+      verification: [{ command: 'echo "all tests passed"', result: 'passed', output: 'all tests passed' }],
+      unverified: [],
+    });
+    let echoRejected = false;
+    try {
+      validateCompletionEvidence(ws, echoRel, { team: 'alpha', taskId: '1' });
+    } catch { echoRejected = true; }
+    check('verify-evidence rejects echo/printf/true no-op verification commands', echoRejected && !isRealVerificationCommand('env FOO=1 echo ok') && isRealVerificationCommand('env NODE_ENV=test npm test'));
+
+    // Time-boxed wiki/agreement expiry & standalone secret redaction (OMO v5.1.52 #11458 & #11556 parity)
+    const expWikiRoot = path.join(ws, 'exp-wiki-ws');
+    const expWikiDir = path.join(expWikiRoot, 'omagy_wiki');
+    fs.mkdirSync(expWikiDir, { recursive: true });
+    fs.writeFileSync(path.join(expWikiDir, 'agreements.md'), [
+      '- [by:human] Keep active rule [expires: 2099-01-01] with token ghp_1234567890abcdefghij123456.',
+      '- [by:agent] Old temporary freeze [expires: 2020-01-01].',
+    ].join('\n'));
+    fs.writeFileSync(path.join(expWikiDir, 'index.md'), '---\nexpires: 2020-01-01T00:00:00Z\n---\n- [[old-page]] — Expired index\n');
+    const expSummary = loadWikiSummary([expWikiRoot]) || '';
+    check('loadWikiSummary skips expired frontmatter/inline entries and redacts standalone secrets',
+      expSummary.includes('Keep active rule')
+      && expSummary.includes('[REDACTED_TOKEN]')
+      && !expSummary.includes('ghp_1234567890abcdefghij123456')
+      && !expSummary.includes('Old temporary freeze')
+      && !expSummary.includes('Expired index'));
+
+    // Child-project wiki expiry & secret redaction
+    const childExpDir = path.join(expWikiRoot, 'packages', 'auth', 'omagy_wiki');
+    fs.mkdirSync(childExpDir, { recursive: true });
+    fs.writeFileSync(path.join(childExpDir, 'agreements.md'), '- Active auth rule sk-proj-1234567890abcdefghijklmnop\n- Expired auth rule (expires: 2021-05-01)\n');
+    const childExpRes = discoverSubdirAgents([expWikiRoot], 'check packages/auth/login.ts', []);
+    const childExpMsg = childExpRes.messages[0] || '';
+    check('discoverSubdirAgents skips expired child-wiki entries and redacts standalone secrets',
+      childExpMsg.includes('[REDACTED_KEY]') && !childExpMsg.includes('sk-proj-1234567890') && !childExpMsg.includes('Expired auth rule'));
+
+    // Configurable Custom Quality Gates validator (OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671 parity)
+    const qgRoot = path.join(ws, 'qg-ws');
+    fs.mkdirSync(path.join(qgRoot, '.omagy'), { recursive: true });
+    const qgNoop = validateQualityGates(qgRoot, 'ralplan');
+    writeJson(path.join(qgRoot, '.omagy', 'config.json'), {
+      qualityGates: {
+        ralplan: ['better-interface', { skill: '$security-audit', mode: 'advisory', model: 'pro' }],
+      },
+    });
+    const qgValid = validateQualityGates(qgRoot, 'ralplan');
+    check('validateQualityGates returns strict no-op when unconfigured and normalizes valid gates',
+      qgNoop.ok === true && qgNoop.gates.length === 0
+      && qgValid.ok === true && qgValid.gates.length === 2
+      && qgValid.gates[0].skill === 'better-interface' && qgValid.gates[0].mode === 'blocking'
+      && qgValid.gates[1].skill === 'security-audit' && qgValid.gates[1].mode === 'advisory' && qgValid.gates[1].model === 'pro');
+
+    writeJson(path.join(qgRoot, '.omagy', 'config.json'), {
+      qualityGates: {
+        ralplan: ['ralplan', 'ralph'],
+        review: ['security-audit'],
+      },
+    });
+    const qgInvalid = validateQualityGates(qgRoot);
+    check('validateQualityGates rejects self-recursive controller skills, sunset skills, and legacy stage keys',
+      qgInvalid.ok === false && qgInvalid.errors.length === 3);
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -1257,6 +1453,13 @@ async function main() {
       process.stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
       process.exitCode = 1;
     }
+    return;
+  }
+  if (event === 'quality-gates') {
+    const [, , , cwdArg, stageArg] = process.argv;
+    const res = validateQualityGates(cwdArg || process.cwd(), stageArg || '');
+    process.stdout.write(`${JSON.stringify(res)}\n`);
+    process.exitCode = res.ok ? 0 : 1;
     return;
   }
   const payload = parseJson(readStdin());
