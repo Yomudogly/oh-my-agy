@@ -143,6 +143,7 @@ Verification loop: define the claim and success criteria, run the smallest valid
 - Switch lanes only for a concrete ambiguity, coordination need, or blocker.
 - Stop when the task is verified complete, the user says stop/cancel, or no meaningful recovery path remains.
 - Output contract: current mode, action/result, evidence or blocker/next step. State rationale once; do not restate the full plan every turn.
+- **UI Plugin Navigation (`sidecar://` & `customization://`)**: `oh-my-agy` ships a single read-only Aux Pane HUD sidecar at `sidecars/hud/sidecar.json` (`sidecar-id: oh-my-agy/hud`, with internal tabs for `Overview`, `Ultragoal`, `Team DAG`, `Interview`, `Reviews`, `Benchmarks`, `Visual Ralph`, `Loft`, `Wiki`, and `Doctor`). When starting or reporting on a workflow (and `sidecars/hud/` is enabled), surface at most one `sidecar://` pill so the user can toggle the live Aux Pane board: `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`. For plugin settings, link `[oh-my-agy](customization://oh-my-agy)` (never `plugin://`).
 - Anti-slop: cleanup follows `understand -> execute -> verify -> report`, using `$ai-slop-cleaner` as a bounded helper; keep writer/reviewer pass separation.
 - Continuation: before concluding, confirm no pending work remains, features work, tests pass or gaps are explicit, and evidence is collected. If not, continue.
 - If the user says `continue`/`resume`/`keep going`, read the active `.omagy/state/*-state.json` and resume from `current_phase` instead of restarting discovery.

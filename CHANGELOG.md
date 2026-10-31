@@ -2,6 +2,21 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.3.4
+
+*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **Antigravity 2.0 Plugin & Sidecar Spec***
+
+- **Auxiliary Pane UI Extension (`sidecars/hud/` & `sidecar://oh-my-agy/hud/`)**:
+  - Added `sidecars/hud/sidecar.json`, `sidecars/hud/run.sh`, and `sidecars/hud/main.mjs` (`buildHudSnapshot`, `createHudServer`, `resolveSafeArtifactFile`) exposing a single, zero-dependency, strictly read-only Auxiliary Pane status & artifact board (`SIDECAR_UI_ENTRYPOINT_AUX_PANE`, `sidecar-id: oh-my-agy/hud`) with 10 internal tabs (`Overview`, `Ultragoal`, `Team DAG`, `Interview` ambiguity/readiness radar, `Reviews` Ralplan/Hyperplan/Code-Review gates, `Benchmarks` performance checkpoints & Autoresearch claim tags, `Visual Ralph` Reference vs. Current opacity overlay comparator, `Loft` full-height prototype viewer, `Wiki` page reader & lint explorer, and `Doctor` hook/routing diagnostics), live host `theme-change` CSS variable and `workspace-change` URI syncing, `X-Sidecar-Token` / `?token=` authentication, path-traversal-safe `/api/artifact` serving, standalone secret redaction, and an offline `selftest`.
+  - Wired `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` chat pills (per Antigravity's `ui-plugin-navigation` skill) and `[oh-my-agy](customization://oh-my-agy)` settings links across `rules/AGENTS.md`, `$hud`, `$autopilot`, `$ultragoal`, `$team`, `$deep-interview`, `$ralplan`, `$code-review`, `$performance-goal`, `$autoresearch`, `$visual-ralph`, `$loft`, `$wiki`, `$doctor`, and `$omagy-setup`, plus `generative_ui` `<agent-embed>` guidance in `$loft`.
+- **Hooks (`hooks.json` & `hooks/omagy-hook.mjs`)**:
+  - Fixed `oh-my-agy-planning-guard` `PreToolUse.matcher` in `hooks.json` to match Antigravity 2.0's native file tools (`write_file`, `edit_file`, `apply_patch`, `delete_file`, `move_file`, `rename_file`, `read_file`, `view_file`) in addition to legacy IDE tool names (`write_to_file`, `replace_file_content`, `multi_replace_file_content`).
+  - Updated `AGY_SLASH` in `hooks/omagy-hook.mjs` with current Antigravity built-in slash commands (`teamwork`, `compact`, `plugin`, `automation`) and guarded `main()` behind `isMainModule` so helper exports can be imported by sidecars without side effects.
+  - Expanded offline hook selftest suite from `42` to `44` checks (`hooks/omagy-hook.mjs selftest`), adding regression checks for the `hooks.json` `PreToolUse` matcher and `sidecars/hud/sidecar.json` `SIDECAR_UI_ENTRYPOINT_AUX_PANE` manifest.
+- **Skills Progressive Disclosure & Hygiene (`skills/deep-interview/`, `.gitignore`)**:
+  - Extracted the detailed ambiguity scoring formulas, follow-up pressure ladder, ledgers, challenge modes, and spec/`--autoresearch` templates from `skills/deep-interview/SKILL.md` into `skills/deep-interview/references/scoring-and-templates.md`.
+  - Standardized `write_file` / `write_to_file` tool references across `$autopilot`, `$ask`, `$configure-notifications`, and `$ultraqa`, and added `.codegraph/` and `sidecars/*/logs|events|data/` to `.gitignore`.
+
 ## 0.3.3
 
 *Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52`*

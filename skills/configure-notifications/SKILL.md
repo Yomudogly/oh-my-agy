@@ -44,7 +44,7 @@ The cooldown can be overridden with the env var `OMAGY_IDLE_COOLDOWN_SECONDS`.
 1. **Inspect**: read both config files if present and summarize which providers are enabled (mask secrets: show only the last 4 characters).
 2. **Choose**: `ask_question` with options: Slack webhook, Discord webhook, Telegram bot, generic webhook, local command, cross-cutting settings (events/cooldown), disable all.
 3. **Collect values** for the chosen provider. Ask for the global vs workspace scope. Never echo full secrets back. Warn that workspace configs may get committed, and suggest keeping secrets in the global file or ensuring `.omagy/` is gitignored.
-4. **Write** the JSON with `write_to_file` (read-modify-write; preserve other keys). Validate it with `node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" <path>`.
+4. **Write** the JSON with `write_file` / `write_to_file` (read-modify-write; preserve other keys). Validate it with `node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" <path>`.
 5. **Smoke test** the provider directly (this needs network; re-run with `BypassSandbox: true` if the sandbox blocks it):
    - Slack: `curl -sS -X POST -H 'content-type: application/json' -d '{"text":"oh-my-agy test"}' <webhookUrl>`
    - Discord: `... -d '{"content":"oh-my-agy test"}' <webhookUrl>`
@@ -53,7 +53,7 @@ The cooldown can be overridden with the env var `OMAGY_IDLE_COOLDOWN_SECONDS`.
 6. **Disable all**: set `"enabled": false`.
 
 ## Not ported from oh-my-codex
-OpenClaw/clawdbot gateways, the Discord bot reply listener, notification profiles, and the session-start event (Antigravity exposes no session-start hook). Reproduce custom gateways with `webhook` or `command`.
+OpenClaw/clawdbot gateways, the Discord bot reply listener, notification profiles, and session-start external webhook notifications (`SessionStart` is reserved for local context injection). Reproduce custom gateways with `webhook` or `command`.
 
 ## Exit evidence
 Report the config path(s), enabled providers (masked), events, cooldown, JSON validation result, and smoke-test output. Do not claim delivery from configuration alone. Hook-driven delivery happens on the next agent stop (Antigravity must have loaded the plugin hooks; see `$doctor`).

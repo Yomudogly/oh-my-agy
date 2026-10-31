@@ -57,7 +57,7 @@ Append a ledger line using the crash-resilient newline-isolated hook helper (`sh
 
 1. Read the brief: the deep-interview spec, ralplan PRD/test-spec, or the user's inline brief. Copy it or point to it from `brief.md`.
 2. Decompose it into right-sized, independently verifiable goals with testable acceptance criteria and explicit dependencies. Carry spec non-goals, decision boundaries, and invariants into `goals.json`.
-3. Write `goals.json`, append `created` ledger entries, and show the user a compact goal table.
+3. Write `goals.json`, append `created` ledger entries, and show the user a compact goal table (plus `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once if the HUD sidecar is enabled).
 4. Standalone: write `.omagy/state/ultragoal-state.json` (`mode:"ultragoal"`, `active:true`, `current_phase:"planning"`). Inside Autopilot: keep the Autopilot state and set its `current_phase:"ultragoal"`.
 
 ## Operational steps: execute

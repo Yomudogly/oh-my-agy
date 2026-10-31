@@ -24,7 +24,7 @@ $ask codex <question or task>
 
 ## Local CLI commands
 
-Pass the prompt as a single argument. Write long prompts to a temp file first (with `write_to_file`) and pipe or reference it, to avoid shell-quoting problems.
+Pass the prompt as a single argument. Write long prompts to a temp file first (with `write_file` / `write_to_file`) and pipe or reference it, to avoid shell-quoting problems.
 
 ```bash
 claude -p "<prompt>"

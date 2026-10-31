@@ -50,7 +50,7 @@ For each iteration (ported from OmO `visual-qa` `#10685`, `#11023`, `#11811`, `#
 - **Bounded 2–3 round stop rule**: layout, function, accessibility, reflow (`320px`), scroll-owner (`A12`), missing-content (`B7`), and Craft Floor (`A13`, `B8`, `E7`, `F8`, `F9`) defects earn another fix round (scoped to the affected region). Once `score >= 90` or after 2–3 rounds where only subjective taste notes remain, record the taste notes and stop iterating.
 
 ### 6. Secondary diff evidence
-Use a pixel diff (e.g. `pixelmatch`/ImageMagick `compare`, when available in the repo or system) only to locate hotspots and turn them into edits. It never replaces the verdict. Record the final reference, screenshot, and diff artifacts under `.omagy/artifacts/visual-ralph/<slug>/`.
+Use a pixel diff (e.g. `pixelmatch`/ImageMagick `compare`, when available in the repo or system) only to locate hotspots and turn them into edits. It never replaces the verdict. Record the final reference, current screenshot (`current.png`), verdict JSON (`verdict.json`), and diff artifacts under `.omagy/artifacts/visual-ralph/<slug>/`, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can inspect the interactive reference vs. current overlay slider in the `Visual Ralph` tab of the Auxiliary Pane.
 
 ### 7. Reusable design system
 Encode the match in existing repo-native CSS variables, theme tokens, config, component variants, stories, or `DESIGN.md` updates. Capture colors, spacing, typography/weights, radii, shadows/elevation, and important variants/states. Extend existing patterns rather than adding a parallel layer.

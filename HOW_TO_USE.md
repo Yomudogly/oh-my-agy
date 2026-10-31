@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.3`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.4`)** for Google Antigravity.
 
 ---
 
@@ -276,8 +276,8 @@ Generates `.omagy/artifacts/handoff-<slug>-<UTC>.md` (and `handoff-latest.md`) c
   /handoff Save context before I compact the chat
   ```
 
-#### `/hud` — Workflow Status Board
-Prints a compact dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` page counts.
+#### `/hud` — Workflow Status Board & Auxiliary Pane UI (`sidecar://oh-my-agy/hud/`)
+Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`Overview`, `Ultragoal`, `Team DAG`, `Interview`, `Reviews`, `Benchmarks`, `Visual Ralph`, `Loft`, `Wiki`, and `Doctor` tabs).
 - **Example**:
   ```text
   /hud
@@ -292,7 +292,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics & Health Check
-Verifies plugin placement, `hooks/run.sh selftest` (`42/42` checks), live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget, skills/agents integrity (including agent frontmatter keys), manifest version consistency, and stale `.omagy/state/` files.
+Verifies plugin placement, `hooks/run.sh selftest` (`44/44` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget, skills/agents integrity (including agent frontmatter keys), manifest version consistency, and stale `.omagy/state/` files.
 - **Example**:
   ```text
   /doctor

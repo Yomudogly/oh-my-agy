@@ -42,4 +42,4 @@ Also write `.omagy/state/performance-goal-state.json` (`mode:"performance-goal"`
 
 ## Completion gate
 
-A performance goal is incomplete unless `state.json` holds `lastValidation.status: "pass"` produced by the declared evaluator command, with the evidence recorded in `checkpoints.jsonl`. Report baseline vs final numbers, the patches kept, the patches reverted, and the residual risks.
+A performance goal is incomplete unless `state.json` holds `lastValidation.status: "pass"` produced by the declared evaluator command, with the evidence recorded in `checkpoints.jsonl`. Report baseline vs final numbers, the patches kept, the patches reverted, and the residual risks, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can inspect the `Benchmarks` tab in the Auxiliary Pane.

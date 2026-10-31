@@ -1,6 +1,10 @@
 .DS_Store
+.codegraph/
 node_modules/
 *.tmp
+sidecars/*/logs/
+sidecars/*/events/
+sidecars/*/data/
 # workflow state written by the plugin when this repo is itself the workspace
 .omagy/
 omagy_wiki/

@@ -28,8 +28,9 @@ If the plugin directory is outside every discovery root, Antigravity will not lo
 | Rules integrity & size | only `rules/AGENTS.md` exists in `rules/` (no duplicate `.md` files) and `wc -c rules/AGENTS.md` < 24000 bytes | WARN if duplicate rule files or over 24000 bytes |
 | Skills | every `skills/*/SKILL.md` has frontmatter `name` matching its directory and a non-empty `description` | CRITICAL per broken skill |
 | Agents | every `agents/*.md` has `name` and `description` and no unrecognized top-level frontmatter keys such as `level` (ported from OMC v5.7.21 #4657) | CRITICAL per broken agent; WARN on unknown frontmatter keys |
-| Hooks JSON & symlinks | `hooks.json` parses; commands reference `./hooks/run.sh`; no broken/dangling symlinks in `hooks/` (ported from OMC v5.7.19 #4631) | CRITICAL if invalid or dangling symlink |
-| Node | `cd /tmp && sh "<PLUGIN_DIR>/hooks/run.sh" selftest` prints `{"selftest":"PASS","passed":42,"failed":0}` (runs offline in a temp dir). If the sandbox denies it, rerun this one command with `BypassSandbox: true` | CRITICAL if node is missing or the selftest fails |
+| Hooks JSON & symlinks | `hooks.json` parses; commands reference `./hooks/run.sh`; `PreToolUse` matcher covers `write_file`, `edit_file`, `apply_patch`, and `read_file`; no broken/dangling symlinks in `hooks/` (ported from OMC v5.7.19 #4631) | CRITICAL if invalid or dangling symlink |
+| HUD Sidecar | `sidecars/hud/sidecar.json` parses with `has_web_ui: true` and `SIDECAR_UI_ENTRYPOINT_AUX_PANE`, and `sh "<PLUGIN_DIR>/sidecars/hud/run.sh" selftest` prints `"selftest":"PASS"` | WARN if missing or failing |
+| Node | `cd /tmp && sh "<PLUGIN_DIR>/hooks/run.sh" selftest` prints `{"selftest":"PASS","passed":44,"failed":0}` (runs offline in a temp dir). If the sandbox denies it, rerun this one command with `BypassSandbox: true` | CRITICAL if node is missing or the selftest fails |
 | Quality gates | if `.omagy/config.json` defines `qualityGates`, `sh "<PLUGIN_DIR>/hooks/run.sh" quality-gates "<workspace>"` returns `"ok":true` (ported from OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671) | WARN if invalid gate config |
 | Live hooks | `$TMPDIR/oh-my-agy/<conversationId>.routing.json` exists and its `at` matches the latest user message time (the PreInvocation hook wrote it). This needs no plugin-file access | WARN if missing or stale |
 | Hook PATH | if the selftest passes in your shell but hooks never fire, Antigravity's hook shell may lack nvm/homebrew in PATH. Set `OMAGY_NODE` or check that `run.sh` finds Node | WARN |
@@ -67,10 +68,10 @@ ls -la .omagy/state 2>/dev/null
 ## Remediation (after confirmation)
 
 - Not discovered: symlink or copy the plugin into a discovery root (see `$omagy-setup`), then restart Antigravity.
-- Disabled: enable it via the built-in `plugin` skill flow (language-server `JetboxWriteState`). Do not hand-edit `config.json`.
+- Disabled: enable it via the built-in `plugin` skill flow (language-server `JetboxWriteState`) or link `[oh-my-agy](customization://oh-my-agy)` (never `plugin://`). Do not hand-edit `config.json`.
 - Stale or corrupt state: `$cancel --force <mode>` (exact file only).
 - Legacy `.omx/` artifacts: offer to copy `.omx/specs`, `.omx/plans`, `.omx/context`, and `.omx/ultragoal` into `.omagy/`. Leave `.omx/` in place unless the user asks to remove it.
-- Restart Antigravity after plugin file changes, and report before/after evidence.
+- Restart Antigravity after plugin file changes, and report before/after evidence (including `[oh-my-agy](customization://oh-my-agy)` and `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` when the sidecar is enabled).
 
 ## Exit conditions
 

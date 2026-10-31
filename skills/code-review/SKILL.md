@@ -94,7 +94,7 @@ ARCHITECTURE WATCHLIST: concern, status, recommendation (or none)
 RECOMMENDATION: <APPROVE | REQUEST CHANGES | COMMENT>
 ```
 
-Fill in observed values, and include scope, lane evidence references, unresolved risks, and validation gaps.
+Fill in observed values, include scope, lane evidence references, unresolved risks, and validation gaps, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` when `.omagy/artifacts/code-review-<slug>-<timestamp>.md` is written.
 
 ## Exit condition
 

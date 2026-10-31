@@ -5,7 +5,13 @@ description: "[oh-my-agy] Show an on-demand status board of active oh-my-agy wor
 
 # HUD (Status Board)
 
-oh-my-codex's HUD had two layers: a Codex TUI statusline (`[tui] status_line` in `~/.codex/config.toml`) and an `omx hud --watch` CLI. Antigravity has no configurable statusline, so this skill renders the same information **on demand** in chat.
+oh-my-codex's HUD had two layers: a Codex TUI statusline (`[tui] status_line` in `~/.codex/config.toml`) and an `omx hud --watch` CLI. In Antigravity, `oh-my-agy` provides both an **on-demand chat status board** and a **live Auxiliary Pane UI extension** (`sidecars/hud/sidecar.json`) accessible via the `sidecar://` link scheme.
+
+## Aux Pane UI Pill (`sidecar://oh-my-agy/hud/`)
+
+When `sidecars/hud/sidecar.json` is present and the plugin is enabled, include a single one-click pill at the end of the HUD output (following Antigravity's `ui-plugin-navigation` skill rules: one single `SIDECAR_UI_ENTRYPOINT_AUX_PANE` view in `sidecar.json` so the Extensions menu shows only `oh-my-agy HUD`, with internal tabs inside the panel):
+
+- `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` (contains tabs for `Overview`, `Ultragoal`, `Team DAG`, `Interview`, `Reviews`, `Benchmarks`, `Visual Ralph`, `Loft`, `Wiki`, and `Doctor`)
 
 ## Presets
 - `minimal`: one line, e.g. `[OMA] autopilot:ultragoal | ultragoal:3/7`

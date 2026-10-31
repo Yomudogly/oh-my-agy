@@ -118,82 +118,33 @@ Use Antigravity's `ask_question` tool for every interview round. It replaces `om
 }
 ```
 
-4. Announce the kickoff with profile, threshold, and current ambiguity.
+4. Announce the kickoff with profile, threshold, and current ambiguity, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can monitor the live `Interview` tab (ambiguity gauge, dimension bars, and readiness gates) in the Auxiliary Pane.
 
 ## Phase 2: Socratic interview loop
 
-Repeat until: ambiguity `<= threshold` and the readiness gates pass, the user exits with a warning, or max rounds are reached. Below threshold, do not open a new ordinary branch.
+Repeat until: ambiguity `<= threshold` and the readiness gates pass, the user exits with a warning, or max rounds are reached. Below threshold, do not open a new ordinary branch. Read [scoring-and-templates.md](./references/scoring-and-templates.md) for the full stage-priority ladder, ledgers, challenge modes, and spec templates.
 
 ### 2a) Generate the next question
 If oversized context has no recorded summary, the only allowed question is the summary request.
 
-Inputs: original idea, prior rounds, dimension scores, brownfield context, doc/terminology notes, and any activated challenge mode (Phase 3).
-
-Target the lowest-scoring dimension, respecting stage priority:
-- **Stage 1, intent-first:** Intent, Outcome, Scope, Non-goals, Decision Boundaries.
-- **Stage 2, feasibility:** Constraints, Success Criteria.
-- **Stage 3, brownfield grounding:** Context Clarity (brownfield only).
-
-Follow-up pressure ladder after each answer:
-1. Ask for a concrete example, counterexample, or evidence signal behind the claim.
-2. Probe the hidden assumption or dependency that makes it true.
-3. Force a boundary or tradeoff: what would you explicitly not do, defer, or reject?
-4. Challenge fuzzy or conflicting terms against repo docs and current code.
-5. Stress-test with one concrete scenario or edge case.
-6. If the answer still describes symptoms, reframe toward root cause.
-
-Maintain a **Breadth Ledger** of independent ambiguity tracks (scope, constraints, outputs, verification, brownfield integration, user-named deliverables). It is a guard, not a rotation rule.
-
-For brownfield work, maintain a **Docs/Terminology Ledger**: sources inspected (paths), canonical repo terms, user terms that conflict, doc/code mismatches needing a human decision, and optional durable-doc follow-ups.
-
-Dimensions:
-- Intent Clarity: why the user wants this.
-- Outcome Clarity: the end state.
-- Scope Clarity: how far the change goes.
-- Constraint Clarity: technical/business limits.
-- Success Criteria Clarity: how completion is judged.
-- Context Clarity: existing-code understanding (brownfield only).
-
-`Non-goals` and `Decision Boundaries` are mandatory readiness gates. Ask about them early and revisit them until they are explicit.
+Target the lowest-scoring dimension, respecting stage priority (**Stage 1**: Intent, Outcome, Scope, Non-goals, Decision Boundaries -> **Stage 2**: Constraints, Success Criteria -> **Stage 3**: Context Clarity for brownfield). Apply the 6-step follow-up pressure ladder and maintain the **Breadth Ledger** and brownfield **Docs/Terminology Ledger** defined in [scoring-and-templates.md](./references/scoring-and-templates.md). `Non-goals` and `Decision Boundaries` are mandatory readiness gates.
 
 ### 2b) Ask the question
 Use `ask_question` as described in `<Asking_Questions>`.
 
 ### 2c) Score ambiguity
-Score each dimension in `[0.0, 1.0]` with a justification and the gap.
-
+Score each dimension in `[0.0, 1.0]` with a justification and gap:
 - Greenfield: `ambiguity = 1 - (intent×0.30 + outcome×0.25 + scope×0.20 + constraints×0.15 + success×0.10)`
 - Brownfield: `ambiguity = 1 - (intent×0.25 + outcome×0.20 + scope×0.20 + constraints×0.15 + success×0.10 + context×0.10)`
 
-Readiness gates:
-- `Non-goals` explicit.
-- `Decision Boundaries` explicit.
-- Pressure pass complete: at least one earlier answer revisited with an evidence, assumption, or tradeoff follow-up.
-- Practical closure audit: another question would change execution materially, not just polish wording.
-- If a gate is unresolved below threshold, ask only a final closure question that names the gate.
-- If ambiguity `<= 0.10`, another question is allowed only as that closure question. Otherwise crystallize immediately.
+Enforce all readiness gates (`Non-goals`, `Decision Boundaries`, pressure pass complete, practical closure audit) and round controls (Dialectic Rhythm Guard after 3 consecutive non-user entries; early exit from round 4 with risk warning; hard cap at `max_rounds`) per [scoring-and-templates.md](./references/scoring-and-templates.md). If `ambiguity <= 0.10` and gates pass, crystallize immediately.
 
-### 2d) Report progress
-Show a weighted breakdown table, readiness-gate status, and the next focus dimension.
-
-### 2e) Persist state
-Append the round (question, answer, label, scores) to state and refresh `updated_at`.
-
-### 2f) Round controls
-- Do not offer early exit before the first assumption probe and one persistent follow-up.
-- **Dialectic Rhythm Guard:** after 3 consecutive non-user/confirmation entries (`[from-code]`, `[from-research]`, auto-confirmed facts), the next material round must ask for direct human judgment, unless the closure audit says crystallize.
-- From round 4, allow explicit early exit with a risk warning.
-- Soft warning at the profile midpoint. Hard cap at `max_rounds`.
+### 2d) Report progress & persist state
+Show the weighted breakdown table, readiness-gate status, and next focus dimension. Append the round (question, answer, label, scores) to state and refresh `updated_at`.
 
 ## Phase 3: Challenge modes
 
-Use each mode once when applicable, and track usage in state:
-- **Contrarian** (round 2+, or immediately on an untested assumption): challenge core assumptions.
-- **Terminologist** (brownfield, when a key term is fuzzy or conflicts with repo language): force a canonical meaning.
-- **Simplifier** (round 4+, or when scope grows faster than outcome clarity): probe minimal viable scope.
-- **Ontologist** (round 5+ with ambiguity > 0.25, or when the user keeps describing symptoms): ask for essence-level reframing.
-
-If ambiguity stalls for 3 rounds (±0.05), force Ontologist once.
+Use each mode at most once when triggered (`Contrarian`, `Terminologist`, `Simplifier`, `Ontologist`; force `Ontologist` once if ambiguity stalls `±0.05` for 3 rounds) and record usage in `state.challenge_modes_used`. See [scoring-and-templates.md](./references/scoring-and-templates.md) for trigger rules.
 
 ## Phase 4: Crystallize artifacts
 
@@ -201,31 +152,9 @@ When threshold is met (or on early exit with a warning, or at the hard cap):
 
 0. **Configurable Custom Quality Gates (`qualityGates["deep-interview"]`, ported from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`)**: after writing the spec in step 2, if `.omagy/config.json` defines `qualityGates["deep-interview"]` (strict no-op when absent/empty; reserved controller skills like `deep-interview`, `ralplan`, `code-review`, `ai-slop-cleaner` are rejected to prevent self-recursion), run each configured gate skill in an independent subagent (`Model: gate.model || "inherit"`). Any `blocking` gate returning `reject`/`iterate` requires revising the spec before step 3; `advisory` or `unavailable` gates are recorded without blocking.
 1. Write the transcript summary to `.omagy/interviews/{slug}-{timestamp}.md`.
-2. Write the execution-ready spec to `.omagy/specs/deep-interview-{slug}.md` containing:
-   - Metadata (profile, rounds, final ambiguity, threshold, context type) and the context snapshot path.
-   - Prompt-safe initial-context summary (when oversized context was provided) with references to the full sources.
-   - Clarity breakdown table.
-   - **Affected User Ideal State & Gap Table** (`Dimension | Current State | Ideal State | Gap | Approach | Verification Metric`).
-   - Intent; Desired Outcome; In-Scope; Out-of-Scope / Non-goals; Decision Boundaries (what the agent may decide without confirmation, plus any `[adopted-default]` choices); Constraints; testable Acceptance Criteria.
-   - Assumptions exposed and their resolutions; pressure-pass findings (which answer was revisited and what changed).
-   - Brownfield evidence vs inference notes; Docs/Terminology Ledger; scenario/edge-case findings.
-   - Optional durable-doc recommendations (opt-in, public-safe, no raw transcript dumps).
-   - Technical context findings; full or condensed transcript.
-   - Residual-risk state if the interview ended by early exit, hard cap, or above-threshold proceed.
+2. Write the execution-ready spec to `.omagy/specs/deep-interview-{slug}.md` following the 9-section template (including the **Affected User Ideal State & Gap Table**, `[adopted-default]` decision boundaries, and pressure/terminology audits) in [scoring-and-templates.md](./references/scoring-and-templates.md).
+   - For **`--autoresearch`**, also generate `.omagy/specs/deep-interview-autoresearch-{slug}.md` (with the locked `## Fidelity` block: `as of`, `meaning check`, `source floor`, `derived numbers`) and the launch bundle under `.omagy/specs/autoresearch-{slug}/` (`mission.md`, `sandbox.md`, `result.json`), marking `launchReady: false` if placeholders or undecided fidelity fields remain, per [scoring-and-templates.md](./references/scoring-and-templates.md).
 3. Standalone: write state `current_phase:"complete"`, `active:false`, `completed_at`. Inside Autopilot: set `handoff_artifacts.deep_interview` to the spec path and advance Autopilot to `ralplan`.
-
-### Autoresearch specialization (`--autoresearch`)
-- Focus the interview on mission clarity, evaluator readiness, keep policy, slug naming, **research fidelity rules**, and launch-now vs refine-further.
-- Accepted seed inputs: `topic`, `evaluator`, `keep-policy`, `slug`, a mission draft, evaluator examples.
-- Canonical spec: `.omagy/specs/deep-interview-autoresearch-{slug}.md` with sections `Mission Draft`, `Evaluator Draft`, `Fidelity`, `Launch Readiness`, `Seed Inputs`, `Confirmation Bridge`.
-- **Locked `## Fidelity` block (ported from OmO `ulw-research` `#11166`, `#11289`)**: infer first from the prompt and ask only triggered fields:
-  - `as of`: version/release/commit/date anchor (default: latest at run start).
-  - `meaning check`: `on` (full rigor) or `off` (light rigor).
-  - `source floor`: `standard`, `primary only`, or `pointed only: <URLs/paths>`.
-  - `derived numbers`: `allowed` or `none` (when `none`, only direct measured/quoted figures are permitted).
-- Launch bundle under `.omagy/specs/autoresearch-{slug}/`: `mission.md`, `sandbox.md`, `result.json` (`topic`, `evaluatorCommand`, `keepPolicy`, `slug`, `fidelity`, `launchReady`, `blockedReasons`).
-- Mark the draft **not launch-ready** while the evaluator command contains placeholders (`<...>`, `TODO`, `TBD`, `REPLACE_ME`, `CHANGEME`, `your-command-here`) or any required `## Fidelity` field is undecided.
-- After generating artifacts, offer `refine further` vs `launch` via `ask_question`. Hand off to `$autoresearch` only after explicit confirmation.
 
 ## Phase 5: Execution bridge
 

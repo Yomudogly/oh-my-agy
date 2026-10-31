@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 
 const SKILLS = [
@@ -22,7 +23,7 @@ const SKILLS = [
   'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
 ];
 // Antigravity built-in slash commands: `/name` belongs to Antigravity, only `$name` routes to us.
-const AGY_SLASH = new Set(['goal', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork-preview', 'learn', 'boost']);
+const AGY_SLASH = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork', 'teamwork-preview', 'learn', 'boost', 'plugin', 'automation']);
 const CONTINUATION_MODES = ['autopilot', 'ultragoal', 'ultraqa', 'autoresearch', 'performance-goal'];
 const PLANNING_MODES = ['deep-interview', 'ralplan', 'plan'];
 const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
@@ -1397,6 +1398,22 @@ async function selftest() {
     check('validateQualityGates rejects self-recursive controller skills, sunset skills, and legacy stage keys',
       qgInvalid.ok === false && qgInvalid.errors.length === 3);
 
+    // Verify hooks.json PreToolUse matcher covers Antigravity 2.0 write/edit/patch/read tools
+    const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const hooksJsonPath = path.join(pluginRoot, 'hooks.json');
+    const hooksCfg = readJson(hooksJsonPath) || {};
+    const matcherStr = hooksCfg['oh-my-agy-planning-guard']?.PreToolUse?.[0]?.matcher || '';
+    const matcherRe = matcherStr ? new RegExp(`^(?:${matcherStr})$`) : null;
+    check('hooks.json PreToolUse matcher covers write_file, edit_file, apply_patch, read_file, and legacy tools',
+      Boolean(matcherRe && ['write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'apply_patch', 'read_file', 'view_file'].every((t) => matcherRe.test(t))));
+
+    // Verify sidecars/hud/sidecar.json declares a single AUX_PANE web UI view (so Extensions menu shows one HUD item)
+    const sidecarCfg = readJson(path.join(pluginRoot, 'sidecars', 'hud', 'sidecar.json')) || {};
+    const auxViews = (sidecarCfg.ui_config?.views || []).filter((v) => v && v.entrypoint === 'SIDECAR_UI_ENTRYPOINT_AUX_PANE');
+    check('sidecars/hud/sidecar.json declares single AUX_PANE web UI view for sidecar://oh-my-agy/hud/',
+      sidecarCfg.has_web_ui === true && auxViews.length === 1 && auxViews[0].path === '/',
+      `views=${auxViews.length}`);
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -1484,6 +1501,9 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-main().catch(() => {
-  process.stdout.write('{}\n');
-});
+const isMainModule = Boolean(process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)));
+if (isMainModule) {
+  main().catch(() => {
+    process.stdout.write('{}\n');
+  });
+}

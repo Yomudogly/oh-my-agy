@@ -18,12 +18,12 @@ Resolve `SRC` (this plugin's directory, two levels up from this `SKILL.md`).
 - **Symlink-safe copy (ported from OMC v5.7.19 #4631)**: before copying hook or plugin files into an existing target, remove any existing or dangling symlinks at the destination (`[ -L "<target>" ] && rm -f "<target>"`, and if `<target>/hooks` exists, `find "<target>/hooks" -type l -exec rm -f {} +`) so `cp -R "<SRC>" "<target>"` never fails with `ENOENT` on a broken symlink or writes through a live symlink into an external path.
 - Copy with `cp -R "<SRC>" "<target>"`. Antigravity's file tools and hook runner load the plugin regardless of the terminal sandbox. Shell-based checks (`selftest`) may need `BypassSandbox: true`.
 - Writing under `~/.gemini/config` is outside the workspace sandbox, so run that one command with `BypassSandbox: true` (the user approves it).
-- Make the hook scripts executable: `chmod +x <target>/hooks/run.sh <target>/hooks/omagy-hook.mjs`.
+- Make the hook and HUD sidecar scripts executable: `chmod +x <target>/hooks/run.sh <target>/hooks/omagy-hook.mjs <target>/sidecars/hud/run.sh <target>/sidecars/hud/main.mjs`.
 
 ## 3. Enable and restart
 - A newly added plugin **directory is discovered only at startup**. Ask the user to restart Antigravity.
-- Plugins are enabled by default. If the user previously disabled it, re-enable it via the built-in `plugin` skill flow (language-server `JetboxWriteState`). Do not hand-edit `~/.gemini/config/config.json`.
-- After restart, verify with `$doctor`.
+- Plugins are enabled by default. If the user previously disabled it, re-enable it via the built-in `plugin` skill flow (language-server `JetboxWriteState`) or link `[oh-my-agy](customization://oh-my-agy)` (never `plugin://`). Do not hand-edit `~/.gemini/config/config.json`.
+- After restart, verify with `$doctor` and offer `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` to open the Auxiliary Pane status board.
 
 ## 4. Prepare the workspace (project-level, optional)
 - Add `.omagy/` to `.gitignore` (append only if missing).

@@ -45,7 +45,7 @@ Content. Cross-reference with [[other-page-slug]].
 - **List**: render `index.md`, or rebuild it if it is stale.
 - **Delete**: confirm with the user, remove the page, update the index, append to the log, and report any `[[slug]]` links that are now dangling.
 - **Refresh**: rebuild `index.md` from page frontmatter.
-- **Lint**: report pages with missing or invalid frontmatter, unknown categories, dangling `[[links]]`, orphan pages (no inbound links and not in the index), duplicate titles, and index drift. Lint never rewrites files unless the user asks for fixes.
+- **Lint**: report pages with missing or invalid frontmatter, unknown categories, dangling `[[links]]`, orphan pages (no inbound links and not in the index), duplicate titles, and index drift. Lint never rewrites files unless the user asks for fixes. Surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once when listing, reading, or linting wiki pages so the user can browse pages and lint status in the `Wiki` tab of the Auxiliary Pane.
 
 ## Session capture & secret-reference rules
 

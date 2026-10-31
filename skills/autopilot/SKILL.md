@@ -42,7 +42,7 @@ When review or QA proves the requirements or plan wrong, keep Autopilot active, 
 </Execution_Policy>
 
 <State_Management>
-Autopilot owns `.omagy/state/autopilot-state.json`. Start a new run by writing it with `write_to_file`:
+Autopilot owns `.omagy/state/autopilot-state.json`. Start a new run by writing it with `write_file` (or `write_to_file`):
 
 ```json
 {
@@ -61,7 +61,7 @@ Autopilot owns `.omagy/state/autopilot-state.json`. Start a new run by writing i
 }
 ```
 
-Refresh `updated_at` on every write. The oh-my-agy `Stop` hook uses it to tell real progress from a stall. It re-enters the loop at most twice without a state change.
+Refresh `updated_at` on every write. The oh-my-agy `Stop` hook uses it to tell real progress from a stall. It re-enters the loop at most twice without a state change. When kicking off a new Autopilot run (and the `oh-my-agy/hud` sidecar is enabled), surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can monitor phase transitions in the Auxiliary Pane.
 
 Stage transitions:
 - **`deep-interview -> ralplan`**: requires the spec path in `handoff_artifacts.deep_interview` and a non-empty completion rationale.

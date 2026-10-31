@@ -22,7 +22,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── plugin.json            # Antigravity manifest (v0.3.3)
+├── plugin.json            # Antigravity manifest (v0.3.4)
 ├── assets/logo.png        # Plugin icon
 ├── HOW_TO_USE.md          # Complete guide to all 26 skills, 18 subagents, hooks & recipes
 ├── rules/AGENTS.md        # always-on operating contract (~13 KB)
@@ -30,6 +30,7 @@ oh-my-agy/
 ├── hooks/
 │   ├── run.sh             # finds Node (homebrew/volta/fnm/nvm), fails open if absent
 │   └── omagy-hook.mjs     # hook runtime + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
+├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`)
 ├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
 └── skills/                # 26 workflow skills
 ```
@@ -63,7 +64,8 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 Run the offline hook selftest at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":42,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":44,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest # -> {"selftest":"PASS",...}
 ```
 
 Antigravity's sandboxed terminal may deny reading plugin files directly. If the selftest prints `Operation not permitted`, run it with sandbox bypass. The hooks themselves are unaffected: they write `$TMPDIR/oh-my-agy/<conversationId>.routing.json` on every user message, which is the quickest live health check.

@@ -38,7 +38,7 @@ Before running commands, record a matrix (in `.omagy/artifacts/ultraqa-<slug>/ma
 4. **CHECK RESULT**: pass only when baseline, adversarial scenarios, evidence, and cleanup all pass. Otherwise diagnose and repeat.
 5. **ARCHITECT DIAGNOSIS** (via the `architect` or `debugger` subagent for non-trivial failures): root cause and safety impact. **FIX ISSUES** precisely. **CLEAN UP AND ROLL BACK** temporary harnesses, fixtures, logs, processes, state, and failed experiments before the next cycle.
 
-Generate temporary tests, scripts, fixtures, or harnesses only when useful. Keep them under `.omagy/artifacts/ultraqa-<slug>/` or the project's test directories. Use bounded runtimes and project-native tools. Write harness files with `write_to_file` (not interpolating heredocs). Use absolute repo paths in harness imports. Classify harness setup failures as harness debris: fix the harness and rerun before declaring a product defect.
+Generate temporary tests, scripts, fixtures, or harnesses only when useful. Keep them under `.omagy/artifacts/ultraqa-<slug>/` or the project's test directories. Use bounded runtimes and project-native tools. Write harness files with `write_file` / `write_to_file` (not interpolating heredocs). Use absolute repo paths in harness imports. Classify harness setup failures as harness debris: fix the harness and rerun before declaring a product defect.
 
 ## Safety, state, and exit
 

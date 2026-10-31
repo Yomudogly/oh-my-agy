@@ -70,7 +70,7 @@ Only the leader edits the board. Workers report results in their final message, 
    Evidence (when requires_code_change is true): write .omagy/evidence/task-<id>.json with {"team":"<team>","taskId":"<id>","summary":"...","verification":[{"command":"...","result":"passed","output":"..."}],"unverified":[]} and include EVIDENCE_RECORDED: .omagy/evidence/task-<id>.json on its own line.
    Report format: TASK <id>: COMPLETED|FAILED|BLOCKED / Changed files / Verification / EVIDENCE_RECORDED / Blockers
    ```
-   Record each `conversation_id`, then set `status:"in_progress"`.
+   Record each `conversation_id`, then set `status:"in_progress"`. Surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once when launching the first wave so the user can watch the live DAG board in the Auxiliary Pane.
 3. **Wait** for worker messages. Do not poll; the system wakes you when a worker reports. Optionally set a liveness `schedule` timer with `TimerCondition: "any"`.
 4. **On each report**: for tasks with `requires_code_change: true`, validate `.omagy/evidence/task-<id>.json` with `read_file` (not the shell). Reject the report unless all of these hold:
    - the file is inside `<workspace>/.omagy/evidence/`, is not a symlink, and is valid JSON of at most 1 MiB;
