@@ -22,17 +22,17 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── plugin.json            # Antigravity manifest (v0.3.4)
+├── plugin.json            # Antigravity manifest (v0.4.0, strict JSON)
 ├── assets/logo.png        # Plugin icon
 ├── HOW_TO_USE.md          # Complete guide to all 26 skills, 18 subagents, hooks & recipes
-├── rules/AGENTS.md        # always-on operating contract (~13 KB)
+├── rules/AGENTS.md        # always-on operating contract (<24 KB)
 ├── hooks.json             # SessionStart + PreInvocation routing/wiki, Stop continuation, opt-in PreToolUse guard
 ├── hooks/
-│   ├── run.sh             # finds Node (homebrew/volta/fnm/nvm), fails open if absent
-│   └── omagy-hook.mjs     # hook runtime + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
+│   ├── run.sh             # POSIX-portable Node locator (homebrew/volta/fnm/nvm/Windows), fails open if absent
+│   └── omagy-hook.mjs     # hook runtime + `review-package` + `goal-brief` + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
 ├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`)
 ├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
-└── skills/                # 26 workflow skills
+└── skills/                # 26 workflow skills + progressive-disclosure `references/`
 ```
 
 ## Install
@@ -64,7 +64,7 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 Run the offline hook selftest at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":44,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":52,"failed":0}
 sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest # -> {"selftest":"PASS",...}
 ```
 
@@ -113,3 +113,4 @@ In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot 
 - **[oh-my-codex (OMX)](https://github.com/Yeachan-Heo/oh-my-codex)** by Yeachan Heo — foundational workflow chain (`deep-interview -> ralplan -> ultragoal`), durable state contracts, team evidence validation, and project wiki architecture.
 - **[oh-my-claudecode (OMC)](https://github.com/Yeachan-Heo/oh-my-claudecode)** by Yeachan Heo — causal `tracer` agent, `code-simplifier` agent, `/loft` prototyping, `/pr` paper-trail assembly, Two-Axis + Demolition/ADR code review, session state isolation, and completion drift guards.
 - **[oh-my-openagent / oh-my-opencode (OMO)](https://github.com/code-yeongyu/oh-my-openagent)** by Yeongyu Kim — explore-first `CLEAR`/`UNCLEAR` intent routing, Two-Filter owner-decision gating, `--hyperplan` 5-persona hostile cross-critique, `DoneClaim` / `AdversarialVerify` (`product` vs `harness` triage), `/handoff`, work-shape model routing, working-agreement ledgers, subdirectory `AGENTS.md` discovery, and unread-overwrite guards.
+- **[superpowers](https://github.com/obra/superpowers)** by Jesse Vincent — tactical TDD/debugging/verification gate functions (`Name the Break`, 4-layer defense-in-depth, condition-based waiting, `find-polluter` bisection, Red-Green revert verification), pre-assembled review packages & `--re-review` calibration, 4-state worker status (`COMPLETED_WITH_CONCERNS`, `NEEDS_CONTEXT`), `cost_if_wrong` review rulings, `$doctor --session` 7-dimension transcript forensics, and `$skill test` subagent pressure testing & SDO hygiene.

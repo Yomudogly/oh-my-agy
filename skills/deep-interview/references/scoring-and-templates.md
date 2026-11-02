@@ -46,6 +46,7 @@ Score each dimension in `[0.0, 1.0]` with a justification and the remaining gap:
 - `Decision Boundaries` explicit.
 - **Pressure pass complete**: at least one earlier answer revisited with an evidence, assumption, or tradeoff follow-up.
 - **Practical closure audit**: another question would change execution materially, not just polish wording.
+- **Zero-Context Builder Check (`builder-check` pass, ported from `superpowers`)**: before handing off a complex spec, optionally audit the draft from the perspective of a zero-context builder who cannot talk to the author (`"What would a builder have to guess where a wrong guess would break a user contract or cross-module interface?"`). Triage findings into `Answered already` (cite section), `Minor` (record under `[adopted-default]` in Decision Boundaries), and `Theirs` (ask in a single final closure question only if it survives the Owner-Decision Gate).
 - If a gate is unresolved below threshold, ask only a final closure question that names the gate.
 - If `ambiguity <= 0.10`, another question is allowed only as that closure question; otherwise crystallize immediately.
 

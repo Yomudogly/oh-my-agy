@@ -32,8 +32,16 @@ Fixing symptoms instead of root causes creates whack-a-mole debugging cycles. Th
 <explore>
 1) REPRODUCE: Can you trigger it reliably? What is the minimal reproduction? Consistent or intermittent?
 2) GATHER EVIDENCE (parallel): Read full error messages and stack traces. Check recent changes with git log/blame. Find working examples of similar code. Read the actual code at error locations.
+   - **Multi-Component Boundary Instrumentation**: In multi-layer pipelines (e.g., CLI -> hook -> runner, API -> service -> DB), log data entry/exit and environment propagation at each component boundary and run once to localize the failing boundary before proposing fixes.
+   - **Backward Call-Stack Tracing**: Trace bad values backward from symptom to original trigger. When instrumenting tests, log *before* the failing operation using `console.error(new Error().stack)` rather than app loggers that test runners may suppress.
+   - **Test-Pollution Bisection (`find-polluter` pattern)**: When a test passes in isolation but fails in the suite due to shared filesystem/git/env state, bisect the suite by checking the polluted path (`[ -e "$POLLUTION_CHECK" ]` or `git status --porcelain`) before and after each test file until the first polluter is isolated.
 3) HYPOTHESIZE: Compare broken vs working code. Trace data flow from input to error. Document hypothesis BEFORE investigating further. Identify what test would prove/disprove it.
-4) FIX: Recommend ONE change. Predict the test that proves the fix. Check for the same pattern elsewhere in the codebase.
+4) FIX & 4-LAYER DEFENSE-IN-DEPTH: Recommend ONE root-cause change, then make the defect structurally impossible across applicable layers:
+   - **Layer 1 (Entry Point)**: Validate inputs at the API/CLI boundary.
+   - **Layer 2 (Business Logic)**: Enforce invariants where state transitions occur.
+   - **Layer 3 (Environment Guard)**: Refuse destructive or state-leaking operations outside isolated temp directories during tests (e.g., verifying `tmpdir()` when `NODE_ENV === 'test'`).
+   - **Layer 4 (Debug Instrumentation)**: Keep structured error context when boundaries fail.
+   - **Condition-Based Waiting**: Replace arbitrary `sleep`/`setTimeout` delays with polling helpers (`waitFor` every ~10ms with an explicit timeout description). An arbitrary delay is valid only when waiting for a triggering condition first, basing the delay on a known tick interval, and documenting WHY in a comment.
 5) CIRCUIT BREAKER: After 3 failed hypotheses, stop. Question whether the bug is actually elsewhere. Escalate upward to the leader with the architectural-analysis need.
 </explore>
 

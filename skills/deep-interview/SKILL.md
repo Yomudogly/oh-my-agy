@@ -137,7 +137,7 @@ Score each dimension in `[0.0, 1.0]` with a justification and gap:
 - Greenfield: `ambiguity = 1 - (intent×0.30 + outcome×0.25 + scope×0.20 + constraints×0.15 + success×0.10)`
 - Brownfield: `ambiguity = 1 - (intent×0.25 + outcome×0.20 + scope×0.20 + constraints×0.15 + success×0.10 + context×0.10)`
 
-Enforce all readiness gates (`Non-goals`, `Decision Boundaries`, pressure pass complete, practical closure audit) and round controls (Dialectic Rhythm Guard after 3 consecutive non-user entries; early exit from round 4 with risk warning; hard cap at `max_rounds`) per [scoring-and-templates.md](./references/scoring-and-templates.md). If `ambiguity <= 0.10` and gates pass, crystallize immediately.
+Enforce all readiness gates (`Non-goals`, `Decision Boundaries`, pressure pass complete, practical closure audit, and zero-context `Builder Check` triage) and round controls (Dialectic Rhythm Guard after 3 consecutive non-user entries; early exit from round 4 with risk warning; hard cap at `max_rounds`) per [scoring-and-templates.md](./references/scoring-and-templates.md). If `ambiguity <= 0.10` and gates pass, crystallize immediately.
 
 ### 2d) Report progress & persist state
 Show the weighted breakdown table, readiness-gate status, and next focus dimension. Append the round (question, answer, label, scores) to state and refresh `updated_at`.

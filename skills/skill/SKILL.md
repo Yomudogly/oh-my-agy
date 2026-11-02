@@ -43,7 +43,8 @@ Name collisions resolve by priority: project > declared > user (global) > built-
 | `$skill setup` | Ensure both roots exist, scan them, then offer add, list, scan, import, or done. |
 | `$skill scan` | Run setup's inventory without the interactive menu. |
 | `$skill extract [name]` | Extract a repeatable workflow discovered in the current session into a project/user `SKILL.md` after passing the 3-question Skillify quality gate: (1) *"Could someone Google this in 5 minutes?"* -> No; (2) *"Is this specific to this codebase, project, or workflow?"* -> Yes; (3) *"Did this take real debugging, design, or operational effort to discover?"* -> Yes. |
-| `$skill validate` | Validate every skill in both roots and report pass/fail per path. Never rewrite files. |
+| `$skill test <name>` | Run the behavioral pressure-testing loop (`RED -> GREEN -> REFACTOR`) with a 3-pressure subagent scenario and 5-rep micro-tests as defined in [testing-and-sdo.md](./references/testing-and-sdo.md), saving evidence to `.omagy/artifacts/skill-test-<name>-<UTC>.md`. |
+| `$skill validate` | Validate every skill in both roots (plus SDO frontmatter and `< 20,000`-byte checks) and report pass/fail per path. Never rewrite files. |
 
 With an argument, use direct command mode. Without one, use the guided setup menu.
 
@@ -51,7 +52,7 @@ With an argument, use direct command mode. Without one, use the guided setup men
 
 Ask (with `ask_question`, or plain text for free-form values) for any missing values:
 1. `name`: lowercase letters/digits separated by single hyphens (`[a-z0-9]+(?:-[a-z0-9]+)*`).
-2. `description`: what the skill does **and when to use it**, in the third person. This is the only text Antigravity shows the model before activation, so make the trigger conditions explicit.
+2. `description`: what the skill does **and when to use it**, in the third person. This is the only text Antigravity shows the model before activation, so make the trigger conditions explicit. **SDO Workflow-Summary Guard**: never include `->` step-chain arrows or workflow summaries in `description` (they cause models to skip reading `SKILL.md`; see [testing-and-sdo.md](./references/testing-and-sdo.md)).
 3. `scope`: `project` or `user`.
 
 Frontmatter (Antigravity reads `name` and `description`; omit `triggers`/`argument-hint`, which Codex used, and fold that information into the description instead):
@@ -82,11 +83,11 @@ Recognition signals, scope, and explicit non-goals.
 Concrete invocation, edge cases, and failure recovery.
 ```
 
-Progressive disclosure: keep `SKILL.md` concise. Put bulky reference material in `references/` and helper scripts in `scripts/`, and link to them relatively. Prefer hard-won, non-obvious knowledge over generic advice. Include exact paths, commands, error text, and expected evidence.
+Progressive disclosure: keep `SKILL.md` concise (`< 20,000` bytes). Put bulky reference material in `references/` and helper scripts in `scripts/`, and link to them relatively (`[file.md](./references/file.md)`). Match the instructional form to the failure mode (positive recipes for output-shaping skills vs gate functions + rationalization tables for discipline skills; see [testing-and-sdo.md](./references/testing-and-sdo.md)).
 
 ## Validation, symlink boundary, and sync hygiene
 
-Before reporting success, check that the file exists, starts with `---` frontmatter, has a non-empty `name` and `description`, uses a valid name that matches its directory, and has a non-empty body. Reject malformed YAML, multiline required scalars, duplicate names in one scope, missing directories/files, permission failures, and invalid arguments.
+Before reporting success, check that the file exists, is `< 20,000` bytes, starts with `---` frontmatter, has a non-empty `name` and `description` (with zero `->` step-chain arrows in `description`), uses a valid name that matches its directory, has valid relative `./references/` links, and has a non-empty body. Reject malformed YAML, multiline required scalars, duplicate names in one scope, missing directories/files, permission failures, and invalid arguments.
 
 - **Symlink boundary check (ported from OMO v5.1.45 #10716)**: when scanning or validating project skills (`.agents/skills/*`), resolve `fs.realpathSync` on both the project root and each skill directory/file. Reject any project skill symlink whose canonical target escapes the canonical project root (unless it explicitly points into the user skill root `~/.gemini/config/skills/`).
 - **Read-only cache/bytecode exclusion (ported from OMO v5.1.49 #11376/#11377)**: when running `$skill sync`, `$skill validate`, or helper scripts inside a skill directory, never write bytecode or test caches into the skill or plugin directory (`PYTHONDONTWRITEBYTECODE=1`), and ignore/exclude `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, and `*.pyc` when syncing skills between scopes.

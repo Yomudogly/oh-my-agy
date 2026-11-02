@@ -1,6 +1,6 @@
 ---
 name: ralplan
-description: "[oh-my-agy] Consensus planning: Planner -> Architect -> Critic subagent review loop (plus --hyperplan 5-persona hostile cross-critique) producing an execution-ready plan and a bound handoff to $ultragoal. Use for $ralplan, for high-stakes plans that need architectural review, or as the Autopilot planning stage. Flags: --interactive, --deliberate, --hyperplan, --advisory."
+description: "[oh-my-agy] Multi-agent consensus planning with independent architectural and critic review (plus --hyperplan 5-persona hostile cross-critique) producing an execution-ready plan. Use for $ralplan, for high-stakes plans that need architectural review, or as the Autopilot planning stage. Flags: --interactive, --deliberate, --hyperplan, --advisory."
 ---
 
 # Ralplan (Consensus Planning)
@@ -52,6 +52,9 @@ Standalone: write `.omagy/state/ralplan-state.json` (`mode:"ralplan"`, `active:t
    - Decision Drivers (top 3)
    - Viable Options (>= 2) with bounded pros/cons, or an explicit invalidation rationale when only one survives
    - Deliberate mode only: pre-mortem (3 scenarios) and an expanded test plan
+   - **Global Constraints**: verbatim spec/architectural invariants carried into every task and reviewer dispatch.
+   - **Review Focus (Top 5 Silent Edge Cases)**: the 5 input classes or failure modes the spec is silent on that would bite a real user, each wired to an owning task's test step.
+   - **Per-Task `Interfaces: Consumes / Produces` & `Proportion` Check**: explicit input/output signatures per goal/task to prevent cross-task signature drift, keeping task bodies proportional (signatures + assertions, never full-file code transcripts longer than the spec).
 
    The main lane may author the plan for standalone runs. For complex Autopilot planning, invoke the `planner` subagent. Save `.omagy/plans/prd-{slug}.md` and `.omagy/plans/test-spec-{slug}.md`.
 2. **User feedback** (`--interactive` only): present the draft plus Principles/Drivers/Options with `ask_question` (`Proceed to review` / `Request changes` / `Skip review`). Otherwise proceed automatically.

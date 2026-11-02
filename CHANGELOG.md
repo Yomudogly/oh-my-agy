@@ -2,6 +2,35 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.4.0
+
+*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
+
+- **Hook Runtime CLI Helpers, `transcriptPath` Routing & Shell Wrapper Hardening (`hooks/omagy-hook.mjs`, `hooks/run.sh`, `sidecars/hud/run.sh`, `sidecars/hud/main.mjs`)**:
+  - Added **`review-package <cwd> <baseRef> [headRef] [outPath]`** (`buildReviewPackage`): validates `git merge-base --is-ancestor <baseRef> <headRef>` and `git rev-list --count <baseRef>..<headRef> > 0` (exiting with code `3` on an empty or non-ancestor commit range so callers never review a 0-commit diff) and writes a single self-contained review artifact (`.omagy/artifacts/reviews/review-pkg-<base>-<head>.md`) with commit log, diffstat, and `-U10` unified diff.
+  - Added **`goal-brief <sourcePath> <goalId|taskNumber> [outPath]`** (`extractGoalBrief`): extracts a single goal from `.omagy/ultragoal/goals.json` or a fence-aware `### Task <N>` / `### Goal <ID>` section from a `.omagy/plans/*.md` file into `.omagy/ultragoal/briefs/goal-<id>.md` so worker subagents receive lean task context without loading the full plan.
+  - Persisted `transcriptPath` and `artifactDirectoryPath` in `$TMPDIR/oh-my-agy/<conversationId>.routing.json` across `SessionStart` and `PreInvocation`, and added `lastUserInput` hook payload fallback in `lastUserMessage()` per the Antigravity Hooks Spec.
+  - Replaced external `dirname`, `ls | sort -V | tail`, and `cat` calls in `hooks/run.sh` and `sidecars/hud/run.sh` with pure POSIX parameter expansion (`${0%/*}`), portable glob comparison, and Windows Node path fallbacks, and updated `sidecars/hud/main.mjs` to accept both `selftest` and `--selftest`.
+- **Tactical Discipline Gates Across 8 Role Subagents (`agents/*.md`, adapted from `obra/superpowers` `v7.0.1`)**:
+  - `test-engineer.md`: added **Pre-Test Gate (`Name the Break`)**, **Pre-Mock Gate (`Exercise the Real Thing`)**, **Mutation Check**, **Full-Suite Rule**, and condition-based `waitFor` polling over arbitrary `setTimeout`/`sleep`.
+  - `debugger.md`: added **Multi-Component Boundary Instrumentation**, **Backward Call-Stack Tracing (`console.error(new Error().stack)`)**, **`find-polluter` Bisection** for state-polluting tests, **4-Layer Defense-in-Depth Validation** (Entry Point -> Business Logic -> Environment Guard -> Debug Instrumentation), and **Condition-Based Waiting**.
+  - `verifier.md`: added **Anti-Hedging & Anti-Rationalization Gate** (rejecting `should`, `probably`, `seems to`) and the **Red-Green Regression Verification Rule** (`Write test -> Run (PASS) -> Revert fix -> Run (MUST FAIL) -> Restore fix -> Run (PASS)`).
+  - `code-reviewer.md`: wired `review-package` input, added **`Spec Silence Is Not Permission`**, **`HIGH (plan-mandated)`** severity calibration, **Scoped Fix Re-Review (`--re-review <fix_base_sha>`)** with `Out-of-Scope Observations`, and **`Cannot Verify from Diff`**.
+  - `executor.md` & `team-worker.md`: standardized 4-state worker status (`COMPLETED | COMPLETED_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`) and `<15 line` return summaries with detailed report file offloading (`.omagy/evidence/task-<id>-report.md`).
+  - `planner.md` & `critic.md`: added `## Global Constraints`, `## Review Focus (Top 5 Silent Edge Cases)`, per-task `Interfaces: Consumes / Produces`, and `Proportion` check against gold-plating.
+- **Workflow Skills & Operating Contract Upgrades (`rules/AGENTS.md`, `skills/*`)**:
+  - `rules/AGENTS.md`: added **Receiving review feedback** (Restate -> Verify in code -> Evaluate technically -> Respond or apply; forbidding performative agreement) and **Antigravity tool disambiguation (`manage_task` vs task checklists)**.
+  - `$deep-interview` (`SKILL.md` + `references/scoring-and-templates.md`): added the **Zero-Context `Builder Check` Pass** before spec handoff.
+  - `$plan` & `$ralplan`: required `## Global Constraints`, `## Review Focus (Top 5 Silent Edge Cases)`, per-task `Interfaces: Consumes / Produces`, and `Proportion` checks, and removed SDO-violating `->` workflow chains from `autopilot` and `ralplan` YAML `description` fields.
+  - `$code-review`: wired `review-package` pre-assembly (handling exit code `3` as an immediate `BLOCK`), added the **Anti-Pre-Judging Guard**, **Scoped Fix Re-Review (`--re-review <fix_base_sha>`)**, and **Receiving Review Feedback**.
+  - `$ultragoal`, `$team`, & `$pr`: wired `goal-brief` and `review-package`, added 4-state worker routing (`NEEDS_CONTEXT` re-dispatch, `BLOCKED` model escalation `flash -> inherit -> pro`), added **`cost_if_wrong` `Ruling:` ledger entries** and `"## Rulings Made & Deferred Minors"` closeout reporting, and added submodule-safe worktree hygiene (`git rev-parse --show-superproject-working-tree`).
+- **Session Transcript Forensics & Behavioral Skill Testing (`skills/doctor/`, `skills/skill/`)**:
+  - `$doctor --session [conversationId|path]` (`skills/doctor/references/session-forensics.md`): 7-dimension JSONL transcript diagnostics (`skill-timeline`, post-compaction `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) with context-safety (`>100KB` line checks) and two-pass scrubbed bundle export (`--export [skeleton|evidence|full]`).
+  - `$skill test <name>` (`skills/skill/references/testing-and-sdo.md`): behavioral subagent pressure testing (`RED -> GREEN -> REFACTOR` under 3+ combined pressures + 5-rep fresh-context micro-tests), **Match the Form to the Failure** authoring guidance, and SDO frontmatter validation.
+- **Strict Marketplace Manifest & 52-Check Offline Selftest (`plugin.json`, `hooks/omagy-hook.mjs`)**:
+  - Converted `plugin.json` to strict comment-free JSON (`v0.4.0`, `description <= 160` chars, strictly conforming to the 10-key Antigravity `plugin.json` schema allowlist).
+  - Expanded `sh ./hooks/run.sh selftest` from `44` to `52` checks (`T1`–`T8`), covering `buildReviewPackage`, `extractGoalBrief`, `transcriptPath`/`artifactDirectoryPath` routing persistence + `lastUserInput` fallback, strict `plugin.json` schema allowlist & `assets/logo.png` PNG validation, all 26 `skills/*/SKILL.md` (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), `rules/AGENTS.md` (`<24KB`), all 18 `agents/*.md`, zero personal path leaks, and POSIX `run.sh` portability under minimal `PATH`.
+
 ## 0.3.4
 
 *Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **Antigravity 2.0 Plugin & Sidecar Spec***

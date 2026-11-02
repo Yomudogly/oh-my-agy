@@ -579,32 +579,208 @@ export function readJsonlRecords(filePath) {
   return { ok: true, file: resolved, records, skipped };
 }
 
-// ---------- transcript ----------
-function lastUserMessage(transcriptPath) {
-  if (!transcriptPath || typeof transcriptPath !== 'string') return null;
-  let text = '';
+// ---------- context-saving subagent handoff helpers (ported from superpowers v6/v7) ----------
+function isSafeGitRef(ref) {
+  return typeof ref === 'string' && ref.trim().length > 0 && !ref.trim().startsWith('-');
+}
+
+export function buildReviewPackage(cwd, baseRef, headRef = 'HEAD', outPath = '') {
+  const repoDir = path.resolve(String(cwd || process.cwd()));
+  const baseArg = String(baseRef || '').trim();
+  const headArg = String(headRef || 'HEAD').trim() || 'HEAD';
+  if (!isSafeGitRef(baseArg) || !isSafeGitRef(headArg)) {
+    return { ok: false, exitCode: 1, error: 'Invalid base or head git ref.' };
+  }
+  let baseSha = '';
+  let headSha = '';
   try {
-    const fd = fs.openSync(transcriptPath, 'r');
+    baseSha = execFileSync('git', ['rev-parse', '--verify', `${baseArg}^{commit}`], {
+      cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+    }).trim();
+    headSha = execFileSync('git', ['rev-parse', '--verify', `${headArg}^{commit}`], {
+      cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+    }).trim();
+  } catch (err) {
+    return { ok: false, exitCode: 1, error: `Cannot resolve git commit range: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', baseSha, headSha], {
+      cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+    });
+  } catch {
+    return { ok: false, exitCode: 3, error: `Ref '${baseArg}' (${baseSha.slice(0, 7)}) is not an ancestor of '${headArg}' (${headSha.slice(0, 7)}).` };
+  }
+  let count = 0;
+  try {
+    count = Number(execFileSync('git', ['rev-list', '--count', `${baseSha}..${headSha}`], {
+      cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+    }).trim());
+  } catch {
+    return { ok: false, exitCode: 1, error: 'Failed to count commits in range.' };
+  }
+  if (!Number.isInteger(count) || count < 1) {
+    return { ok: false, exitCode: 3, error: `Commit range ${baseSha.slice(0, 7)}..${headSha.slice(0, 7)} is empty (0 commits).` };
+  }
+  const base7 = baseSha.slice(0, 7);
+  const head7 = headSha.slice(0, 7);
+  const log = execFileSync('git', ['log', '--oneline', `${baseSha}..${headSha}`], {
+    cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
+  }).trimEnd();
+  const stat = execFileSync('git', ['diff', '--stat', `${baseSha}..${headSha}`], {
+    cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
+  }).trimEnd();
+  const diff = execFileSync('git', ['diff', '-U10', `${baseSha}..${headSha}`], {
+    cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
+  });
+  const target = outPath && String(outPath).trim()
+    ? path.resolve(repoDir, String(outPath).trim())
+    : path.join(stateRoot(repoDir), '.omagy', 'artifacts', 'reviews', `review-${base7}..${head7}.diff`);
+  try {
+    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+      return { ok: false, exitCode: 1, error: 'Refusing to overwrite symlinked review package path.' };
+    }
+  } catch { /* ignore */ }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const body = `=== Commits (${base7}..${head7}, ${count} commit${count === 1 ? '' : 's'}) ===\n${log}\n\n=== Diffstat ===\n${stat}\n\n=== Diff (-U10) ===\n${diff}`;
+  fs.writeFileSync(target, body, { encoding: 'utf8', mode: 0o600 });
+  return { ok: true, exitCode: 0, path: target, base: base7, head: head7, commits: count };
+}
+
+export function extractGoalBrief(sourcePath, targetId, outPath = '') {
+  const rawSource = String(sourcePath || '').trim();
+  const resolvedSource = rawSource ? path.resolve(rawSource) : '';
+  const rawId = String(targetId ?? '').trim();
+  if (!resolvedSource || !rawId || !fs.existsSync(resolvedSource)) {
+    return { ok: false, exitCode: 1, error: 'Source file and target goal/task ID are required.' };
+  }
+  const st = fs.lstatSync(resolvedSource);
+  if (st.isSymbolicLink()) return { ok: false, exitCode: 1, error: 'Refusing to read symlinked plan/goals file.' };
+  if (!st.isFile()) return { ok: false, exitCode: 1, error: 'Source path must be a regular file.' };
+  const raw = fs.readFileSync(resolvedSource, 'utf8');
+  let extracted = '';
+  let resolvedId = rawId;
+  let title = '';
+
+  const trimmed = raw.trim();
+  if (resolvedSource.endsWith('.json') || trimmed.startsWith('{')) {
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { return { ok: false, exitCode: 1, error: 'Invalid JSON in goals file.' }; }
+    const goals = Array.isArray(parsed?.goals) ? parsed.goals : [];
+    const norm = rawId.toLowerCase();
+    const goal = goals.find((g) => g && typeof g === 'object' && (
+      String(g.id || '').toLowerCase() === norm || String(g.id || '').toLowerCase() === `g${norm}`
+    ));
+    if (!goal) return { ok: false, exitCode: 1, error: `Goal '${rawId}' not found in ${resolvedSource}.` };
+    resolvedId = String(goal.id || rawId);
+    title = String(goal.title || '');
+    const invariants = Array.isArray(parsed?.invariants) && parsed.invariants.length
+      ? `\n## Global Invariants\n${parsed.invariants.map((inv) => `- ${inv}`).join('\n')}\n`
+      : '';
+    const acceptance = Array.isArray(goal.acceptance) && goal.acceptance.length
+      ? `\n## Acceptance Criteria\n${goal.acceptance.map((a) => `- [ ] ${a}`).join('\n')}\n`
+      : '';
+    const deps = Array.isArray(goal.depends_on) && goal.depends_on.length ? goal.depends_on.join(', ') : 'none';
+    extracted = `# Goal ${resolvedId}: ${title}\n\n- **Rigor**: \`${goal.rigor || 'light'}\`\n- **Depends On**: ${deps}\n\n## Objective\n${goal.objective || ''}\n${invariants}${acceptance}`;
+  } else {
+    const escaped = rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const headingRe = new RegExp(`^(#{2,3})\\s+(?:(?:Task|Goal)\\s+)?(?:G?${escaped}|Task\\s+${escaped}|Goal\\s+${escaped})\\b[:\\s—-]*(.*)$`, 'i');
+    const anyHeadingRe = /^(#{1,3})\s+\S/;
+    const fenceRe = /^ {0,3}(`{3,}|~{3,})/;
+    const lines = raw.split(/\r?\n/);
+    let inFence = false;
+    let fenceChar = '';
+    let fenceLen = 0;
+    let capturing = false;
+    let captureLevel = 0;
+    const outLines = [];
+
+    for (const line of lines) {
+      const fMatch = line.match(fenceRe);
+      if (fMatch) {
+        const marker = fMatch[1];
+        const ch = marker[0];
+        if (!inFence) {
+          inFence = true;
+          fenceChar = ch;
+          fenceLen = marker.length;
+        } else if (ch === fenceChar && marker.length >= fenceLen && /^ {0,3}(?:`+|~+)\s*$/.test(line)) {
+          inFence = false;
+          fenceChar = '';
+          fenceLen = 0;
+        }
+      }
+      if (!inFence) {
+        if (!capturing) {
+          const hMatch = line.match(headingRe);
+          if (hMatch) {
+            capturing = true;
+            captureLevel = hMatch[1].length;
+            title = (hMatch[2] || '').trim();
+            outLines.push(line);
+            continue;
+          }
+        } else {
+          const nextH = line.match(anyHeadingRe);
+          if (nextH && nextH[1].length <= captureLevel) {
+            break;
+          }
+        }
+      }
+      if (capturing) outLines.push(line);
+    }
+    if (!outLines.length) {
+      return { ok: false, exitCode: 1, error: `Section for '${rawId}' not found in ${resolvedSource}.` };
+    }
+    extracted = `${outLines.join('\n').trimEnd()}\n`;
+  }
+
+  const target = outPath && String(outPath).trim()
+    ? path.resolve(String(outPath).trim())
+    : path.join(stateRoot(path.dirname(resolvedSource)), '.omagy', 'ultragoal', 'briefs', `goal-${safeId(resolvedId)}.md`);
+  try {
+    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+      return { ok: false, exitCode: 1, error: 'Refusing to overwrite symlinked brief path.' };
+    }
+  } catch { /* ignore */ }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, extracted, { encoding: 'utf8', mode: 0o600 });
+  return { ok: true, exitCode: 0, path: target, id: resolvedId, title };
+}
+
+// ---------- transcript ----------
+function lastUserMessage(transcriptPath, payload = null) {
+  if (transcriptPath && typeof transcriptPath === 'string') {
+    let text = '';
     try {
-      const size = fs.fstatSync(fd).size;
-      const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
-      const buf = Buffer.alloc(size - start);
-      fs.readSync(fd, buf, 0, buf.length, start);
-      text = buf.toString('utf8');
-    } finally { fs.closeSync(fd); }
-  } catch { return null; }
-  const lines = text.split('\n');
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    let o;
-    try { o = JSON.parse(line); } catch { continue; }
-    const type = String(o.type || '');
-    const isUser = /USER_INPUT/i.test(type) || o.source === 'USER_EXPLICIT' || o.role === 'user';
-    const content = o.content ?? o.text ?? o.message;
-    if (!isUser || typeof content !== 'string') continue;
-    const key = `${o.step_index ?? o.stepIndex ?? ''}:${o.created_at ?? o.createdAt ?? ''}:${content.length}`;
-    return { key, text: content };
+      const fd = fs.openSync(transcriptPath, 'r');
+      try {
+        const size = fs.fstatSync(fd).size;
+        const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+        const buf = Buffer.alloc(size - start);
+        fs.readSync(fd, buf, 0, buf.length, start);
+        text = buf.toString('utf8');
+      } finally { fs.closeSync(fd); }
+    } catch { text = ''; }
+    if (text) {
+      const lines = text.split('\n');
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        let o;
+        try { o = JSON.parse(line); } catch { continue; }
+        const type = String(o.type || '');
+        const isUser = /USER_INPUT/i.test(type) || o.source === 'USER_EXPLICIT' || o.role === 'user';
+        const content = o.content ?? o.text ?? o.message;
+        if (!isUser || typeof content !== 'string') continue;
+        const key = `${o.step_index ?? o.stepIndex ?? ''}:${o.created_at ?? o.createdAt ?? ''}:${content.length}`;
+        return { key, text: content };
+      }
+    }
+  }
+  const directInput = payload?.lastUserInput ?? payload?.last_user_input ?? payload?.prompt;
+  if (typeof directInput === 'string' && directInput.trim()) {
+    const trimmed = directInput.trim();
+    return { key: `input:${trimmed.length}:${trimmed.slice(0, 64)}`, text: directInput };
   }
   return null;
 }
@@ -741,6 +917,10 @@ function sessionStart(payload) {
   const conv = payload.conversationId || payload.conversation_id;
   const recordFile = runtimeFile(conv, 'routing');
   const record = readJson(recordFile) || {};
+  const rawTx = payload.transcriptPath || payload.transcript_path || payload.logPath;
+  const transcriptPath = (typeof rawTx === 'string' && rawTx.trim()) ? rawTx.trim() : (record.transcriptPath || null);
+  const rawArt = payload.artifactDirectoryPath || payload.artifact_directory_path;
+  const artifactDirectoryPath = (typeof rawArt === 'string' && rawArt.trim()) ? rawArt.trim() : (record.artifactDirectoryPath || null);
   const messages = [];
 
   const activeMsg = buildActiveModeMessage(roots, conv);
@@ -754,16 +934,20 @@ function sessionStart(payload) {
       wikiInjected = true;
     }
   }
-  writeJson(recordFile, { ...record, wikiInjected, at: new Date().toISOString() });
+  writeJson(recordFile, { ...record, wikiInjected, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
 function preInvocation(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
-  const user = lastUserMessage(payload.transcriptPath || payload.transcript_path);
+  const rawTx = payload.transcriptPath || payload.transcript_path || payload.logPath;
+  const user = lastUserMessage(rawTx, payload);
   const recordFile = runtimeFile(conv, 'routing');
   const record = readJson(recordFile) || {};
+  const transcriptPath = (typeof rawTx === 'string' && rawTx.trim()) ? rawTx.trim() : (record.transcriptPath || null);
+  const rawArt = payload.artifactDirectoryPath || payload.artifact_directory_path;
+  const artifactDirectoryPath = (typeof rawArt === 'string' && rawArt.trim()) ? rawArt.trim() : (record.artifactDirectoryPath || null);
   const userKey = user ? user.key : '';
   if (userKey && record.lastUserKey === userKey) return {};
   // No transcript visibility: only remind on the first invocation of a run.
@@ -793,11 +977,11 @@ function preInvocation(payload) {
     }
     const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
     for (const m of subdir.messages) messages.push(m);
-    writeJson(recordFile, { lastUserKey: userKey, wikiInjected, isSubagent: false, seenAgents: subdir.seen, at: new Date().toISOString() });
+    writeJson(recordFile, { lastUserKey: userKey, wikiInjected, isSubagent: false, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   } else {
     const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
     for (const m of subdir.messages) messages.push(m);
-    writeJson(recordFile, { lastUserKey: userKey, wikiInjected: Boolean(record.wikiInjected), isSubagent: true, seenAgents: subdir.seen, at: new Date().toISOString() });
+    writeJson(recordFile, { lastUserKey: userKey, wikiInjected: Boolean(record.wikiInjected), isSubagent: true, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   }
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
@@ -1414,6 +1598,218 @@ async function selftest() {
       sidecarCfg.has_web_ui === true && auxViews.length === 1 && auxViews[0].path === '/',
       `views=${auxViews.length}`);
 
+    // T1 & T2: buildReviewPackage valid commit range and empty/non-ancestor exitCode 3
+    const revRoot = path.join(ws, 'rev-ws');
+    let revValid = { ok: false };
+    let pkgBody = '';
+    let revEmpty = { ok: true };
+    let revNonAncestor = { ok: true };
+    let revErr = '';
+    try {
+      fs.mkdirSync(revRoot, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: revRoot });
+      execFileSync('git', ['config', 'user.email', 'selftest@example.com'], { cwd: revRoot });
+      execFileSync('git', ['config', 'user.name', 'Selftest'], { cwd: revRoot });
+      fs.writeFileSync(path.join(revRoot, 'sample.txt'), 'line1\nline2\n', 'utf8');
+      execFileSync('git', ['add', 'sample.txt'], { cwd: revRoot });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'feat: initial commit'], { cwd: revRoot });
+      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: revRoot, encoding: 'utf8' }).trim();
+      fs.writeFileSync(path.join(revRoot, 'sample.txt'), 'line1\nline2-updated\nline3\n', 'utf8');
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-q', '-am', 'fix: update sample'], { cwd: revRoot });
+      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: revRoot, encoding: 'utf8' }).trim();
+      const pkgOutPath = path.join(revRoot, '.omagy', 'artifacts', 'reviews', 'pkg.md');
+      revValid = buildReviewPackage(revRoot, baseSha, headSha, pkgOutPath);
+      pkgBody = fs.existsSync(pkgOutPath) ? fs.readFileSync(pkgOutPath, 'utf8') : '';
+      revEmpty = buildReviewPackage(revRoot, headSha, headSha, path.join(revRoot, 'empty.md'));
+      revNonAncestor = buildReviewPackage(revRoot, headSha, baseSha, path.join(revRoot, 'nonanc.md'));
+    } catch (e) {
+      revErr = e instanceof Error ? e.message : String(e);
+    }
+    check('buildReviewPackage writes commit log, diffstat, and -U10 diff for valid commit range',
+      revValid.ok === true && revValid.exitCode === 0 && revValid.commits === 1
+      && pkgBody.includes('=== Commits (') && pkgBody.includes('=== Diffstat ===') && pkgBody.includes('=== Diff (-U10) ===')
+      && pkgBody.includes('+line2-updated'),
+      revErr);
+
+    check('buildReviewPackage rejects 0-commit and non-ancestor ranges with exitCode 3',
+      revEmpty.ok === false && revEmpty.exitCode === 3
+      && revNonAncestor.ok === false && revNonAncestor.exitCode === 3,
+      revErr);
+
+    // T3: extractGoalBrief on goals.json and fence-aware markdown plans
+    const briefGoalsPath = path.join(ws, 'brief-goals.json');
+    writeJson(briefGoalsPath, {
+      objective: 'Test objective',
+      invariants: ['Invariant A'],
+      goals: [
+        { id: 'G1', title: 'First Goal', objective: 'Do G1', rigor: 'light', acceptance: ['A1'] },
+        { id: 'G2', title: 'Second Goal', objective: 'Do G2', rigor: 'heavy', depends_on: ['G1'], acceptance: ['A2'] },
+      ],
+    });
+    const briefMdPath = path.join(ws, 'brief-plan.md');
+    fs.writeFileSync(briefMdPath, [
+      '# Plan',
+      '### Task 1: First Task',
+      'Example inside fence:',
+      '```markdown',
+      '### Task 2: Fake Task Inside Fence',
+      'Do not match this.',
+      '```',
+      'Still in Task 1.',
+      '### Task 2: Real Second Task',
+      '- File: `src/real.js`',
+      '- Verify: `npm test`',
+      '### Task 3: Third Task',
+      'End.',
+    ].join('\n'), 'utf8');
+    const jsonBriefRes = extractGoalBrief(briefGoalsPath, 'G2', path.join(ws, 'out-g2.md'));
+    const jsonBriefText = fs.existsSync(path.join(ws, 'out-g2.md')) ? fs.readFileSync(path.join(ws, 'out-g2.md'), 'utf8') : '';
+    const mdBriefRes = extractGoalBrief(briefMdPath, '2', path.join(ws, 'out-t2.md'));
+    const mdBriefText = fs.existsSync(path.join(ws, 'out-t2.md')) ? fs.readFileSync(path.join(ws, 'out-t2.md'), 'utf8') : '';
+    check('extractGoalBrief extracts goals.json entries and fence-aware markdown Task sections',
+      jsonBriefRes.ok === true && jsonBriefRes.exitCode === 0 && jsonBriefText.includes('Goal G2: Second Goal')
+      && mdBriefRes.ok === true && mdBriefRes.exitCode === 0
+      && mdBriefText.startsWith('### Task 2: Real Second Task')
+      && !mdBriefText.includes('Fake Task Inside Fence')
+      && !mdBriefText.includes('### Task 3'));
+
+    // T4: sessionStart and preInvocation persist transcriptPath & artifactDirectoryPath and route lastUserInput fallback
+    sessionStart({ conversationId: conv, workspaceUris: [ws], transcriptPath: '/tmp/selftest-t1.jsonl', artifactDirectoryPath: '/tmp/selftest-artifacts' });
+    const rtAfterStart = readJson(runtimeFile(conv, 'routing')) || {};
+    preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: 'plain prompt without skills', transcript_path: '/tmp/selftest-t2.jsonl' });
+    const rtAfterPlain = readJson(runtimeFile(conv, 'routing')) || {};
+    const pDirectSkill = preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: '$plan update docs' });
+    const rtAfterSkill = readJson(runtimeFile(conv, 'routing')) || {};
+    const directSkillText = (pDirectSkill.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    check('sessionStart and preInvocation persist transcriptPath/artifactDirectoryPath and route lastUserInput fallback',
+      rtAfterStart.transcriptPath === '/tmp/selftest-t1.jsonl'
+      && rtAfterStart.artifactDirectoryPath === '/tmp/selftest-artifacts'
+      && rtAfterPlain.transcriptPath === '/tmp/selftest-t2.jsonl'
+      && rtAfterSkill.transcriptPath === '/tmp/selftest-t2.jsonl'
+      && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts'
+      && directSkillText.includes('$plan'));
+
+    // T5: plugin.json strict JSON, official 10-key Antigravity schema allowlist, <=160 char description, CHANGELOG version sync, and logo PNG dimensions
+    let strictPkg = null;
+    try { strictPkg = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'plugin.json'), 'utf8')); } catch {}
+    const ALLOWED_PLUGIN_KEYS = new Set(['name', 'description', 'logo', 'suggestedPrompts', 'displayName', 'version', 'author', 'homepage', 'repository', 'disabled']);
+    const unknownPluginKeys = strictPkg ? Object.keys(strictPkg).filter((k) => !ALLOWED_PLUGIN_KEYS.has(k)) : ['invalid'];
+    const promptsOk = Array.isArray(strictPkg?.suggestedPrompts)
+      && strictPkg.suggestedPrompts.length >= 1 && strictPkg.suggestedPrompts.length <= 3
+      && strictPkg.suggestedPrompts.every((p) => typeof p === 'string' && p.trim().length > 0);
+    const changelogRaw = fs.readFileSync(path.join(pluginRoot, 'CHANGELOG.md'), 'utf8');
+    const topChangelogVer = (changelogRaw.match(/^##\s+([0-9]+\.[0-9]+\.[0-9]+)/m) || [])[1] || '';
+    let logoBuf = Buffer.alloc(0);
+    try { logoBuf = fs.readFileSync(path.join(pluginRoot, 'assets', 'logo.png')); } catch {}
+    const isPng = logoBuf.length >= 24
+      && logoBuf[0] === 0x89 && logoBuf[1] === 0x50 && logoBuf[2] === 0x4e && logoBuf[3] === 0x47
+      && logoBuf.toString('ascii', 12, 16) === 'IHDR';
+    const logoWidth = isPng ? logoBuf.readUInt32BE(16) : 0;
+    const logoHeight = isPng ? logoBuf.readUInt32BE(20) : 0;
+    check('plugin.json is strict JSON matching official Antigravity schema (<=160 char description, version synced with CHANGELOG) and logo.png is square >=128px',
+      Boolean(strictPkg && strictPkg.name === 'oh-my-agy'
+        && unknownPluginKeys.length === 0
+        && promptsOk
+        && typeof strictPkg.description === 'string' && strictPkg.description.length > 0 && strictPkg.description.length <= 160
+        && strictPkg.version && strictPkg.version === topChangelogVer
+        && isPng && logoWidth === logoHeight && logoWidth >= 128),
+      `ver=${strictPkg?.version || 'none'} changelog=${topChangelogVer} descLen=${strictPkg?.description?.length || 0} unknownKeys=${unknownPluginKeys.join(',')} logo=${logoWidth}x${logoHeight}`);
+
+    // T6: All 26 skills/*/SKILL.md match SKILLS bidirectionally, <20,000 bytes, SDO frontmatter without ->, and valid ./references/ links
+    const skillsDir = path.join(pluginRoot, 'skills');
+    let skillsParity = false;
+    const skillIssues = [];
+    let diskSkillCount = 0;
+    try {
+      const diskSkillDirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
+      diskSkillCount = diskSkillDirs.length;
+      const expectedSkills = [...SKILLS].sort();
+      skillsParity = diskSkillDirs.length === expectedSkills.length && diskSkillDirs.every((d, i) => d === expectedSkills[i]);
+      for (const dirName of diskSkillDirs) {
+        const skillFile = path.join(skillsDir, dirName, 'SKILL.md');
+        if (!fs.existsSync(skillFile)) { skillIssues.push(`${dirName}:missing`); continue; }
+        const stat = fs.statSync(skillFile);
+        if (stat.size >= 20000) skillIssues.push(`${dirName}:size=${stat.size}`);
+        const raw = fs.readFileSync(skillFile, 'utf8');
+        const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        if (!fmMatch) { skillIssues.push(`${dirName}:no-frontmatter`); continue; }
+        const fm = fmMatch[1];
+        const fmName = (fm.match(/^name:\s*([^\r\n]+)/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
+        const fmDesc = (fm.match(/^description:\s*([^\r\n]+)/m) || [])[1]?.trim().replace(/^["']|["']$/g, '') || '';
+        if (fmName !== dirName) skillIssues.push(`${dirName}:name=${fmName}`);
+        if (!fmDesc || fmDesc.includes('->')) skillIssues.push(`${dirName}:sdo-arrow`);
+        const proseOnly = raw.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ').replace(/`[^`\n]+`/g, ' ');
+        const refRe = /\]\((\.\/references\/[^)#\s]+)\)/g;
+        let rm;
+        while ((rm = refRe.exec(proseOnly)) !== null) {
+          const refTarget = path.resolve(path.dirname(skillFile), rm[1]);
+          if (!fs.existsSync(refTarget)) skillIssues.push(`${dirName}:missing-ref=${rm[1]}`);
+        }
+      }
+    } catch (e) {
+      skillIssues.push(e instanceof Error ? e.message : String(e));
+    }
+    check('all 26 skills/*/SKILL.md match SKILLS, are <20KB, have SDO descriptions without ->, and resolve ./references/ links',
+      skillsParity && skillIssues.length === 0,
+      skillIssues.join(', ') || `count=${diskSkillCount}`);
+
+    // T7: rules/AGENTS.md <24KB, all 18 agents/*.md valid frontmatter + <antigravity_runtime>, and zero personal path leaks
+    const rulesPath = path.join(pluginRoot, 'rules', 'AGENTS.md');
+    let rulesSize = Infinity;
+    let agentCount = 0;
+    const agentIssues = [];
+    const pathLeaks = [];
+    try {
+      rulesSize = fs.existsSync(rulesPath) ? fs.statSync(rulesPath).size : Infinity;
+      const agentsDir = path.join(pluginRoot, 'agents');
+      const agentFiles = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort();
+      agentCount = agentFiles.length;
+      for (const af of agentFiles) {
+        const raw = fs.readFileSync(path.join(agentsDir, af), 'utf8');
+        const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        if (!fmMatch) { agentIssues.push(`${af}:no-fm`); continue; }
+        const fm = fmMatch[1];
+        if (!/^name:\s*\S+/m.test(fm) || !/^description:\s*\S+/m.test(fm)) agentIssues.push(`${af}:missing-keys`);
+        if (/^(?:level|skills):/m.test(fm)) agentIssues.push(`${af}:unsupported-key`);
+        if (!raw.includes('<antigravity_runtime>')) agentIssues.push(`${af}:no-runtime-tag`);
+      }
+      const leakRe = /\/(?:Users|home)\/[A-Za-z0-9._-]+\//;
+      const scanMarkdownDir = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) scanMarkdownDir(full);
+          else if (entry.isFile() && entry.name.endsWith('.md')) {
+            const text = fs.readFileSync(full, 'utf8');
+            if (leakRe.test(text)) pathLeaks.push(path.relative(pluginRoot, full));
+          }
+        }
+      };
+      scanMarkdownDir(path.join(pluginRoot, 'rules'));
+      scanMarkdownDir(path.join(pluginRoot, 'skills'));
+      scanMarkdownDir(path.join(pluginRoot, 'agents'));
+    } catch (e) {
+      agentIssues.push(e instanceof Error ? e.message : String(e));
+    }
+    check('rules/AGENTS.md <24KB, all 18 agents/*.md valid, and zero personal path leaks in rules/skills/agents',
+      rulesSize < 24000 && agentCount === 18 && agentIssues.length === 0 && pathLeaks.length === 0,
+      `rulesSize=${rulesSize} agents=${agentCount} issues=${agentIssues.join(';')} leaks=${pathLeaks.join(';')}`);
+
+    // T8: hooks/run.sh and sidecars/hud/run.sh avoid external dirname and sort -V, and hooks/run.sh runs under minimal PATH
+    const hooksRunSh = fs.readFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), 'utf8');
+    const hudRunSh = fs.readFileSync(path.join(pluginRoot, 'sidecars', 'hud', 'run.sh'), 'utf8');
+    let minimalPathOk = false;
+    try {
+      const minOut = execFileSync('/bin/sh', [path.join(pluginRoot, 'hooks', 'run.sh'), 'quality-gates', ws, 'ralplan'], {
+        env: { PATH: `${path.dirname(process.execPath)}:/bin`, HOME: ws },
+        encoding: 'utf8',
+      });
+      minimalPathOk = JSON.parse(minOut.trim()).ok === true;
+    } catch {}
+    check('hooks/run.sh and sidecars/hud/run.sh use pure POSIX expansion without dirname or sort -V',
+      !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
+      && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
+      && minimalPathOk);
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -1479,6 +1875,20 @@ async function main() {
     process.exitCode = res.ok ? 0 : 1;
     return;
   }
+  if (event === 'review-package') {
+    const [, , , cwdArg, baseArg, headArg, outArg] = process.argv;
+    const res = buildReviewPackage(cwdArg || process.cwd(), baseArg, headArg || 'HEAD', outArg || '');
+    process.stdout.write(`${JSON.stringify(res)}\n`);
+    process.exitCode = res.ok ? 0 : (res.exitCode || 1);
+    return;
+  }
+  if (event === 'goal-brief') {
+    const [, , , sourceArg, idArg, outArg] = process.argv;
+    const res = extractGoalBrief(sourceArg, idArg, outArg || '');
+    process.stdout.write(`${JSON.stringify(res)}\n`);
+    process.exitCode = res.ok ? 0 : (res.exitCode || 1);
+    return;
+  }
   const payload = parseJson(readStdin());
   let result = {};
   try {
@@ -1503,7 +1913,8 @@ async function main() {
 
 const isMainModule = Boolean(process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)));
 if (isMainModule) {
-  main().catch(() => {
+  main().catch((err) => {
+    process.stderr.write(`[oh-my-agy] main error: ${err instanceof Error ? err.stack || err.message : String(err)}\n`);
     process.stdout.write('{}\n');
   });
 }

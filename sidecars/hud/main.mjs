@@ -1306,7 +1306,8 @@ async function runSelftest() {
 
 const isMainModule = Boolean(process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)));
 if (isMainModule) {
-  if ((process.argv[2] || '').toLowerCase() === 'selftest') {
+  const modeArg = (process.argv[2] || '').toLowerCase();
+  if (modeArg === 'selftest' || modeArg === '--selftest') {
     runSelftest();
   } else {
     const port = Number(process.env.ANTIGRAVITY_SIDECAR_WEB_PORT || process.env.PORT || 0);

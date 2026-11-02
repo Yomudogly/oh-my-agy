@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.3.4`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.0`)** for Google Antigravity.
 
 ---
 
@@ -291,11 +291,12 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   /cancel team
   ```
 
-#### `/doctor` — Diagnostics & Health Check
-Verifies plugin placement, `hooks/run.sh selftest` (`44/44` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget, skills/agents integrity (including agent frontmatter keys), manifest version consistency, and stale `.omagy/state/` files.
-- **Example**:
+#### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session`)
+Verifies plugin placement, `hooks/run.sh selftest` (`52/52` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
+- **Examples**:
   ```text
   /doctor
+  /doctor --session
   ```
 
 #### `/omagy-setup` — Plugin Setup, Project Bootstrap & `.omx` Migration
@@ -305,12 +306,14 @@ Verifies user or project plugin installation, optionally creates a project `AGEN
   /omagy-setup
   ```
 
-#### `/skill` — Manage & Extract Reusable Skills
-Lists, inspects, adds, edits, scans, validates, or extracts reusable Antigravity skills (`SKILL.md`).
-- **Subcommands**: `list`, `info`, `search`, `add`, `edit`, `remove`, `validate`, `scan`, `sync`, `extract` (runs the 3-question Skillify gate to turn a recurring session workflow into a durable skill).
+#### `/skill` — Manage, Validate, Test & Extract Reusable Skills
+Lists, inspects, adds, edits, scans, validates, pressure-tests, or extracts reusable Antigravity skills (`SKILL.md`).
+- **Subcommands**: `list`, `info`, `search`, `add`, `edit`, `remove`, `validate` (includes SDO frontmatter and `<20KB` checks), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing + 5-rep micro-tests), `scan`, `sync`, `extract` (runs the 3-question Skillify gate to turn a recurring session workflow into a durable skill).
 - **Examples**:
   ```text
   /skill list
+  /skill validate
+  /skill test code-review
   /skill extract prisma-migration-check
   ```
 
@@ -421,19 +424,25 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 42-check offline hook selftest
+# 1. Run the 52-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
-# 2. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands)
+# 2. Pre-assemble a git review package (exits 3 on 0-commit or non-ancestor range)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh review-package . main HEAD .omagy/artifacts/reviews/review-pkg.md
+
+# 3. Extract a single goal/task brief from goals.json or a fence-aware markdown plan
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh goal-brief .omagy/ultragoal/goals.json G1 .omagy/ultragoal/briefs/goal-G1.md
+
+# 4. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh verify-evidence .omagy/evidence/task-1.json
 
-# 3. Validate optional .omagy/config.json qualityGates (deep-interview, ralplan, code-review)
+# 5. Validate optional .omagy/config.json qualityGates (deep-interview, ralplan, code-review)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh quality-gates .
 
-# 4. Append a crash-resilient newline-isolated JSONL record (auto-prepends \n if missing)
+# 6. Append a crash-resilient newline-isolated JSONL record (auto-prepends \n if missing)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh append-jsonl .omagy/ultragoal/ledger.jsonl '{"ts":"2026-10-24T00:00:00Z","goal_id":"G1","event":"start"}'
 
-# 5. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
+# 7. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl
 ```
 

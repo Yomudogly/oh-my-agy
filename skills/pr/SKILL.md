@@ -37,6 +37,10 @@ Assemble a reviewer-ready Pull Request description directly from the repository 
 - **ADR Test:** <Hard to reverse? Surprising without context? Real trade-off? — brief answers>
 - **Rollback:** `<exact revert/flag command or migration note>`
 - **Blast Radius:** <one line naming affected callers/subsystems>
+
+## Rulings Made & Deferred Minors
+- **Autonomous Rulings (`steer` / `ruling`):** <list each `Ruling: <decision> — <why> — <cost_if_wrong>` from `.omagy/ultragoal/ledger.jsonl`, or `None`>
+- **Deferred Minor Observations:** <non-blocking `LOW` / `Out-of-Scope Observations` from `$code-review`, or `None`>
 ```
 
 ## Section rules
@@ -56,6 +60,13 @@ Assemble a reviewer-ready Pull Request description directly from the repository 
    - Would a future reader find it surprising without session context?
    - Does it settle a real architectural or domain trade-off?
    If all three are "No", classify as a **Two-way door** and give the one-line revert command. If any is "Yes", classify accordingly, explain why, and recommend capturing the decision in `omagy_wiki/` or an ADR.
+
+## Branch Closeout & Worktree Hygiene
+
+When closing out a development branch or linked worktree after generating the PR body:
+1. Confirm a fresh passing test/verification run on the current `HEAD` before pushing or merging.
+2. Detect linked worktrees safely (`git rev-parse --git-dir` vs `--git-common-dir` combined with `[ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ]` so submodules are not misidentified as linked worktrees).
+3. Never run `git worktree remove --force` when untracked or unmerged files exist (`git status --porcelain --untracked-files=all`), and never delete a branch without explicit user confirmation.
 
 ## Output
 

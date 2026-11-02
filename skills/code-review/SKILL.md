@@ -20,26 +20,30 @@ Use this explicit opt-in for a merge-readiness review. It is read-only and never
 - Existing review artifacts and known risks, if any.
 - If the user says `continue`, advance the current review step rather than restarting.
 
-Record the scope first:
+Record the scope first (prefer generating a file-based review package so diffs never bloat the leader context window):
 ```sh
-git status --short
-git diff --stat
-git diff -- <scope>
+sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha> .omagy/artifacts/reviews/review-<base7>..<head7>.diff
 ```
+(`review-package` validates `git merge-base --is-ancestor` and commit count `> 0`, exiting with code `3` on an empty or wrong-branch range, and writes commit log, `--stat`, and `git diff -U10` to the file. For uncommitted working-tree reviews, use `git status --short` and `git diff --stat`.)
 
 ## Execution
 
 1. Identify changed files and review boundaries. Do not silently widen the scope.
+   - **Anti-Pre-Judging Guard**: never poison reviewer prompts with instructions to ignore or down-rate specific areas (`"do not flag X"`, `"at most LOW"`). Let the reviewer grade findings independently.
+   - **Scoped Fix Re-Review (`--re-review <fix_base_sha>`)**: on fix-round re-reviews after a `REQUEST CHANGES` verdict, generate a review package for `<fix_base_sha>..HEAD` and pass the prior findings list. Reviewers verify only whether prior findings were resolved and whether `<fix_base_sha>..HEAD` introduced new defects, quarantining untouched-code observations under `Out-of-Scope Observations`.
 2. Launch both lanes **in parallel**, in one `invoke_subagent` call with two entries, each on a clean context with explicit scope and artifacts. Respect the user's model selection (`Model: "inherit"`).
    - `TypeName: "code-reviewer"`, prompt:
      ```text
      CODE REVIEW TASK (Two-Axis: Spec Compliance & Project Standards)
      Review the supplied scope on two axes:
      1) Spec Axis: acceptance criteria, edge cases, and behavioral correctness.
+        - Spec silence is not permission: grade unhandled inputs by their effect on a reasonable user, not LOW merely because the spec omitted the trigger.
+        - Flag any defect mandated by the plan itself as HIGH (plan-mandated).
      2) Standards Axis: AGENTS.md, DESIGN.md, omagy_wiki/ conventions, security, quality, performance, and maintainability.
+     List any cross-task or out-of-diff items under "Cannot Verify from Diff".
      Return files reviewed, severity-rated findings with file:line evidence and concrete fixes,
      and a recommendation: APPROVE / REQUEST CHANGES / COMMENT. Do not review architecture.
-     Scope: <scope, diff command, spec/acceptance paths>
+     Scope: <review-package file path or diff command, spec/acceptance paths>
      ```
    - `TypeName: "architect"`, prompt:
      ```text
@@ -95,6 +99,14 @@ RECOMMENDATION: <APPROVE | REQUEST CHANGES | COMMENT>
 ```
 
 Fill in observed values, include scope, lane evidence references, unresolved risks, and validation gaps, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` when `.omagy/artifacts/code-review-<slug>-<timestamp>.md` is written.
+
+## Receiving review feedback (`receiving-code-review` discipline)
+
+When acting on review feedback from a human partner, GitHub PR reviewer, or `$code-review` lane:
+1. **No Performative Agreement**: never reply with `"You're absolutely right!"`, `"Great point!"`, or `"Thanks for catching that!"`. State the technical verification or fix directly.
+2. **Halt on Partially Ambiguous Batches**: if asked to fix items `1-6` and items `4,5` are unclear or conflict with the spec, clarify `4,5` before implementing the batch rather than guessing on half the list.
+3. **Verify External Suggestions Against the Codebase (YAGNI Check)**: before implementing an external reviewer's suggestion, `grep` callers and build targets to confirm the code path is live and the problem is real. Push back with concrete `file:line` evidence when a suggestion violates YAGNI or breaks an existing contract.
+4. **Inline PR Thread Replies**: when resolving GitHub PR review comments via `gh api`, reply directly to the comment thread (`repos/{owner}/{repo}/pulls/{pr}/comments/{id}/replies`) rather than posting a disconnected top-level PR comment.
 
 ## Exit condition
 

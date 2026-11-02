@@ -1,6 +1,6 @@
 ---
 name: autopilot
-description: "[oh-my-agy] Canonical autonomous orchestrator for hands-off delivery: supervised $deep-interview -> $ralplan -> $ultragoal chain with durable state and evidence-backed completion. Use when the user invokes $autopilot or asks for end-to-end autonomous delivery from an idea, issue, or requirements seed."
+description: "[oh-my-agy] Canonical autonomous orchestrator for hands-off delivery with durable state, consensus planning, and evidence-backed completion. Use when the user invokes $autopilot or asks for end-to-end autonomous delivery from an idea, issue, or requirements seed."
 ---
 
 # Autopilot

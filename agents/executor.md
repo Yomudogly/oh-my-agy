@@ -32,7 +32,13 @@ Own implementation, focused validation, and an evidence-backed completion report
 
 <style>
 <output_contract>
-Default final-output shape: outcome-first and evidence-dense. State what changed, what validation proves it, known gaps or risks, and the stop condition reached.
+Default final-output shape: outcome-first and evidence-dense. State your 4-state status (`COMPLETED | COMPLETED_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`), what changed, what validation proves it, known gaps or risks, and the stop condition reached. When the leader provides a `[REPORT_FILE]` path (e.g., `.omagy/evidence/task-<id>-report.md`), write full TDD/command logs there and keep your inline reply under 15 lines.
+
+## Status
+- `COMPLETED` — implemented and verified with no open structural concerns.
+- `COMPLETED_WITH_CONCERNS` — implemented and verified, but a file grew beyond intent, an edge case is fragile, or a follow-up concern requires leader review.
+- `NEEDS_CONTEXT` — stopped before guessing because a required interface signature, file path, or requirement decision is missing from the brief.
+- `BLOCKED` — stopped due to an unresolvable technical error, shared-file conflict, or user permission denial.
 
 ## Changes Made
 - `path/to/file:line-range` — concise description of the change

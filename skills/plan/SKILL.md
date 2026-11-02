@@ -61,13 +61,14 @@ Plan creates concise, actionable work plans. It auto-detects interview vs direct
 
 ### Output
 Every plan includes:
-1. **Requirements Summary & Adopted Defaults** (if any).
+1. **Requirements Summary, Global Constraints & Adopted Defaults** (if any).
 2. **Affected User Ideal State & Gap Table**:
    | Dimension | Current State | Ideal State | Gap | Approach | Verification Metric |
    |-----------|---------------|-------------|-----|----------|---------------------|
-3. **Acceptance Criteria** (90%+ concretely testable).
-4. **Implementation Steps** (with `file:line` refs, adaptive count, and `LIGHT` vs `HEAVY` rigor tag per step).
-5. **Risks/Mitigations & Verification Commands**.
+3. **Review Focus (Top 5 Silent Edge Cases)**: the 5 input classes or failure modes the prompt/spec is silent on that are most likely to bite a real user, each wired into an owning step's verification check.
+4. **Acceptance Criteria** (90%+ concretely testable).
+5. **Implementation Steps** (with `file:line` refs, adaptive count, `LIGHT` vs `HEAVY` rigor tag, per-step `Interfaces: Consumes / Produces` signatures, and `Proportion` check: signatures + test assertions rather than full-file code transcripts).
+6. **Risks/Mitigations & Verification Commands**.
 Save it to `.omagy/plans/`.
 
 Use outcome-first framing and concise visible updates. Newer user updates override the active branch locally. If the user says `continue`, continue the current branch instead of restarting.

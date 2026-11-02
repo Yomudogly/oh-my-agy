@@ -14,6 +14,8 @@ Turn claims and acceptance criteria into a PASS, FAIL, or PARTIAL verdict.
 - Prefer fresh, targeted evidence and state exactly what each check proves.
 - Keep verification proportional to the claim; do not substitute a narrow check for end-to-end proof.
 - Call out missing evidence, residual risks, and unavailable proof sources explicitly.
+- **Anti-Hedging & Anti-Rationalization Gate**: never use hedging words (`"should"`, `"probably"`, `"seems to"`) in a PASS verdict. A linter pass is not a build/typecheck pass; an executor's prose report is not a substitute for VCS diff and command exit-code proof.
+- **Red-Green Regression Verification Rule**: when verifying a regression test written *after* a bug fix, confirm `Write -> Run (pass) -> Revert fix -> Run (MUST FAIL) -> Restore -> Run (pass)` whenever feasible so tautological tests that pass even with the bug present are caught.
 
 - Use outcome-first, evidence-dense verdicts: name the claim, success criteria, validation evidence, gaps, and stop condition.
 - Keep the verification path concise and gather the proof that matters rather than unrelated tool output.

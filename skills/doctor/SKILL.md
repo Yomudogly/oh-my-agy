@@ -22,15 +22,15 @@ If the plugin directory is outside every discovery root, Antigravity will not lo
 
 | Check | How | Status |
 |---|---|---|
-| Plugin manifest | `plugin.json` parses as JSONC, has `name: "oh-my-agy"` and a non-empty `version` matching the top heading in `CHANGELOG.md` (ported from OMX v0.21.37 #3923) | CRITICAL if invalid or missing; WARN on version drift |
+| Plugin manifest | `plugin.json` parses via strict `JSON.parse()` (no `//` comments), uses only official Antigravity top-level keys (`name`, `displayName`, `version`, `description`, `logo`, `suggestedPrompts`, `author`, `homepage`, `repository`, `disabled`), has `description` `<= 160` chars, and has `version` matching the top heading in `CHANGELOG.md` (ported from OMX v0.21.37 #3923) | CRITICAL if invalid or missing; WARN on version drift or unknown keys |
 | Enabled | Antigravity's plugin list (`GetAllPlugins`; see the built-in `plugin` skill) shows oh-my-agy enabled with skills, agents, rules, and hooks | CRITICAL if missing; WARN if disabled |
 | Name collisions | other plugins/skills named `plan`, `design`, `code-review`, `team`, ... at a higher priority shadow ours | WARN |
 | Rules integrity & size | only `rules/AGENTS.md` exists in `rules/` (no duplicate `.md` files) and `wc -c rules/AGENTS.md` < 24000 bytes | WARN if duplicate rule files or over 24000 bytes |
-| Skills | every `skills/*/SKILL.md` has frontmatter `name` matching its directory and a non-empty `description` | CRITICAL per broken skill |
+| Skills & SDO | every `skills/*/SKILL.md` is `< 20000` bytes, has frontmatter `name` matching its directory, a non-empty `description` with no `->` workflow step-chain arrows, and valid relative `./references/` links | CRITICAL per broken skill |
 | Agents | every `agents/*.md` has `name` and `description` and no unrecognized top-level frontmatter keys such as `level` (ported from OMC v5.7.21 #4657) | CRITICAL per broken agent; WARN on unknown frontmatter keys |
 | Hooks JSON & symlinks | `hooks.json` parses; commands reference `./hooks/run.sh`; `PreToolUse` matcher covers `write_file`, `edit_file`, `apply_patch`, and `read_file`; no broken/dangling symlinks in `hooks/` (ported from OMC v5.7.19 #4631) | CRITICAL if invalid or dangling symlink |
 | HUD Sidecar | `sidecars/hud/sidecar.json` parses with `has_web_ui: true` and `SIDECAR_UI_ENTRYPOINT_AUX_PANE`, and `sh "<PLUGIN_DIR>/sidecars/hud/run.sh" selftest` prints `"selftest":"PASS"` | WARN if missing or failing |
-| Node | `cd /tmp && sh "<PLUGIN_DIR>/hooks/run.sh" selftest` prints `{"selftest":"PASS","passed":44,"failed":0}` (runs offline in a temp dir). If the sandbox denies it, rerun this one command with `BypassSandbox: true` | CRITICAL if node is missing or the selftest fails |
+| Node | `cd /tmp && sh "<PLUGIN_DIR>/hooks/run.sh" selftest` prints `{"selftest":"PASS","passed":52,"failed":0}` (runs offline in a temp dir). If the sandbox denies it, rerun this one command with `BypassSandbox: true` | CRITICAL if node is missing or the selftest fails |
 | Quality gates | if `.omagy/config.json` defines `qualityGates`, `sh "<PLUGIN_DIR>/hooks/run.sh" quality-gates "<workspace>"` returns `"ok":true` (ported from OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671) | WARN if invalid gate config |
 | Live hooks | `$TMPDIR/oh-my-agy/<conversationId>.routing.json` exists and its `at` matches the latest user message time (the PreInvocation hook wrote it). This needs no plugin-file access | WARN if missing or stale |
 | Hook PATH | if the selftest passes in your shell but hooks never fire, Antigravity's hook shell may lack nvm/homebrew in PATH. Set `OMAGY_NODE` or check that `run.sh` finds Node | WARN |
@@ -42,14 +42,21 @@ If the plugin directory is outside every discovery root, Antigravity will not lo
 Command sketch:
 ```bash
 P="<PLUGIN_DIR>"
-node -e "for (const f of process.argv.slice(1)) JSON.parse(require('fs').readFileSync(f,'utf8'))" "$P/hooks.json" && echo hooks.json OK
+node -e "for (const f of process.argv.slice(1)) JSON.parse(require('fs').readFileSync(f,'utf8'))" "$P/plugin.json" "$P/hooks.json" && echo manifests OK
 wc -c "$P/rules/AGENTS.md"
 for f in "$P"/skills/*/SKILL.md; do d=$(basename "$(dirname "$f")"); n=$(sed -n 's/^name: *//p' "$f" | head -1); [ "$d" = "$n" ] || echo "MISMATCH $f ($n)"; done
 for f in "$P"/agents/*.md; do grep -q '^name:' "$f" && grep -q '^description:' "$f" || echo "BAD AGENT $f"; done
 sh "$P/hooks/run.sh" selftest
 ls -la .omagy/state 2>/dev/null
 ```
-(`plugin.json` is JSONC, so validate it by stripping `//` comments first or by trusting the Antigravity plugin listing.)
+
+## Session Transcript Forensics (`$doctor --session [conversationId|path]`)
+
+When invoked with `--session` (or when diagnosing why a workflow drifted, repeated work, or skipped a skill gate), run the 7-dimension transcript forensics protocol in [session-forensics.md](./references/session-forensics.md):
+1. Resolve the transcript via `$TMPDIR/oh-my-agy/<conversationId>.routing.json` (`transcriptPath`) or `<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`.
+2. Enforce the **Context-Safety Protocol** (`wc -lc`, checking lines `> 100 KB`, extracting line numbers and metadata before reading step fields).
+3. Evaluate the 7 behavioral lenses (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) with `[line N / step S]` citations.
+4. When `--export [skeleton|evidence|full]` is requested, run the mandatory Two-Pass Redaction & Scrub Audit (`<SECRET-n>`, `<EMAIL-n>`, `<PERSON-n>`, `<HOST-n>`, `<REPO-n>`) before writing `.omagy/artifacts/session-forensics-<id>-<UTC>.md`.
 
 ## Report contract
 

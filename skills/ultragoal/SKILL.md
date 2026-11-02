@@ -66,6 +66,12 @@ Repeat until every goal is `complete` (or `superseded`):
 
 1. Pick the first `pending` goal whose dependencies are complete. Set it `in_progress`, append `started`, and set the phase to `executing`.
 2. Implement the goal: solo, or via an `executor` subagent for a bounded slice, or via `$team` when parallel lanes are justified.
+   - **Zero-Context-Bleed Brief & Review Handoffs**: extract per-goal briefs via `sh <plugin>/hooks/run.sh goal-brief .omagy/ultragoal/goals.json <goal_id>` and package commit ranges via `sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha>` so subagents read file paths instead of inline prompt dumps.
+   - **4-State Worker Routing & Model Escalation**: handle worker returns deterministically:
+     - `COMPLETED`: proceed to step 3 verification.
+     - `COMPLETED_WITH_CONCERNS`: inspect the reported concern (e.g., file growth or fragile edge case); either log a `Ruling:` (`event:"steer"`, `kind:"ruling"`) with `cost_if_wrong` or run a targeted fix pass before checkpointing.
+     - `NEEDS_CONTEXT`: supply the missing interface/context via `send_message` to the same worker conversation ID without incrementing `product_failures`.
+     - `BLOCKED`: if a worker on `Model: "flash"` or `"inherit"` stalls after 2 attempts on a complex implementation slice, escalate the retry to a higher model tier (`flash -> inherit -> pro`).
 3. Audit the goal against real artifacts (`current_phase:"verifying"`):
    - For `"rigor": "light"`, run targeted tests and acceptance checks directly.
    - For `"rigor": "heavy"`, form a `DoneClaim` (changed files, commands + exit codes, criterion mapping) and validate it (via the `verifier` subagent when independent confirmation is warranted) using the `AdversarialVerify` contract:
@@ -81,7 +87,7 @@ Repeat until every goal is `complete` (or `superseded`):
 
 - **Stale-Goal Reconciliation (on start/resume)**: Before executing a `pending` goal, run observable repo checks (`fileExists`, `fileContains`, `gitGrep`) against its target paths. If the repository already satisfies a goal's acceptance criteria from earlier work, verify with targeted tests and record a `checkpoint` with `note:"reconciled-from-repo"` instead of re-implementing.
 - **Explicit Steering**: Change the decomposition only with evidence. Append a `steer` ledger entry with `kind`, `evidence`, and `rationale`, then edit `goals.json` accordingly. Supported kinds: `add_subgoal`, `split_subgoal`, `reorder_pending`, `revise_pending_wording`, `amend_criterion`, `annotate_ledger`, `mark_blocked_superseded`. Never silently delete goals. Mark them `superseded` instead.
-- **Criterion Amendment Audit Trail**: When a goal's acceptance criterion must be adjusted due to newly discovered repo facts, append a `steer` (`kind:"amend_criterion"`) ledger entry recording `previous_criterion`, `amended_criterion`, and `evidence` so requirements changes remain auditable. Ordinary prose does not mutate the plan.
+- **Criterion Amendment & Autonomous Ruling Audit Trail (`Rulings, not stalls`)**: When a goal's acceptance criterion must be adjusted or an ambiguity/plan conflict is resolved autonomously against the spec without stalling the run, append a `steer` (`kind:"amend_criterion"` or `kind:"ruling"`) ledger entry recording `decision` (or `previous_criterion` / `amended_criterion`), `rationale`, `evidence`, and `cost_if_wrong` (`"Ruling: <what was decided> — <why> — <cost_if_wrong>"`). Surface all autonomous rulings and any deferred minor review observations explicitly under `"Rulings made & Deferred minors"` in the final closeout report. Ordinary prose does not mutate the plan.
 
 ## Team bridge
 

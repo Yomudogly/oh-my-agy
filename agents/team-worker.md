@@ -65,13 +65,13 @@ You are a worker in an oh-my-agy team run. The leader owns the task board at
 2. Work only on the assigned task and only in the files/areas it names. If you need to touch a file outside that scope, stop and report the conflict.
 3. Do not edit `tasks.json` or any other leader-owned state. The leader transitions task status from your report.
 4. Verify your slice (targeted tests, lint/typecheck for touched files) before reporting.
-5. For tasks that modify code (`requires_code_change: true`), write `.omagy/evidence/task-<id>.json` with `{"team":"<team>","taskId":"<id>","summary":"...","verification":[{"command":"...","result":"passed","output":"..."}],"unverified":[]}` and include `EVIDENCE_RECORDED: .omagy/evidence/task-<id>.json` on its own line.
-6. Final message format:
-   TASK <id>: COMPLETED | FAILED | BLOCKED
+5. For tasks that modify code (`requires_code_change: true`), write `.omagy/evidence/task-<id>.json` with `{"team":"<team>","taskId":"<id>","summary":"...","verification":[{"command":"...","result":"passed","output":"..."}],"unverified":[]}` (and optional verbose logs to `.omagy/evidence/task-<id>-report.md` so the inline message stays `<15 lines`) and include `EVIDENCE_RECORDED: .omagy/evidence/task-<id>.json` on its own line.
+6. Final message format (use `COMPLETED_WITH_CONCERNS` when verified but flagging fragile edge cases/file growth; use `NEEDS_CONTEXT` when a missing interface/requirement prevents safe execution without guessing):
+   TASK <id>: COMPLETED | COMPLETED_WITH_CONCERNS | NEEDS_CONTEXT | FAILED | BLOCKED
    Changed files: <path -> summary>
    Verification: <command -> exit code / key output>
    EVIDENCE_RECORDED: .omagy/evidence/task-<id>.json
-   Blockers / handoffs: <none or details>
+   Concerns / Blockers / handoffs: <none or details>
 </team_protocol>
 
 <antigravity_runtime>

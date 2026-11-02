@@ -22,7 +22,7 @@ Resolve `SRC` (this plugin's directory, two levels up from this `SKILL.md`).
 
 ## 3. Enable and restart
 - A newly added plugin **directory is discovered only at startup**. Ask the user to restart Antigravity.
-- Plugins are enabled by default. If the user previously disabled it, re-enable it via the built-in `plugin` skill flow (language-server `JetboxWriteState`) or link `[oh-my-agy](customization://oh-my-agy)` (never `plugin://`). Do not hand-edit `~/.gemini/config/config.json`.
+- Plugins are enabled by default. If the user previously disabled it, re-enable it via the built-in `plugin` skill flow (language-server `JetboxWriteState` keyed on `<dir>`, the install directory name `(.path | split("/") | last)`, never `plugin.json`'s `name`) or link `[oh-my-agy](customization://oh-my-agy)` (never `plugin://`). Do not hand-edit `~/.gemini/config/config.json`.
 - After restart, verify with `$doctor` and offer `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` to open the Auxiliary Pane status board.
 
 ## 4. Prepare the workspace (project-level, optional)
@@ -42,7 +42,7 @@ Do not migrate `.omx/state/` (runtime-specific). Leave the originals in place.
 
 ## Update / uninstall
 - Update: pull or replace the source directory (symlink installs update in place), then restart.
-- Uninstall: remove the plugin directory (or use the `plugin` skill's `DeletePlugin`). Workspace `.omagy/` and `omagy_wiki/` stay unless the user asks to purge them.
+- Uninstall: remove the plugin directory (or use the `plugin` skill's `DeletePlugin` keyed on `<dir>`; if the plugin is currently disabled, set `"enabled": true` via `JetboxWriteState` first so `~/.gemini/config/config.json` does not retain a stale disabled entry on reinstall). Workspace `.omagy/` and `omagy_wiki/` stay unless the user asks to purge them.
 
 ## Exit evidence
 Report scope, target path (and whether it is a symlink), executable bits, gitignore change, migrated paths, and the restart requirement. Run `$doctor` after the restart.
