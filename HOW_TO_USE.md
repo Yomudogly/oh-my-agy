@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.0`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.1`)** for Google Antigravity.
 
 ---
 
@@ -8,7 +8,7 @@ This guide covers every workflow skill, role subagent, hook, state file, and pra
 
 1. [How Invocations Work (`/` vs `$` vs Natural Language)](#1-how-invocations-work--vs--vs-natural-language)
 2. [Choosing the Right Workflow Lane](#2-choosing-the-right-workflow-lane)
-3. [All 26 Workflow Skills (With Flags & Examples)](#3-all-26-workflow-skills-with-flags--examples)
+3. [All 27 Workflow Skills (With Flags & Examples)](#3-all-27-workflow-skills-with-flags--examples)
    - [3.1 Discovery, Analysis & Prototyping](#31-discovery-analysis--prototyping)
    - [3.2 Planning & Consensus](#32-planning--consensus)
    - [3.3 Autonomous & Parallel Execution](#33-autonomous--parallel-execution)
@@ -42,6 +42,7 @@ In Antigravity, you can trigger `oh-my-agy` workflows in three ways:
 3. **Natural-Language Routing**:
    Even without a slash command, `oh-my-agy` routes clear intent phrases automatically:
    - `"analyze ..."`, `"investigate ..."`, `"why does ..."` -> `/analyze`
+   - `"deep research ..."` -> `/deep-research`
    - `"deep interview"`, `"interview me"`, `"don't assume"` -> `/deep-interview`
    - `"cancel"`, `"stop the workflow"` -> `/cancel`
    - `"continue"`, `"resume"`, `"keep going"` -> resumes the active `.omagy/state/*-state.json` from its `current_phase`
@@ -73,9 +74,25 @@ Is the task small, clear, and local?
 
 ---
 
-## 3. All 26 Workflow Skills (With Flags & Examples)
+## 3. All 27 Workflow Skills (With Flags & Examples)
 
 ### 3.1 Discovery, Analysis & Prototyping
+
+#### `/deep-research` — Multi-Lens Deep Research & Systems Analysis
+Runs a 5-phase investigation across **Technical**, **Business**, **Idea / Product**, and **Implementation** lenses: terminological scoping, Boolean query matrix generation (`hooks/run.sh research-matrix`), parallel subagent harvest (`explore`, `researcher`, `dependency-expert`, `architect`, `analyst`), Tier A–E source ranking with `[VERIFIED]` / `[DERIVED]` / `[ASSUMED]` claim tags, dialectical contradiction resolution, Mermaid systemic modeling, and a deterministic 5-dimension `>= 85/100` self-audit (`hooks/run.sh audit-research`).
+- **Flags**:
+  - `--technical`: Architecture tradeoffs, algorithms, scaling benchmarks, failure modes, and RFCs/standards.
+  - `--business`: TAM/SAM/SOM, ICP & pain points, competitive moats, unit economics, pricing, and GTM risk.
+  - `--idea`: First-principles problem validation, jobs-to-be-done, contrarian insight, MVP wedge, and kill criteria.
+  - `--implementation`: Codebase touchpoint map, SDK/package comparison, API version constraints, and migration/test plan.
+- **Output**: `.omagy/artifacts/research/deep-research-<slug>-<UTC>.md`
+- **Examples**:
+  ```text
+  /deep-research --technical "HNSW vs DiskANN vector indexing tradeoffs at 50M vectors"
+  /deep-research --business "Market landscape and unit economics for AI code review tools"
+  /deep-research --idea "Local-first collaborative markdown editor for engineering teams"
+  /deep-research --implementation "Integrating SQLite WASM with OPFS persistence in our web client"
+  ```
 
 #### `/analyze` — Grounded Repository & Root-Cause Analysis
 Read-only cross-file investigation using a **6-tier Evidence Strength Hierarchy** (`[T1]` Direct runtime reproduction down to `[T6]` Structural inference), an **Intent-vs-Reality Diff** table (`Match | Undocumented | Broken | Stale`), and a mandatory self-disconfirmation rebuttal pass.
@@ -277,7 +294,7 @@ Generates `.omagy/artifacts/handoff-<slug>-<UTC>.md` (and `handoff-latest.md`) c
   ```
 
 #### `/hud` — Workflow Status Board & Auxiliary Pane UI (`sidecar://oh-my-agy/hud/`)
-Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`Overview`, `Ultragoal`, `Team DAG`, `Interview`, `Reviews`, `Benchmarks`, `Visual Ralph`, `Loft`, `Wiki`, and `Doctor` tabs).
+Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`, and `Doctor` tabs).
 - **Example**:
   ```text
   /hud
@@ -292,7 +309,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session`)
-Verifies plugin placement, `hooks/run.sh selftest` (`52/52` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
+Verifies plugin placement, `hooks/run.sh selftest` (`54/54` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
 - **Examples**:
   ```text
   /doctor
@@ -424,7 +441,7 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 52-check offline hook selftest
+# 1. Run the 54-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Pre-assemble a git review package (exits 3 on 0-commit or non-ancestor range)
@@ -444,6 +461,12 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh append-jsonl .omagy/ultragoal
 
 # 7. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl
+
+# 8. Generate a lens-specific Boolean query matrix for /deep-research
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh research-matrix "Distributed Consensus" technical --json
+
+# 9. Audit a /deep-research report against the 8-section & 5-dimension (>=85) rubric
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh audit-research .omagy/artifacts/research/report.md --json
 ```
 
 ---

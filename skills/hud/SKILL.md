@@ -11,7 +11,7 @@ oh-my-codex's HUD had two layers: a Codex TUI statusline (`[tui] status_line` in
 
 When `sidecars/hud/sidecar.json` is present and the plugin is enabled, include a single one-click pill at the end of the HUD output (following Antigravity's `ui-plugin-navigation` skill rules: one single `SIDECAR_UI_ENTRYPOINT_AUX_PANE` view in `sidecar.json` so the Extensions menu shows only `oh-my-agy HUD`, with internal tabs inside the panel):
 
-- `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` (contains tabs for `Overview`, `Ultragoal`, `Team DAG`, `Interview`, `Reviews`, `Benchmarks`, `Visual Ralph`, `Loft`, `Wiki`, and `Doctor`)
+- `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` (contains 6 tabs: `Overview` with consolidated live modes/Ultragoal/Interview/Team/Review/Research cards, `Workflows` lane guide, searchable `Skills` catalog with quick-start commands, `Subagents` specialist roster, `Wiki`, and `Doctor`)
 
 ## Presets
 - `minimal`: one line, e.g. `[OMA] autopilot:ultragoal | ultragoal:3/7`

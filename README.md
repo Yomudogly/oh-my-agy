@@ -8,7 +8,8 @@ Multi-agent workflow layer for [Google Antigravity](https://antigravity.google).
 - **Durable Goal Ledgers**: repo-native `goals.json` + `ledger.jsonl` execution (`/ultragoal`) with `light`/`heavy` rigor tiering and `product` vs `harness` failure triage
 - **Coordinated Subagent Teams**: parallel worker waves on a leader-owned DAG task board (`/team`) with work-shape model routing (`flash` / `inherit` / `pro`) and verified completion evidence
 - **Adversarial QA & Dual-Lane Review**: 9-class trigger-mapped dynamic QA (`/ultraqa`) and Two-Axis + Demolition/ADR code review (`/code-review`)
-- **18 Role Subagents & 26 Workflow Skills**: including causal hypothesis tracing (`tracer`), post-modification simplification (`code-simplifier`), throwaway prototyping (`/loft`), PR paper-trail assembly (`/pr`), and session continuation packets (`/handoff`)
+- **Multi-Lens Deep Research**: 5-phase technical, business, idea, and implementation investigations (`/deep-research`) with Boolean query matrices, Tier A–E source ranking, `[VERIFIED]`/`[DERIVED]`/`[ASSUMED]` tags, and a 5-dimension `>=85` self-audit
+- **18 Role Subagents & 27 Workflow Skills**: including causal hypothesis tracing (`tracer`), post-modification simplification (`code-simplifier`), throwaway prototyping (`/loft`), PR paper-trail assembly (`/pr`), and session continuation packets (`/handoff`)
 - **Persistent Project Wiki & Working Agreements**: markdown knowledge base and guardrail ledger under `omagy_wiki/` (`/wiki`)
 
 All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle hooks run on a single dependency-free Node.js script.
@@ -22,17 +23,17 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── plugin.json            # Antigravity manifest (v0.4.0, strict JSON)
+├── plugin.json            # Antigravity manifest (v0.4.1, strict JSON)
 ├── assets/logo.png        # Plugin icon
-├── HOW_TO_USE.md          # Complete guide to all 26 skills, 18 subagents, hooks & recipes
+├── HOW_TO_USE.md          # Complete guide to all 27 skills, 18 subagents, hooks & recipes
 ├── rules/AGENTS.md        # always-on operating contract (<24 KB)
 ├── hooks.json             # SessionStart + PreInvocation routing/wiki, Stop continuation, opt-in PreToolUse guard
 ├── hooks/
 │   ├── run.sh             # POSIX-portable Node locator (homebrew/volta/fnm/nvm/Windows), fails open if absent
-│   └── omagy-hook.mjs     # hook runtime + `review-package` + `goal-brief` + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
-├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`)
+│   └── omagy-hook.mjs     # hook runtime + `review-package` + `goal-brief` + `research-matrix` + `audit-research` + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
+├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`: Overview, Workflows, Skills, Subagents, Wiki, Doctor)
 ├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
-└── skills/                # 26 workflow skills + progressive-disclosure `references/`
+└── skills/                # 27 workflow skills + progressive-disclosure `references/`
 ```
 
 ## Install
@@ -64,7 +65,7 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 Run the offline hook selftest at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":52,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":54,"failed":0}
 sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest # -> {"selftest":"PASS",...}
 ```
 
@@ -76,9 +77,9 @@ Delete the plugin directory and restart Antigravity. Workspace `.omagy/` and `om
 
 ## Usage
 
-> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 26 skills (with flags and examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, and end-to-end recipes.
+> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 27 skills (with flags and examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, and end-to-end recipes.
 
-In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot build X`, `/code-review`, `/handoff`, `/cancel`). `$<skill>` is also supported by the `PreInvocation` hook as an alias (useful if a name like `/plan` overlaps with Antigravity's built-in `/plan` slash command).
+In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot build X`, `/deep-research --technical "topic"`, `/code-review`, `/handoff`, `/cancel`). `$<skill>` is also supported by the `PreInvocation` hook as an alias (useful if a name like `/plan` overlaps with Antigravity's built-in `/plan` slash command).
 
 | Skill | Purpose |
 |---|---|
@@ -89,7 +90,7 @@ In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot 
 | `/team` | parallel subagent workers on a leader-owned DAG task board with completion evidence |
 | `/code-review` | independent `code-reviewer` + `architect` lanes (Two-Axis + Demolition/ADR tests), deterministic verdict |
 | `/ultraqa` | 9-class trigger-mapped adversarial e2e QA cycles |
-| `/analyze`, `/best-practice-research` | 6-tier evidence-ranked analysis, multi-lane causal tracing, and intent-vs-reality diffing |
+| `/deep-research`, `/analyze`, `/best-practice-research` | 4-lens deep research (`--technical`, `--business`, `--idea`, `--implementation`) with `>=85` scorecard audit, 6-tier evidence analysis, and official-docs lookup |
 | `/ai-slop-cleaner`, `/design`, `/loft`, `/pr`, `/visual-ralph` | anti-slop cleanup, `DESIGN.md` crafting, throwaway prototyping, PR assembly, and visual-diff loops |
 | `/autoresearch`, `/performance-goal` | validator-gated research and benchmark optimization loops |
 | `/ask` | second opinion from local `claude` / `gemini` / `codex` CLIs |

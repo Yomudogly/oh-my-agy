@@ -2,6 +2,22 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.4.1
+
+*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
+
+- **Streamlined 6-Tab HUD Sidecar with Auto-Discovered Catalogs (`sidecars/hud/main.mjs`, `skills/hud/SKILL.md`, `omagy_wiki/hud-sidecar-architecture.md`)**:
+  - Consolidated `ALLOWED_VIEWS` from 10 tabs down to **6 high-signal tabs**: `Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`, and `Doctor` (normalizing legacy `?view=` parameters to `overview`).
+  - Folded active/recent **Ultragoal**, **Deep Interview**, **Team Board**, and **Reviews & Deep Research** status cards directly into `Overview` while preserving all snapshot keys in `buildHudSnapshot()` for backward compatibility.
+  - Added `buildPluginCatalog(pluginRoot, activeModes)` which dynamically parses all `27` `skills/*/SKILL.md` and `18` `agents/*.md` from disk and enriches them with:
+    - **`Workflows` panel**: 8 interactive workflow blueprints (`/autopilot`, `/deep-interview`, `/ralplan`, `/ultragoal`, `/team`, `/deep-research`, `/code-review & /ultraqa`, and `Solo`) with stage pipelines, live `ACTIVE` badges, artifact paths, and copyable quick-start commands.
+    - **`Skills` panel**: live search input, category filter pills, and cards for all `27` skills showing flags, how-to-use guidance, and one-click copyable quick-start prompts.
+    - **`Subagents` panel**: lane-filtered cards for all `18` role subagents displaying work-shape model routing (`flash` / `inherit` / `pro`), responsibilities, and when to invoke each specialist.
+- **New `/deep-research` Skill & Zero-Dependency Node CLI Helpers (`skills/deep-research/`, `hooks/omagy-hook.mjs`)**:
+  - Added `skills/deep-research/SKILL.md` (`27`th skill) with progressive-disclosure references (`references/lenses-and-rubric.md`, `references/report-template.md`) focused on 4 explicit research lenses (`--technical`, `--business`, `--idea`, `--implementation`), parallel subagent dispatch (`explore`, `researcher`, `dependency-expert`, `architect`, `analyst`), Tier A–E source ranking with `[VERIFIED]` / `[DERIVED]` / `[ASSUMED]` claim-kind tags, dialectical contradiction resolution, Mermaid systemic modeling, and a 5-dimension `>= 85/100` self-audit saved under `.omagy/artifacts/research/`.
+  - Added **`research-matrix "<topic>" [lens] [--json]`** (`buildResearchMatrix`) and **`audit-research <reportPath> [--json]`** (`auditResearchReport`) CLI subcommands in `hooks/omagy-hook.mjs`, eliminating Python runtime dependencies.
+  - Expanded offline hook selftest suite from `52` to `54` checks (`T1`–`T10`) and HUD sidecar selftest to verify the 6 core views, 27-skill / 18-subagent / 8-workflow auto-discovered catalog, `buildResearchMatrix`, and `auditResearchReport`.
+
 ## 0.4.0
 
 *Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***

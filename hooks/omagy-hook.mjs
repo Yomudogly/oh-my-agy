@@ -7,6 +7,10 @@
 //   pre-tool-use    : opt-in planning-mode write guard (never auto-allows)
 //   stop            : bounded, progress-aware continuation (NO_TOOL_CALL / model_stop) + notifications
 //   verify-evidence : deterministic validator for .omagy/evidence/<file>.json team task evidence
+//   review-package  : pre-assembled commit log + diffstat + -U10 diff for $code-review
+//   goal-brief      : single-goal or fence-aware markdown Task section extractor
+//   research-matrix : multi-lens Boolean query matrix & terminological blueprint generator for $deep-research
+//   audit-research  : 5-dimension >=85 rubric & required-section linter for $deep-research reports
 //   selftest        : offline verification of the above against an isolated temp workspace
 // Contract: JSON on stdin, JSON on stdout, camelCase keys (Antigravity hook protocol).
 
@@ -18,9 +22,9 @@ import { execFileSync, spawn } from 'node:child_process';
 
 const SKILLS = [
   'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'autoresearch', 'best-practice-research',
-  'cancel', 'code-review', 'configure-notifications', 'deep-interview', 'design', 'doctor', 'handoff',
-  'hud', 'loft', 'omagy-setup', 'performance-goal', 'plan', 'pr', 'ralplan', 'skill', 'team',
-  'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
+  'cancel', 'code-review', 'configure-notifications', 'deep-interview', 'deep-research', 'design',
+  'doctor', 'handoff', 'hud', 'loft', 'omagy-setup', 'performance-goal', 'plan', 'pr', 'ralplan',
+  'skill', 'team', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
 ];
 // Antigravity built-in slash commands: `/name` belongs to Antigravity, only `$name` routes to us.
 const AGY_SLASH = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork', 'teamwork-preview', 'learn', 'boost', 'plugin', 'automation']);
@@ -745,6 +749,252 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, extracted, { encoding: 'utf8', mode: 0o600 });
   return { ok: true, exitCode: 0, path: target, id: resolvedId, title };
+}
+
+// ---------- deep-research helpers (research-matrix & audit-research) ----------
+const RESEARCH_LENS_FACETS = {
+  technical: [
+    'system architecture and algorithmic tradeoffs',
+    'latency throughput and scaling benchmarks',
+    'failure modes reliability and security boundaries',
+    'standards protocols and empirical limits',
+    'state of the art vs production bottlenecks',
+  ],
+  business: [
+    'market sizing TAM SAM SOM and growth drivers',
+    'ideal customer profile ICP and acute pain points',
+    'competitive landscape moat and switching costs',
+    'unit economics pricing model and margin structure',
+    'go-to-market distribution and regulatory risk',
+  ],
+  idea: [
+    'first-principles problem validation and jobs to be done',
+    'non-obvious user behavior and contrarian thesis',
+    'minimum viable wedge and adoption friction',
+    'prior failed attempts and structural why-now catalysts',
+    'falsification criteria and kill signals',
+  ],
+  implementation: [
+    'SDK package ecosystem maintenance and license comparison',
+    'API surface version compatibility and breaking changes',
+    'codebase integration boundaries and data schema migration',
+    'testing strategy observability and rollback plan',
+    'edge cases concurrency and security hardening',
+  ],
+  general: [
+    'theoretical and architectural foundations',
+    'empirical evidence and measured benchmarks',
+    'business and economic unit dynamics',
+    'implementation patterns and operational risks',
+    'regulatory governance and failure modes',
+  ],
+};
+
+export function buildResearchMatrix(topic, rawLens = 'general', customFacets = []) {
+  const topicClean = String(topic || '').trim().replace(/^["']|["']$/g, '');
+  if (!topicClean) {
+    return { ok: false, exitCode: 1, error: 'Research topic is required.' };
+  }
+  const normLens = String(rawLens || 'general').trim().replace(/^--/, '').toLowerCase();
+  const lens = RESEARCH_LENS_FACETS[normLens] ? normLens : 'general';
+  const facets = Array.isArray(customFacets) && customFacets.length
+    ? customFacets.map((f) => String(f).trim()).filter(Boolean)
+    : RESEARCH_LENS_FACETS[lens];
+
+  const terminologicalBlueprint = {
+    coreTopic: topicClean,
+    lens,
+    recommendedTermClusters: [
+      `${topicClean} Core Mechanics & Canonical Definitions`,
+      `${topicClean} ${lens.charAt(0).toUpperCase() + lens.slice(1)} Drivers & Constraints`,
+      `${topicClean} Counter-Theories, Failure Modes & Critiques`,
+      `${topicClean} Cross-Domain Analogues & Prior Art`,
+    ],
+  };
+
+  const queryMatrix = {
+    foundational: [
+      `"${topicClean}" AND ("systematic review" OR "meta-analysis" OR "benchmark" OR "specification")`,
+      `"${topicClean}" AND ("state of the art" OR "architecture" OR "first principles")`,
+      `"${topicClean}" AND ("evolution" OR "paradigm shift" OR "postmortem" OR "case study")`,
+    ],
+    facets: facets.map((facet) => `"${topicClean}" AND "${facet}"`),
+    relationalAndCausal: [
+      `("${topicClean}") AND ("causal mechanism" OR "feedback loop" OR "second-order effects")`,
+      `("${topicClean}") AND ("bottleneck" OR "scaling limit" OR "tradeoff")`,
+      `("${topicClean}") AND ("quantitative metrics" OR "effect size" OR "unit economics" OR "latency")`,
+    ],
+    contradictionAndCritique: [
+      `+"${topicClean}" AND ("criticism" OR "rebuttal" OR "limitations" OR "paradox")`,
+      `+"${topicClean}" AND ("competing alternatives" OR "failure modes" OR "anti-pattern")`,
+      `+"${topicClean}" AND ("unintended consequences" OR "migration pain" OR "post-mortem")`,
+    ],
+  };
+
+  const sourceTierFilters = {
+    Tier_A_Primary_Standards_And_Benchmarks: [
+      `site:.gov OR site:.edu OR site:ietf.org OR site:w3.org "${topicClean}"`,
+      `"${topicClean}" ("official documentation" OR "RFC" OR "systematic review" OR "reproducible benchmark")`,
+    ],
+    Tier_B_Peer_Reviewed_And_Primary_Filings: [
+      `"${topicClean}" ("peer reviewed" OR "10-K" OR "empirical dataset" OR "production postmortem")`,
+      `"${topicClean}" ("architecture decision record" OR "reference implementation")`,
+    ],
+  };
+
+  const mdLines = [
+    `# Search Strategy & Boolean Matrix: ${topicClean} (Lens: ${lens})`,
+    '',
+    '## 1. Terminological Apparatus Clusters',
+    ...terminologicalBlueprint.recommendedTermClusters.map((c) => `- [ ] **Cluster:** ${c}`),
+    '',
+    '## 2. Foundational Queries (Tier A / B)',
+    ...queryMatrix.foundational.map((q) => `- \`${q}\``),
+    '',
+    `## 3. Lens Facet Queries (${lens})`,
+    ...queryMatrix.facets.map((q) => `- \`${q}\``),
+    '',
+    '## 4. Relational & Causal Mechanism Queries',
+    ...queryMatrix.relationalAndCausal.map((q) => `- \`${q}\``),
+    '',
+    '## 5. Contradiction, Critique & Falsification Queries',
+    ...queryMatrix.contradictionAndCritique.map((q) => `- \`${q}\``),
+  ];
+
+  return {
+    ok: true,
+    exitCode: 0,
+    topic: topicClean,
+    lens,
+    terminologicalBlueprint,
+    queryMatrix,
+    sourceTierFilters,
+    markdown: `${mdLines.join('\n')}\n`,
+  };
+}
+
+const REQUIRED_RESEARCH_SECTIONS = [
+  { name: 'Executive Summary', re: /^##\s+.*Executive Summary/im },
+  { name: 'Introduction & Context', re: /^##\s+.*(?:Introduction|Context|Scope)/im },
+  { name: 'Research Methodology', re: /^##\s+.*(?:Methodology|Evidentiary|Source)/im },
+  { name: 'Multidimensional Analysis', re: /^##\s+.*(?:Analysis|Investigation|Lens)/im },
+  { name: 'Interpretation & Synthesis', re: /^##\s+.*(?:Interpretation|Synthesis|Systemic)/im },
+  { name: 'Gaps, Risks & Limitations', re: /^##\s+.*(?:Gaps|Limitations|Uncertainty|Risks|Falsification)/im },
+  { name: 'Conclusions & Recommendations', re: /^##\s+.*(?:Conclusion|Recommendations|Action Matrix)/im },
+  { name: 'Self-Assessment Scorecard', re: /^##\s+.*(?:Self-Assessment|Scorecard)/im },
+];
+
+const RESEARCH_RUBRIC_DIMENSIONS = [
+  { key: 'depth', label: 'Depth of Analysis', re: /Depth\s+of\s+Analysis/i },
+  { key: 'systemicity', label: 'Systemicity', re: /Systemicity/i },
+  { key: 'criticalThinking', label: 'Critical Thinking', re: /Critical\s+Thinking/i },
+  { key: 'interdisciplinarity', label: 'Interdisciplinarity / Lens Rigor', re: /(?:Interdisciplinarity|Lens\s*(?:&|and)?\s*Cross-Domain\s+Rigor|Cross-Domain)/i },
+  { key: 'practicalApplicability', label: 'Practical Applicability', re: /Practical\s+(?:Applicability|Actionability)/i },
+];
+
+export function auditResearchReport(reportPath) {
+  const rawPath = String(reportPath || '').trim();
+  const resolved = rawPath ? path.resolve(rawPath) : '';
+  if (!resolved || !fs.existsSync(resolved)) {
+    return { ok: false, exitCode: 1, error: `Report file not found: ${rawPath}`, errors: [`Report file not found: ${rawPath}`], warnings: [] };
+  }
+  const st = fs.lstatSync(resolved);
+  if (st.isSymbolicLink() || !st.isFile()) {
+    return { ok: false, exitCode: 1, error: 'Refusing to audit symlinked or non-regular file.', errors: ['Refusing to audit symlinked or non-regular file.'], warnings: [] };
+  }
+  const content = fs.readFileSync(resolved, 'utf8');
+  const words = content.trim().split(/\s+/).filter(Boolean);
+  const wordCount = words.length;
+  const errors = [];
+  const warnings = [];
+
+  for (const sec of REQUIRED_RESEARCH_SECTIONS) {
+    if (!sec.re.test(content)) {
+      errors.push(`Missing required section: '${sec.name}'`);
+    }
+  }
+  if (!/^##\s+.*Glossary/im.test(content)) {
+    warnings.push("Optional section not found: 'Glossary' (encouraged for domain-dense topics)");
+  }
+  if (!/```mermaid/i.test(content)) {
+    warnings.push("Optional element not found: 'Mermaid diagram' (encouraged for systemic modeling)");
+  }
+  if (wordCount < 600) {
+    warnings.push(`Report is relatively concise (${wordCount} words). Target for deep research is 1,200-5,000+ words.`);
+  }
+
+  let execSummaryWords = 0;
+  const execMatch = content.match(/^##\s+.*Executive Summary[^\r\n]*\r?\n([\s\S]*?)(?=^##\s+|(?![\s\S]))/im);
+  if (execMatch) {
+    execSummaryWords = execMatch[1].trim().split(/\s+/).filter(Boolean).length;
+    if (execSummaryWords < 100) {
+      warnings.push(`Executive Summary is brief (${execSummaryWords} words). Target is 250-500 words.`);
+    }
+  }
+
+  const claimCounts = {
+    verified: (content.match(/\[VERIFIED\]/g) || []).length,
+    derived: (content.match(/\[DERIVED\]/g) || []).length,
+    assumed: (content.match(/\[ASSUMED\]/g) || []).length,
+  };
+  if (claimCounts.verified + claimCounts.derived + claimCounts.assumed === 0) {
+    warnings.push('No [VERIFIED], [DERIVED], or [ASSUMED] claim-kind tags found in report.');
+  }
+
+  const scores = {};
+  const lines = content.split(/\r?\n/);
+  for (const dim of RESEARCH_RUBRIC_DIMENSIONS) {
+    const candidateRows = lines.filter((l) => l.includes('|') && dim.re.test(l));
+    if (candidateRows.length === 0) {
+      errors.push(`Missing scorecard row for dimension: '${dim.label}'`);
+      continue;
+    }
+    let achievedScore = null;
+    for (const rowLine of candidateRows) {
+      const cells = rowLine.split('|').map((c) => c.trim()).filter(Boolean);
+      // Skip cell[0] (dimension name). Look through remaining cells, skipping target cells like ">= 85" or "\\ge 85".
+      for (let i = 1; i < cells.length; i += 1) {
+        const cell = cells[i].replace(/[`*_~]/g, '').trim();
+        if (/(?:>=|≤|>=|\\ge|\\le|target)/i.test(cell)) continue;
+        const numMatch = /^(\d{1,3})(?:\s*\/\s*100|\s*%)?$/.exec(cell);
+        if (numMatch) {
+          const val = Number(numMatch[1]);
+          if (val >= 0 && val <= 100) {
+            achievedScore = val;
+            break;
+          }
+        }
+      }
+      if (achievedScore !== null) break;
+    }
+    if (achievedScore === null) {
+      errors.push(`Could not parse numeric score (0-100) for dimension: '${dim.label}'`);
+    } else {
+      scores[dim.key] = achievedScore;
+      if (achievedScore < 85) {
+        errors.push(`Dimension '${dim.label}' scored ${achievedScore}/100 (target benchmark is >= 85).`);
+      }
+    }
+  }
+
+  const scoreVals = Object.values(scores);
+  const compositeScore = scoreVals.length === RESEARCH_RUBRIC_DIMENSIONS.length
+    ? Math.round((scoreVals.reduce((a, b) => a + b, 0) / scoreVals.length) * 10) / 10
+    : null;
+
+  const ok = errors.length === 0;
+  return {
+    ok,
+    exitCode: ok ? 0 : 1,
+    file: resolved,
+    wordCount,
+    execSummaryWords,
+    scores,
+    compositeScore,
+    claimCounts,
+    errors,
+    warnings,
+  };
 }
 
 // ---------- transcript ----------
@@ -1715,7 +1965,7 @@ async function selftest() {
         && isPng && logoWidth === logoHeight && logoWidth >= 128),
       `ver=${strictPkg?.version || 'none'} changelog=${topChangelogVer} descLen=${strictPkg?.description?.length || 0} unknownKeys=${unknownPluginKeys.join(',')} logo=${logoWidth}x${logoHeight}`);
 
-    // T6: All 26 skills/*/SKILL.md match SKILLS bidirectionally, <20,000 bytes, SDO frontmatter without ->, and valid ./references/ links
+    // T6: All 27 skills/*/SKILL.md match SKILLS bidirectionally, <20,000 bytes, SDO frontmatter without ->, and valid ./references/ links
     const skillsDir = path.join(pluginRoot, 'skills');
     let skillsParity = false;
     const skillIssues = [];
@@ -1749,7 +1999,7 @@ async function selftest() {
     } catch (e) {
       skillIssues.push(e instanceof Error ? e.message : String(e));
     }
-    check('all 26 skills/*/SKILL.md match SKILLS, are <20KB, have SDO descriptions without ->, and resolve ./references/ links',
+    check('all 27 skills/*/SKILL.md match SKILLS, are <20KB, have SDO descriptions without ->, and resolve ./references/ links',
       skillsParity && skillIssues.length === 0,
       skillIssues.join(', ') || `count=${diskSkillCount}`);
 
@@ -1809,6 +2059,55 @@ async function selftest() {
       !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
       && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
       && minimalPathOk);
+
+    // T9 (T-DR-1): buildResearchMatrix across technical, business, idea, and implementation lenses
+    const rmTech = buildResearchMatrix('Vector Indexing', '--technical');
+    const rmBiz = buildResearchMatrix('AI Code Review', 'business');
+    const rmIdea = buildResearchMatrix('Local-First Sync', 'idea');
+    const rmImpl = buildResearchMatrix('SQLite WASM', 'implementation');
+    check('buildResearchMatrix generates lens-specific Boolean query matrices and terminological clusters across all 4 lenses',
+      rmTech.ok === true && rmTech.lens === 'technical' && rmTech.queryMatrix.facets.length === 5
+      && rmBiz.ok === true && rmBiz.lens === 'business' && rmBiz.markdown.includes('Lens: business')
+      && rmIdea.ok === true && rmIdea.lens === 'idea' && rmIdea.queryMatrix.contradictionAndCritique.length === 3
+      && rmImpl.ok === true && rmImpl.lens === 'implementation' && rmImpl.sourceTierFilters.Tier_A_Primary_Standards_And_Benchmarks.length >= 2);
+
+    // T10 (T-DR-2): auditResearchReport passes >=85 report and fails <85 or missing sections without confusing >=85 target column
+    const validReportPath = path.join(ws, 'valid-research-report.md');
+    fs.writeFileSync(validReportPath, [
+      '# Deep Research Report',
+      '## 1. Executive Summary',
+      'This report evaluates vector indexing [VERIFIED] and cost projections [DERIVED] under explicit assumptions [ASSUMED].',
+      '## 2. Introduction & Context',
+      'Context and scope boundaries.',
+      '## 3. Research Methodology & Source Tiers',
+      'Tier A and Tier B sources.',
+      '## 4. Multidimensional Analysis',
+      'Technical and business analysis.',
+      '## 5. Interpretation, Synthesis & Systemic Modeling',
+      '```mermaid\nflowchart TD\nA --> B\n```',
+      '## 6. Uncertainty, Risks & Limitations',
+      'Epistemic gaps.',
+      '## 7. Conclusions & Strategic Recommendations',
+      'Action matrix.',
+      '## 8. Glossary',
+      'Terms.',
+      '## 9. Research Self-Assessment Scorecard',
+      '| Dimension | Target Score | Actual Score | Justification |',
+      '| :--- | :---: | :---: | :--- |',
+      '| **1. Depth of Analysis** | >= 85 | 92 | Deep first-principles analysis |',
+      '| **2. Systemicity** | \\(\\ge 85\\) | 88 | Causal loops mapped |',
+      '| **3. Critical Thinking** | >= 85 | 90 | Contradictions arbitrated |',
+      '| **4. Interdisciplinarity** | >= 85 | 86 | Multi-lens synthesis |',
+      '| **5. Practical Applicability** | >= 85 | 94 | Concrete builder matrix |',
+    ].join('\n'), 'utf8');
+    const lowScoreReportPath = path.join(ws, 'low-research-report.md');
+    fs.writeFileSync(lowScoreReportPath, fs.readFileSync(validReportPath, 'utf8').replace('| **2. Systemicity** | \\(\\ge 85\\) | 88 |', '| **2. Systemicity** | >= 85 | 78 |'), 'utf8');
+    const auditPass = auditResearchReport(validReportPath);
+    const auditFail = auditResearchReport(lowScoreReportPath);
+    check('auditResearchReport passes valid >=85 report and fails <85 dimension without confusing >=85 target column',
+      auditPass.ok === true && auditPass.exitCode === 0 && auditPass.compositeScore === 90
+      && auditPass.claimCounts.verified === 1 && auditPass.claimCounts.derived === 1 && auditPass.claimCounts.assumed === 1
+      && auditFail.ok === false && auditFail.exitCode === 1 && auditFail.scores.systemicity === 78);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
@@ -1886,6 +2185,47 @@ async function main() {
     const [, , , sourceArg, idArg, outArg] = process.argv;
     const res = extractGoalBrief(sourceArg, idArg, outArg || '');
     process.stdout.write(`${JSON.stringify(res)}\n`);
+    process.exitCode = res.ok ? 0 : (res.exitCode || 1);
+    return;
+  }
+  if (event === 'research-matrix') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const positional = rawArgs.filter((a) => a !== '--json');
+    const topicArg = positional[0] || '';
+    const lensArg = positional[1] || 'general';
+    const customFacets = positional.slice(2);
+    const res = buildResearchMatrix(topicArg, lensArg, customFacets);
+    if (!res.ok) {
+      process.stdout.write(`${JSON.stringify(res)}\n`);
+      process.exitCode = res.exitCode || 1;
+      return;
+    }
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    } else {
+      process.stdout.write(res.markdown);
+    }
+    process.exitCode = 0;
+    return;
+  }
+  if (event === 'audit-research') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const positional = rawArgs.filter((a) => a !== '--json');
+    const reportArg = positional[0] || '';
+    const res = auditResearchReport(reportArg);
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    } else {
+      const lines = [
+        `DEEP RESEARCH AUDIT: ${res.file || reportArg} (${res.ok ? 'PASS' : 'FAIL'}, composite=${res.compositeScore ?? 'n/a'})`,
+        `Claims: [VERIFIED]=${res.claimCounts?.verified ?? 0} [DERIVED]=${res.claimCounts?.derived ?? 0} [ASSUMED]=${res.claimCounts?.assumed ?? 0}`,
+      ];
+      for (const e of res.errors || []) lines.push(`ERROR: ${e}`);
+      for (const w of res.warnings || []) lines.push(`WARN: ${w}`);
+      process.stdout.write(`${lines.join('\n')}\n`);
+    }
     process.exitCode = res.ok ? 0 : (res.exitCode || 1);
     return;
   }

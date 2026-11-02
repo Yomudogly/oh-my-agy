@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // oh-my-agy HUD Sidecar (UI Extension for Antigravity Auxiliary Pane).
-// Strictly read-only status & artifact board (OMX #3963 zero-mutation invariant) serving
-// `sidecar://oh-my-agy/hud/` (`?view=overview|ultragoal|team|interview|reviews|benchmarks|visual-ralph|loft|wiki|doctor`).
+// Strictly read-only status, workflow, skill & subagent hub (OMX #3963 zero-mutation invariant) serving
+// `sidecar://oh-my-agy/hud/` (`?view=overview|workflows|skills|subagents|wiki|doctor`).
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -15,7 +15,8 @@ const STALE_MS = 6 * 3600 * 1000;
 const TEAM_COMPLETED_WINDOW_MS = 20 * 60 * 1000;
 const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
 const WIKI_CATEGORIES = new Set(['architecture', 'decision', 'pattern', 'debugging', 'environment', 'session-log', 'reference', 'convention']);
-const ALLOWED_VIEWS = ['overview', 'ultragoal', 'team', 'interview', 'reviews', 'benchmarks', 'visual-ralph', 'loft', 'wiki', 'doctor'];
+export const ALLOWED_VIEWS = ['overview', 'workflows', 'skills', 'subagents', 'wiki', 'doctor'];
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const MIME_BY_EXT = {
   '.png': 'image/png',
@@ -29,6 +30,339 @@ const MIME_BY_EXT = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 };
+
+const SKILL_GUIDE_META = {
+  autopilot: {
+    category: 'Orchestration & Planning',
+    flags: [],
+    quickStart: '/autopilot build a CLI that validates and converts CSV files to JSON',
+    howToUse: 'Runs the full supervised chain ($deep-interview -> $ralplan -> $ultragoal) with durable state under .omagy/state/autopilot-state.json.',
+  },
+  'deep-interview': {
+    category: 'Orchestration & Planning',
+    flags: ['--quick', '--standard', '--deep', '--autoresearch'],
+    quickStart: '/deep-interview I want to add role-based access control to this app',
+    howToUse: 'Runs Socratic clarification rounds via ask_question until ambiguity is <= 20% and writes an execution-ready spec to .omagy/specs/.',
+  },
+  ralplan: {
+    category: 'Orchestration & Planning',
+    flags: ['--interactive', '--deliberate', '--hyperplan', '--advisory'],
+    quickStart: '/ralplan --deliberate "redesign the token refresh pipeline"',
+    howToUse: 'Generates a PRD + test spec in .omagy/plans/ and runs sequential Architect then Critic subagent consensus reviews.',
+  },
+  plan: {
+    category: 'Orchestration & Planning',
+    flags: ['--interview', '--direct', '--review'],
+    quickStart: '$plan --direct "refactor the webhook retry queue"',
+    howToUse: 'Explore-first lightweight planning for bounded features when a full Socratic deep-interview is not needed.',
+  },
+  ultragoal: {
+    category: 'Execution & Teams',
+    flags: ['create-goals', 'complete-goals'],
+    quickStart: '/ultragoal execute the approved plan in .omagy/plans/',
+    howToUse: 'Decomposes specs/plans into .omagy/ultragoal/goals.json and executes them sequentially with ledger.jsonl audit receipts and light/heavy verification.',
+  },
+  team: {
+    category: 'Execution & Teams',
+    flags: [],
+    quickStart: '/team execute the approved plan across parallel backend and frontend workers',
+    howToUse: 'Coordinates up to 6 parallel team-worker subagents on a leader-owned DAG task board (.omagy/state/team/) with verified task-<id>.json evidence.',
+  },
+  'performance-goal': {
+    category: 'Execution & Teams',
+    flags: [],
+    quickStart: '/performance-goal reduce cold-start latency by 25% using npm run bench',
+    howToUse: 'Evaluator-gated optimization loop that records baseline and small reversible patch checkpoints under .omagy/goals/performance/.',
+  },
+  autoresearch: {
+    category: 'Execution & Teams',
+    flags: [],
+    quickStart: '/autoresearch run the mission in .omagy/specs/autoresearch-cache/',
+    howToUse: 'Validator-gated research loop that continues until a validator script or architect review passes.',
+  },
+  'deep-research': {
+    category: 'Research & Analysis',
+    flags: ['--technical', '--business', '--idea', '--implementation'],
+    quickStart: '/deep-research --technical "HNSW vs DiskANN vector indexing tradeoffs at 50M vectors"',
+    howToUse: 'Runs a 5-phase investigation (Boolean query matrix, parallel subagents, Tier A-E sources with [VERIFIED]/[DERIVED]/[ASSUMED] tags, and >=85 scorecard audit) into .omagy/artifacts/research/.',
+  },
+  analyze: {
+    category: 'Research & Analysis',
+    flags: [],
+    quickStart: '/analyze why the session middleware drops cookies on redirect',
+    howToUse: 'Read-only cross-file repository analysis with 6-tier evidence ranking, competing hypothesis tracing, and Intent-vs-Reality diffs.',
+  },
+  'best-practice-research': {
+    category: 'Research & Analysis',
+    flags: [],
+    quickStart: '/best-practice-research current Next.js App Router caching and revalidation rules',
+    howToUse: 'Fast, read-only official-documentation and upstream version check for an already-chosen technology.',
+  },
+  ask: {
+    category: 'Research & Analysis',
+    flags: ['claude', 'gemini', 'codex'],
+    quickStart: '/ask claude "review our event-sourcing schema for edge cases"',
+    howToUse: 'Queries a locally installed external CLI advisor (Claude, Gemini, or Codex) and saves the response under .omagy/artifacts/.',
+  },
+  'code-review': {
+    category: 'Review, QA & Cleanup',
+    flags: ['--re-review'],
+    quickStart: '/code-review the changes on my current branch',
+    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict.',
+  },
+  ultraqa: {
+    category: 'Review, QA & Cleanup',
+    flags: ['--tests', '--build', '--lint', '--typecheck', '--interactive', '--custom'],
+    quickStart: '/ultraqa --tests --interactive "checkout flow"',
+    howToUse: 'Runs up to 5 cycles of 9-class adversarial QA (boundary inputs, concurrency, idempotency, failure injection) with automated diagnosis and fixes.',
+  },
+  'ai-slop-cleaner': {
+    category: 'Review, QA & Cleanup',
+    flags: [],
+    quickStart: '/ai-slop-cleaner clean up src/services/',
+    howToUse: 'Locks behavior with regression tests first, then removes dead code, duplicate wrappers, and unnecessary abstractions in bounded passes.',
+  },
+  pr: {
+    category: 'Review, QA & Cleanup',
+    flags: [],
+    quickStart: '/pr draft a pull request body for this branch',
+    howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail (summary, verification receipts, rulings, and ADR reversibility).',
+  },
+  design: {
+    category: 'Design & Prototyping',
+    flags: [],
+    quickStart: '/design create DESIGN.md for our developer dashboard',
+    howToUse: 'Creates or refreshes repo-local DESIGN.md with typography, color tokens, layout scroll-owner rules, and the Impeccable Craft Floor.',
+  },
+  'visual-ralph': {
+    category: 'Design & Prototyping',
+    flags: [],
+    quickStart: '/visual-ralph match the hero section to reference.png',
+    howToUse: 'Iterative frontend implementation loop driven by vision subagent verdicts and pixel/overlay comparison under .omagy/artifacts/visual-ralph/.',
+  },
+  loft: {
+    category: 'Design & Prototyping',
+    flags: [],
+    quickStart: '/loft prototype 3 layout variants for the timeline switcher',
+    howToUse: 'Builds a throwaway prototype under .omagy/artifacts/loft/<slug>/index.html to settle a UI or pure-logic fork before production coding.',
+  },
+  wiki: {
+    category: 'Knowledge, Control & Setup',
+    flags: ['add', 'query', 'read', 'lint', 'delete'],
+    quickStart: '/wiki query architecture',
+    howToUse: 'Manages persistent repo knowledge in omagy_wiki/ (architecture, decisions, debugging notes, and [by:human] working agreements).',
+  },
+  handoff: {
+    category: 'Knowledge, Control & Setup',
+    flags: [],
+    quickStart: '/handoff save session context before /compact',
+    howToUse: 'Writes a self-contained continuation packet to .omagy/artifacts/handoff-latest.md with state pointers, verified work, and a copy-paste resume prompt.',
+  },
+  hud: {
+    category: 'Knowledge, Control & Setup',
+    flags: ['--preset=minimal', '--preset=focused', '--preset=full'],
+    quickStart: '/hud --preset=full',
+    howToUse: 'Renders a read-only chat status table of active .omagy/ modes, Ultragoal progress, and team boards, plus a link to this Aux Pane HUD.',
+  },
+  cancel: {
+    category: 'Knowledge, Control & Setup',
+    flags: ['--force', '--all'],
+    quickStart: '/cancel autopilot',
+    howToUse: 'Cleanly terminates active workflow modes, preserves unmerged subagent worktrees, and marks state files cancelled.',
+  },
+  doctor: {
+    category: 'Knowledge, Control & Setup',
+    flags: ['--session', '--export'],
+    quickStart: '/doctor',
+    howToUse: 'Audits plugin manifests, SDO skill compliance, hook selftests, stale states, and 7-dimension session transcript forensics (--session).',
+  },
+  skill: {
+    category: 'Knowledge, Control & Setup',
+    flags: ['list', 'add', 'edit', 'remove', 'scan', 'test'],
+    quickStart: '/skill test deep-research',
+    howToUse: 'Creates, validates, and pressure-tests Antigravity skills (RED -> GREEN -> REFACTOR behavioral subagent evaluation).',
+  },
+  'omagy-setup': {
+    category: 'Knowledge, Control & Setup',
+    flags: [],
+    quickStart: '/omagy-setup',
+    howToUse: 'Installs or updates oh-my-agy in user or workspace scope, configures .gitignore, and migrates legacy .omx artifacts.',
+  },
+  'configure-notifications': {
+    category: 'Knowledge, Control & Setup',
+    flags: [],
+    quickStart: '/configure-notifications setup macOS notification on stop',
+    howToUse: 'Configures stop/idle webhook or local command notifications in .omagy/config.json.',
+  },
+};
+
+const SUBAGENT_GUIDE_META = {
+  explore: {
+    lane: 'Discovery & Research',
+    modelTier: 'flash | inherit',
+    whenToUse: 'Fast, read-only repo lookup: locate files, symbols, call graphs, and existing dependency usage before planning or editing.',
+  },
+  researcher: {
+    lane: 'Discovery & Research',
+    modelTier: 'inherit',
+    whenToUse: 'External official documentation, upstream API signatures, release notes, RFCs, and Tier A-C evidence for /deep-research and /best-practice-research.',
+  },
+  'dependency-expert': {
+    lane: 'Discovery & Research',
+    modelTier: 'inherit',
+    whenToUse: 'Evaluate whether/which package or SDK to adopt, upgrade, replace, or migrate (maintenance, bundle size, license, security).',
+  },
+  analyst: {
+    lane: 'Discovery & Research',
+    modelTier: 'inherit',
+    whenToUse: 'Surface hidden requirements, product/business edge cases, unstated assumptions, and lateral alternatives before planning.',
+  },
+  planner: {
+    lane: 'Planning & Architecture',
+    modelTier: 'inherit',
+    whenToUse: 'Author right-sized, evidence-backed implementation plans (prd-<slug>.md and test-spec-<slug>.md) with explicit task interfaces.',
+  },
+  architect: {
+    lane: 'Planning & Architecture',
+    modelTier: 'pro | inherit',
+    whenToUse: 'Read-only architectural review, steelman antithesis, Demolition/ADR tests, and CLEAR / WATCH / BLOCK rulings in /ralplan and /code-review.',
+  },
+  critic: {
+    lane: 'Planning & Architecture',
+    modelTier: 'pro | inherit',
+    whenToUse: 'Sequential quality gate after Architect in /ralplan: issues APPROVE / ITERATE / REJECT against principles, edge cases, and testability.',
+  },
+  executor: {
+    lane: 'Execution & Debugging',
+    modelTier: 'inherit',
+    whenToUse: 'Autonomous implementation worker for bounded goal/task slices with explicit owned files, acceptance criteria, and verification commands.',
+  },
+  'team-worker': {
+    lane: 'Execution & Debugging',
+    modelTier: 'flash | inherit | pro',
+    whenToUse: 'Dispatched by the /team leader on a shared git worktree/workspace to complete a DAG task and write .omagy/evidence/task-<id>.json.',
+  },
+  debugger: {
+    lane: 'Execution & Debugging',
+    modelTier: 'inherit',
+    whenToUse: 'Root-cause isolation, stack-trace backward tracing, find-polluter test bisection, and 4-layer defense-in-depth bug fixes.',
+  },
+  tracer: {
+    lane: 'Execution & Debugging',
+    modelTier: 'pro | inherit',
+    whenToUse: 'Competing-hypothesis causal tracing with 6-tier evidence ranking, disconfirmation probes, and discriminating next-step experiments.',
+  },
+  'code-simplifier': {
+    lane: 'Execution & Debugging',
+    modelTier: 'inherit',
+    whenToUse: 'Post-modification cleanup pass to simplify control flow, remove dead wrappers, and tighten naming without changing behavior.',
+  },
+  'test-engineer': {
+    lane: 'Review & Verification',
+    modelTier: 'inherit',
+    whenToUse: 'Design and harden unit/integration/e2e tests using Name-the-Break, Exercise-the-Real-Thing, mutation checks, and condition-based waiting.',
+  },
+  verifier: {
+    lane: 'Review & Verification',
+    modelTier: 'inherit',
+    whenToUse: 'Independent completion gate (AdversarialVerify) running fresh commands and Red-Green revert checks to confirm or reject a DoneClaim.',
+  },
+  'code-reviewer': {
+    lane: 'Review & Verification',
+    modelTier: 'inherit',
+    whenToUse: 'Severity-rated review of a pre-assembled review-package diff with file:line evidence, Spec-Silence checks, and scoped --re-review.',
+  },
+  'security-reviewer': {
+    lane: 'Review & Verification',
+    modelTier: 'pro | inherit',
+    whenToUse: 'OWASP Top 10, auth/session boundaries, injection, path traversal, and secret exposure audit on security-sensitive changes.',
+  },
+  designer: {
+    lane: 'Design & Visual',
+    modelTier: 'inherit',
+    whenToUse: 'UI/UX design system authoring (DESIGN.md) and polished frontend implementation enforcing the Impeccable Craft Floor and 320px reflow.',
+  },
+  vision: {
+    lane: 'Design & Visual',
+    modelTier: 'inherit',
+    whenToUse: 'Visual/media analysis of screenshots, mockups, and live renders, issuing scored Visual Ralph verdicts and pixel-diff fix lists.',
+  },
+};
+
+const WORKFLOW_BLUEPRINTS = [
+  {
+    id: 'autopilot',
+    title: 'Supervised End-to-End Delivery (/autopilot)',
+    modeKey: 'autopilot',
+    stages: ['$deep-interview', '$ralplan (Planner -> Architect -> Critic)', '$ultragoal (Execute -> Verify)', '$code-review'],
+    whenToUse: 'When starting from an idea, feature request, or issue and you want full requirements clarification, consensus planning, durable goal execution, and final review in one recoverable run.',
+    quickStart: '/autopilot build a CLI that converts CSV files to JSON with schema validation',
+    artifacts: '.omagy/state/autopilot-state.json, .omagy/specs/, .omagy/plans/, .omagy/ultragoal/',
+  },
+  {
+    id: 'deep-interview',
+    title: 'Socratic Requirements Clarification (/deep-interview)',
+    modeKey: 'deep-interview',
+    stages: ['Preflight Context', 'One-Question Rounds (ask_question)', 'Pressure Pass & Builder Check', 'Spec (.omagy/specs/)'],
+    whenToUse: 'When scope, non-goals, or decision boundaries are ambiguous and you want quantitative ambiguity gating (<= 20%) before writing code.',
+    quickStart: '/deep-interview I want to redesign our notification system',
+    artifacts: '.omagy/context/, .omagy/interviews/, .omagy/specs/deep-interview-<slug>.md',
+  },
+  {
+    id: 'ralplan',
+    title: 'Multi-Agent Consensus Planning (/ralplan & $plan)',
+    modeKey: 'ralplan',
+    stages: ['Optional --hyperplan (5 Personas)', 'Planner (PRD + Test Spec)', 'Architect Review (Steelman + ADR)', 'Critic Gate (APPROVE / ITERATE)'],
+    whenToUse: 'When architecture, cross-module interfaces, or silent edge cases need independent Architect and Critic review before implementation begins.',
+    quickStart: '/ralplan --deliberate "migrate session storage to Redis"',
+    artifacts: '.omagy/plans/prd-<slug>.md, .omagy/plans/test-spec-<slug>.md, .omagy/plans/ralplan-review-<slug>.md',
+  },
+  {
+    id: 'ultragoal',
+    title: 'Durable Multi-Goal Execution (/ultragoal)',
+    modeKey: 'ultragoal',
+    stages: ['Decompose goals.json', 'Extract Goal Brief', 'Execute Slice', 'Verify (Light / Heavy Verifier)', 'Append ledger.jsonl', 'Final Review Gate'],
+    whenToUse: 'When executing a multi-step spec or plan that needs crash-resilient progress tracking, rigor tiering, and verification receipts.',
+    quickStart: '/ultragoal complete-goals',
+    artifacts: '.omagy/ultragoal/brief.md, .omagy/ultragoal/goals.json, .omagy/ultragoal/ledger.jsonl',
+  },
+  {
+    id: 'team',
+    title: 'Coordinated Parallel Subagent Team (/team)',
+    modeKey: 'team',
+    stages: ['DAG Task Board (tasks.json)', 'Wave Dispatch (Workspace: share)', 'Worker Evidence (task-<id>.json)', 'Leader Verify & Merge'],
+    whenToUse: 'When an approved plan has 2-6 independent module slices that can be implemented in parallel by specialized subagents.',
+    quickStart: '/team run parallel workers on the approved plan',
+    artifacts: '.omagy/state/team/<slug>/tasks.json, .omagy/evidence/task-<id>.json',
+  },
+  {
+    id: 'deep-research',
+    title: 'Multi-Lens Deep Research (/deep-research)',
+    modeKey: 'deep-research',
+    stages: ['Lens & Terminological Scope', 'Boolean Query Matrix (research-matrix)', 'Parallel Subagent Harvest (Tier A-E)', 'Synthesis & Mermaid Modeling', '>=85 Scorecard Audit (audit-research)'],
+    whenToUse: 'When investigating technical architecture tradeoffs, business/market landscapes, product/idea validation, or pre-implementation SDK/codebase choices.',
+    quickStart: '/deep-research --technical "SQLite WAL concurrency limits vs Postgres for multi-tenant SaaS"',
+    artifacts: '.omagy/artifacts/research/deep-research-<slug>-<UTC>.md',
+  },
+  {
+    id: 'review-qa',
+    title: 'Dual-Lane Code Review & Adversarial QA (/code-review & /ultraqa)',
+    modeKey: 'ultraqa',
+    stages: ['Pre-Assemble Review Package', 'Independent Code-Reviewer + Architect', '9-Class Adversarial QA Matrix', 'Deterministic Verdict'],
+    whenToUse: 'Before merging a branch (/code-review) or when stress-testing runnable behavior against boundary, concurrency, and failure-injection scenarios (/ultraqa).',
+    quickStart: '/code-review the changes on my current branch',
+    artifacts: '.omagy/artifacts/reviews/, .omagy/artifacts/code-review-<slug>.md',
+  },
+  {
+    id: 'solo',
+    title: 'Solo Direct Lane (Default)',
+    modeKey: 'solo',
+    stages: ['Explore & Understand', 'Execute Minimal Diff', 'Verify (Tests / Lint / Typecheck)', 'Report Evidence'],
+    whenToUse: 'Default lane when requirements and file targets are already clear and bounded — no state ceremony required.',
+    quickStart: 'Fix the off-by-one pagination bug in src/api/users.ts and run the unit tests',
+    artifacts: 'Direct repository changes + verification command output',
+  },
+];
 
 function readJsonSafe(filePath) {
   try {
@@ -78,7 +412,9 @@ function resolveStateRoot(rawRoot) {
 export function resolveSafeArtifactFile(workspaceRoot, relPath) {
   const cleanRel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (!cleanRel || cleanRel.includes('\0') || cleanRel.split('/').includes('..')) return null;
-  if (!cleanRel.startsWith('.omagy/artifacts/visual-ralph/') && !cleanRel.startsWith('.omagy/artifacts/loft/')) {
+  if (!cleanRel.startsWith('.omagy/artifacts/visual-ralph/')
+      && !cleanRel.startsWith('.omagy/artifacts/loft/')
+      && !cleanRel.startsWith('.omagy/artifacts/research/')) {
     return null;
   }
   const ext = path.extname(cleanRel).toLowerCase();
@@ -149,6 +485,76 @@ function parseFrontmatter(md) {
     }
   }
   return { meta, body: m[2] };
+}
+
+export function buildPluginCatalog(pluginRoot = PLUGIN_ROOT, activeModes = []) {
+  const skills = [];
+  const skillsDir = path.join(pluginRoot, 'skills');
+  try {
+    if (fs.existsSync(skillsDir) && !fs.lstatSync(skillsDir).isSymbolicLink()) {
+      const dirs = fs.readdirSync(skillsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+        .sort();
+      for (const dirName of dirs) {
+        const skillFile = path.join(skillsDir, dirName, 'SKILL.md');
+        const raw = readTextSafe(skillFile, 24 * 1024);
+        if (!raw) continue;
+        const { meta } = parseFrontmatter(raw);
+        const name = String(meta?.name || dirName).trim();
+        const rawDesc = String(meta?.description || '').replace(/^\[oh-my-agy\]\s*/i, '').trim();
+        const guide = SKILL_GUIDE_META[name] || {};
+        skills.push({
+          name,
+          category: guide.category || 'Knowledge, Control & Setup',
+          description: rawDesc,
+          howToUse: guide.howToUse || rawDesc,
+          quickStart: guide.quickStart || `/${name}`,
+          flags: Array.isArray(guide.flags) ? guide.flags : [],
+        });
+      }
+    }
+  } catch { /* ignore */ }
+
+  const subagents = [];
+  const agentsDir = path.join(pluginRoot, 'agents');
+  try {
+    if (fs.existsSync(agentsDir) && !fs.lstatSync(agentsDir).isSymbolicLink()) {
+      const files = fs.readdirSync(agentsDir)
+        .filter((f) => f.endsWith('.md'))
+        .sort();
+      for (const file of files) {
+        const raw = readTextSafe(path.join(agentsDir, file), 24 * 1024);
+        if (!raw) continue;
+        const { meta } = parseFrontmatter(raw);
+        const name = String(meta?.name || file.slice(0, -3)).trim();
+        const rawDesc = String(meta?.description || '').trim();
+        const guide = SUBAGENT_GUIDE_META[name] || {};
+        subagents.push({
+          name,
+          lane: guide.lane || 'Execution & Debugging',
+          modelTier: guide.modelTier || 'inherit',
+          description: rawDesc,
+          whenToUse: guide.whenToUse || rawDesc,
+        });
+      }
+    }
+  } catch { /* ignore */ }
+
+  const activeByMode = new Map();
+  for (const m of activeModes) {
+    if (m && m.active && !m.stale) {
+      activeByMode.set(m.mode, m.phase);
+    }
+  }
+
+  const workflows = WORKFLOW_BLUEPRINTS.map((wf) => ({
+    ...wf,
+    active: activeByMode.has(wf.modeKey),
+    currentPhase: activeByMode.get(wf.modeKey) || null,
+  }));
+
+  return { skills, subagents, workflows };
 }
 
 export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
@@ -315,9 +721,9 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
   // 4. Ralplan / Hyperplan Consensus & Code Review Gate Board
   const reviews = { ralplan: null, hyperplan: [], codeReviews: [] };
   const rpRecord = allModeRecords.find((m) => m.mode === 'ralplan')
-    || allModeRecords.find((m) => m.mode === 'autopilot' && (m.raw?.state?.ralplan || m.raw?.handoff_artifacts?.ralplan));
+    || allModeRecords.find((m) => m.mode === 'autopilot' && (m.raw?.state?.ralplan || m.raw?.state?.handoff_artifacts?.ralplan || m.raw?.handoff_artifacts?.ralplan));
   if (rpRecord) {
-    const ho = rpRecord.raw?.handoff_artifacts?.ralplan || rpRecord.raw?.state?.ralplan || rpRecord.raw?.state || {};
+    const ho = rpRecord.raw?.state?.handoff_artifacts?.ralplan || rpRecord.raw?.handoff_artifacts?.ralplan || rpRecord.raw?.state?.ralplan || rpRecord.raw?.state || {};
     reviews.ralplan = {
       active: rpRecord.active,
       phase: rpRecord.phase,
@@ -385,7 +791,35 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     }
   } catch { /* ignore */ }
 
-  // 5. Benchmarks: Performance Goals & Autoresearch
+  // 4b. Deep Research reports (.omagy/artifacts/research/*.md)
+  const research = [];
+  const researchDir = path.join(primaryRoot, '.omagy', 'artifacts', 'research');
+  try {
+    if (fs.existsSync(researchDir) && !fs.lstatSync(researchDir).isSymbolicLink()) {
+      for (const name of fs.readdirSync(researchDir)) {
+        if (!name.endsWith('.md')) continue;
+        const fullPath = path.join(researchDir, name);
+        const text = readTextSafe(fullPath, 32 * 1024);
+        if (!text) continue;
+        const titleMatch = /^#\s+([^\r\n]+)/m.exec(text);
+        const lensMatch = /Lens(?:\(es\))?:\**\s*`?([a-zA-Z0-9_, /|-]+)`?/i.exec(text);
+        const compMatch = /Overall\s+Composite[^\n|]*\|[^\n|]*\|\s*`?([0-9]+(?:\.[0-9]+)?)`?/i.exec(text);
+        research.push({
+          file: `.omagy/artifacts/research/${name}`,
+          title: redactSecrets((titleMatch ? titleMatch[1] : name).trim()),
+          lens: (lensMatch ? lensMatch[1] : 'multi-lens').trim(),
+          compositeScore: compMatch ? Number(compMatch[1]) : null,
+          claims: {
+            verified: (text.match(/\[VERIFIED\]/g) || []).length,
+            derived: (text.match(/\[DERIVED\]/g) || []).length,
+            assumed: (text.match(/\[ASSUMED\]/g) || []).length,
+          },
+        });
+      }
+    }
+  } catch { /* ignore */ }
+
+  // 5. Benchmarks: Performance Goals & Autoresearch (retained in snapshot for compatibility)
   const benchmarks = { performanceGoals: [], autoresearch: [] };
   const perfRoot = path.join(primaryRoot, '.omagy', 'goals', 'performance');
   try {
@@ -442,7 +876,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     }
   } catch { /* ignore */ }
 
-  // 6. Visual Ralph Diff & Verdict Inspector
+  // 6. Visual Ralph Diff & Verdict Inspector (retained in snapshot for compatibility)
   const visualRalph = [];
   const vrRoot = path.join(primaryRoot, '.omagy', 'artifacts', 'visual-ralph');
   try {
@@ -475,7 +909,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     }
   } catch { /* ignore */ }
 
-  // 7. Loft Prototype Viewer
+  // 7. Loft Prototype Viewer (retained in snapshot for compatibility)
   const loft = [];
   const loftRoot = path.join(primaryRoot, '.omagy', 'artifacts', 'loft');
   try {
@@ -510,7 +944,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     const wikiDir = path.join(primaryRoot, dirName);
     const agPath = path.join(wikiDir, 'agreements.md');
     const idxPath = path.join(wikiDir, 'index.md');
-    let indexedSlugs = new Set();
+    const indexedSlugs = new Set();
     try {
       if (fs.existsSync(agPath) && !fs.lstatSync(agPath).isSymbolicLink()) {
         const lines = fs.readFileSync(agPath, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
@@ -622,6 +1056,9 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     hookErrors,
   };
 
+  // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
+  const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
+
   // Minimal statusline string
   const activeModes = modes.filter((m) => m.active && !m.stale);
   const minimalParts = activeModes.map((m) => `${m.mode}:${m.phase}`);
@@ -636,17 +1073,20 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     at: new Date(nowMs).toISOString(),
     workspace: primaryRoot,
     statusLine,
+    allowedViews: ALLOWED_VIEWS,
     modes,
     ultragoal,
     teams,
     interview,
     reviews,
+    research,
     benchmarks,
     visualRalph,
     loft,
     wiki,
     qualityGates: qg.gates,
     doctor,
+    catalog,
   };
 }
 
@@ -660,7 +1100,7 @@ const HUD_HTML = `<!DOCTYPE html>
   <style>
     body {
       margin: 0;
-      padding: 16px;
+      padding: 14px;
       background: var(--background, #0f1117);
       color: var(--foreground, #e5e7eb);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -672,7 +1112,7 @@ const HUD_HTML = `<!DOCTYPE html>
       border: 1px solid var(--border, rgba(255,255,255,0.1));
       border-radius: 10px;
       padding: 12px 14px;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
     .muted { color: var(--muted-foreground, #9ca3af); }
     .badge {
@@ -680,12 +1120,20 @@ const HUD_HTML = `<!DOCTYPE html>
       align-items: center;
       padding: 2px 8px;
       border-radius: 9999px;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 500;
-      border: 1px solid var(--border, rgba(255,255,255,0.14));
+      white-space: nowrap;
+      flex-shrink: 0;
+      border: 1px solid var(--border, rgba(255,255,255,0.15));
+      background: rgba(255,255,255,0.03);
+    }
+    .badge-active {
+      border-color: rgba(96, 165, 250, 0.5);
+      color: var(--primary, #60a5fa);
+      background: rgba(96, 165, 250, 0.12);
     }
     .tab-btn {
-      padding: 5px 9px;
+      padding: 5px 10px;
       border-radius: 7px;
       font-size: 12px;
       font-weight: 500;
@@ -699,6 +1147,17 @@ const HUD_HTML = `<!DOCTYPE html>
       color: var(--foreground, #fff);
       border-color: var(--border, rgba(255,255,255,0.18));
     }
+    .search-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border, rgba(255,255,255,0.16));
+      background: rgba(0,0,0,0.2);
+      color: var(--foreground, #e5e7eb);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
     .bar-track {
       width: 100%;
       height: 8px;
@@ -710,6 +1169,19 @@ const HUD_HTML = `<!DOCTYPE html>
       height: 100%;
       background: var(--primary, #60a5fa);
       border-radius: 9999px;
+    }
+    .cmd-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 6px 9px;
+      border-radius: 7px;
+      background: rgba(0,0,0,0.28);
+      border: 1px solid var(--border, rgba(255,255,255,0.09));
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11.5px;
     }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); }
@@ -728,25 +1200,17 @@ const HUD_HTML = `<!DOCTYPE html>
 
   <div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;" role="tablist">
     <button class="tab-btn active" data-view="overview">Overview</button>
-    <button class="tab-btn" data-view="ultragoal">Ultragoal</button>
-    <button class="tab-btn" data-view="team">Team DAG</button>
-    <button class="tab-btn" data-view="interview">Interview</button>
-    <button class="tab-btn" data-view="reviews">Reviews</button>
-    <button class="tab-btn" data-view="benchmarks">Benchmarks</button>
-    <button class="tab-btn" data-view="visual-ralph">Visual Ralph</button>
-    <button class="tab-btn" data-view="loft">Loft</button>
+    <button class="tab-btn" data-view="workflows">Workflows</button>
+    <button class="tab-btn" data-view="skills">Skills</button>
+    <button class="tab-btn" data-view="subagents">Subagents</button>
     <button class="tab-btn" data-view="wiki">Wiki</button>
     <button class="tab-btn" data-view="doctor">Doctor</button>
   </div>
 
   <div id="view-overview" class="view-pane"></div>
-  <div id="view-ultragoal" class="view-pane" style="display:none;"></div>
-  <div id="view-team" class="view-pane" style="display:none;"></div>
-  <div id="view-interview" class="view-pane" style="display:none;"></div>
-  <div id="view-reviews" class="view-pane" style="display:none;"></div>
-  <div id="view-benchmarks" class="view-pane" style="display:none;"></div>
-  <div id="view-visual-ralph" class="view-pane" style="display:none;"></div>
-  <div id="view-loft" class="view-pane" style="display:none;"></div>
+  <div id="view-workflows" class="view-pane" style="display:none;"></div>
+  <div id="view-skills" class="view-pane" style="display:none;"></div>
+  <div id="view-subagents" class="view-pane" style="display:none;"></div>
   <div id="view-wiki" class="view-pane" style="display:none;"></div>
   <div id="view-doctor" class="view-pane" style="display:none;"></div>
 
@@ -754,10 +1218,11 @@ const HUD_HTML = `<!DOCTYPE html>
     const ALLOWED = ${JSON.stringify(ALLOWED_VIEWS)};
     const params = new URLSearchParams(window.location.search);
     const token = params.get('token') || '';
-    let activeView = params.get('view') || 'overview';
+    let activeView = ALLOWED.includes(params.get('view')) ? params.get('view') : 'overview';
     let selectedWikiSlug = params.get('slug') || '';
-    let selectedLoftSlug = params.get('slug') || '';
-    let vrOpacity = 50;
+    let skillSearch = '';
+    let skillCategory = 'All';
+    let subagentLane = 'All';
     let workspaceUris = [];
     let latestData = null;
 
@@ -773,16 +1238,18 @@ const HUD_HTML = `<!DOCTYPE html>
     });
 
     function esc(s) {
-      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
-    function artifactUrl(relPath, workspace) {
-      const q = new URLSearchParams();
-      q.set('rel', relPath);
-      if (workspace) q.set('workspace', workspace);
-      if (token) q.set('token', token);
-      return '/api/artifact?' + q.toString();
-    }
+    window.copyQuickStart = function(btn, text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          const prev = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = prev; }, 1200);
+        }).catch(() => {});
+      }
+    };
 
     function setTab(view) {
       activeView = ALLOWED.includes(view) ? view : 'overview';
@@ -822,18 +1289,251 @@ const HUD_HTML = `<!DOCTYPE html>
       if (latestData) renderWiki(latestData);
     };
 
-    window.selectLoftSlug = function(slug) {
-      selectedLoftSlug = slug;
-      if (latestData) renderLoft(latestData);
+    window.setSkillCategory = function(cat) {
+      skillCategory = cat;
+      if (latestData) renderSkills(latestData);
     };
 
-    window.updateVrOpacity = function(val) {
-      vrOpacity = Number(val);
-      const overlay = document.getElementById('vr-overlay-img');
-      const label = document.getElementById('vr-opacity-label');
-      if (overlay) overlay.style.opacity = String(vrOpacity / 100);
-      if (label) label.textContent = vrOpacity + '%';
+    window.onSkillSearchInput = function(val) {
+      skillSearch = String(val || '');
+      if (latestData) renderSkillsListOnly(latestData);
     };
+
+    window.setSubagentLane = function(lane) {
+      subagentLane = lane;
+      if (latestData) renderSubagents(latestData);
+    };
+
+    function renderOverview(data) {
+      const modesRows = (data.modes || []).map((m) => \`
+        <tr>
+          <td><code>\${esc(m.mode)}</code></td>
+          <td><span class="badge \${m.active && !m.stale ? 'badge-active' : ''}">\${esc(m.phase)}</span></td>
+          <td>\${m.active ? (m.stale ? 'stale (>6h)' : 'active') : 'inactive'}</td>
+          <td>\${esc(m.iteration ?? '-')}</td>
+          <td class="muted">\${esc(m.session)}</td>
+        </tr>\`).join('');
+
+      const qgRows = (data.qualityGates || []).map((g) => \`<li><code>\${esc(g.stage)}</code> &rarr; <code>\${esc(g.skill)}</code> (\${esc(g.mode)}, \${esc(g.model)})</li>\`).join('');
+
+      // Consolidated Ultragoal Card
+      let ugHtml = '';
+      if (data.ultragoal) {
+        const ug = data.ultragoal;
+        const pct = ug.counts.total > 0 ? Math.round((ug.counts.complete / ug.counts.total) * 100) : 0;
+        const goalRows = (ug.goals || []).map((g) => \`
+          <tr>
+            <td><code>\${esc(g.id)}</code></td>
+            <td>\${esc(g.title)}</td>
+            <td><span class="badge">\${esc(g.rigor)}</span></td>
+            <td><span class="badge \${g.status === 'in_progress' ? 'badge-active' : ''}">\${esc(g.status)}</span></td>
+            <td>\${g.productFailures}/3</td>
+          </tr>\`).join('');
+        ugHtml = \`
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div style="font-weight:600;">Ultragoal: \${esc(ug.objective || 'Active Plan')}</div>
+              <span class="badge badge-active">\${ug.counts.complete}/\${ug.counts.total}</span>
+            </div>
+            <div class="bar-track" style="margin:8px 0;"><div class="bar-fill" style="width:\${pct}%;"></div></div>
+            <table><thead><tr><th>ID</th><th>Goal</th><th>Rigor</th><th>Status</th><th>Retries</th></tr></thead><tbody>\${goalRows}</tbody></table>
+          </div>\`;
+      }
+
+      // Consolidated Deep Interview Card
+      let ivHtml = '';
+      if (data.interview) {
+        const iv = data.interview;
+        const ambPct = Math.round((iv.currentAmbiguity || 0) * 100);
+        const threshPct = Math.round((iv.threshold || 0.2) * 100);
+        ivHtml = \`
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="font-weight:600;">Deep Interview: <code>\${esc(iv.slug || 'session')}</code></div>
+              <span class="badge">\${esc(iv.profile)} (\${ambPct}% ambiguity &le; \${threshPct}%)</span>
+            </div>
+            <div class="bar-track" style="margin-top:8px;"><div class="bar-fill" style="width:\${Math.max(0, Math.min(100, 100 - ambPct))}%;"></div></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
+              <span class="badge">Non-goals: \${iv.readinessGates?.nonGoals ? 'PASS' : 'PENDING'}</span>
+              <span class="badge">Decision Boundaries: \${iv.readinessGates?.decisionBoundaries ? 'PASS' : 'PENDING'}</span>
+              <span class="badge">Pressure Pass: \${iv.readinessGates?.pressurePass ? 'PASS' : 'PENDING'}</span>
+            </div>
+          </div>\`;
+      }
+
+      // Consolidated Team Card
+      let teamHtml = '';
+      if (data.teams && data.teams.length) {
+        teamHtml = data.teams.map((t) => {
+          const rows = (t.tasks || []).map((task) => \`
+            <tr>
+              <td><code>\${esc(task.id)}</code></td>
+              <td>\${esc(task.title)}</td>
+              <td><code>\${esc(task.role)}</code></td>
+              <td><span class="badge">\${esc(task.status)}</span></td>
+              <td>\${task.requiresCodeChange ? (task.hasEvidence ? 'verified' : 'pending') : 'n/a'}</td>
+            </tr>\`).join('');
+          return \`
+            <div class="card">
+              <div style="font-weight:600;margin-bottom:4px;">Team Board: <code>\${esc(t.team)}</code></div>
+              <div class="muted" style="margin-bottom:6px;">\${esc(t.objective)}</div>
+              <table><thead><tr><th>ID</th><th>Task</th><th>Role</th><th>Status</th><th>Evidence</th></tr></thead><tbody>\${rows}</tbody></table>
+            </div>\`;
+        }).join('');
+      }
+
+      // Consolidated Reviews & Deep Research Card
+      const rp = data.reviews?.ralplan;
+      const crList = data.reviews?.codeReviews || [];
+      const resList = data.research || [];
+      let revResHtml = '';
+      if (rp || crList.length || resList.length) {
+        const rpLine = rp ? \`<div style="margin-bottom:6px;"><span class="badge">Ralplan Iter \${esc(rp.iteration)}</span> Architect: <strong>\${esc(rp.architectVerdict)}</strong> &middot; Critic: <strong>\${esc(rp.criticVerdict)}</strong> &middot; Consensus: <strong>\${rp.consensusComplete ? 'COMPLETE' : 'PENDING'}</strong></div>\` : '';
+        const crRows = crList.map((c) => \`<div><span class="badge">\${esc(c.recommendation)}</span> <code>\${esc(c.file)}</code> (Architect: \${esc(c.architectStatus)}, \${c.filesReviewed} files)</div>\`).join('');
+        const resRows = resList.map((r) => \`<div style="margin-top:4px;"><span class="badge badge-active">Research \${r.compositeScore !== null ? r.compositeScore + '/100' : ''}</span> <strong>\${esc(r.title)}</strong> <span class="muted">(\${esc(r.lens)} &middot; V:\${r.claims.verified} D:\${r.claims.derived} A:\${r.claims.assumed})</span></div>\`).join('');
+        revResHtml = \`
+          <div class="card">
+            <div style="font-weight:600;margin-bottom:6px;">Recent Reviews &amp; Deep Research</div>
+            \${rpLine}
+            \${crRows}
+            \${resRows}
+          </div>\`;
+      }
+
+      const counts = {
+        skills: data.catalog?.skills?.length || 0,
+        subagents: data.catalog?.subagents?.length || 0,
+        workflows: data.catalog?.workflows?.length || 0,
+      };
+
+      document.getElementById('view-overview').innerHTML = \`
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <div style="font-weight:600;margin-bottom:2px;">Workspace</div>
+            <code>\${esc(data.workspace)}</code>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="badge" style="cursor:pointer;" onclick="setTab('workflows')">\${counts.workflows} Workflows</button>
+            <button class="badge" style="cursor:pointer;" onclick="setTab('skills')">\${counts.skills} Skills</button>
+            <button class="badge" style="cursor:pointer;" onclick="setTab('subagents')">\${counts.subagents} Subagents</button>
+          </div>
+        </div>
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:8px;">Workflow Modes</div>
+          \${modesRows ? \`<table><thead><tr><th>Mode</th><th>Phase</th><th>State</th><th>Iter</th><th>Scope</th></tr></thead><tbody>\${modesRows}</tbody></table>\` : '<div class="muted">No active mode state files in .omagy/state/. Open the <strong>Workflows</strong> or <strong>Skills</strong> tab for quick-start commands.</div>'}
+        </div>
+        \${ugHtml}
+        \${ivHtml}
+        \${teamHtml}
+        \${revResHtml}
+        \${qgRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:6px;">Configured Quality Gates</div><ul style="margin:0;padding-left:18px;">\${qgRows}</ul></div>\` : ''}
+      \`;
+    }
+
+    function renderWorkflows(data) {
+      const list = data.catalog?.workflows || [];
+      document.getElementById('view-workflows').innerHTML = list.map((wf) => {
+        const stagesHtml = (wf.stages || []).map((s, idx) => \`
+          <span class="badge">\${idx + 1}. \${esc(s)}</span>\`).join('<span class="muted" style="align-self:center;">&rarr;</span>');
+        return \`
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
+              <div style="font-weight:600;">\${esc(wf.title)}</div>
+              \${wf.active ? \`<span class="badge badge-active">ACTIVE (\${esc(wf.currentPhase)})</span>\` : \`<span class="badge">\${esc(wf.modeKey)}</span>\`}
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">\${stagesHtml}</div>
+            <div style="margin-bottom:6px;"><strong>When to use:</strong> <span class="muted">\${esc(wf.whenToUse)}</span></div>
+            <div class="muted" style="font-size:11.5px;"><strong>State / Artifacts:</strong> <code>\${esc(wf.artifacts)}</code></div>
+            <div class="cmd-box">
+              <span>\${esc(wf.quickStart)}</span>
+              <button class="badge" style="cursor:pointer;" data-cmd="\${esc(wf.quickStart)}" onclick="copyQuickStart(this, this.dataset.cmd)">Copy</button>
+            </div>
+          </div>\`;
+      }).join('');
+    }
+
+    function renderSkillsListOnly(data) {
+      const allSkills = data.catalog?.skills || [];
+      const q = skillSearch.trim().toLowerCase();
+      const filtered = allSkills.filter((s) => {
+        if (skillCategory !== 'All' && s.category !== skillCategory) return false;
+        if (!q) return true;
+        return s.name.toLowerCase().includes(q)
+          || s.category.toLowerCase().includes(q)
+          || s.howToUse.toLowerCase().includes(q)
+          || s.quickStart.toLowerCase().includes(q)
+          || (s.flags || []).some((f) => f.toLowerCase().includes(q));
+      });
+      const container = document.getElementById('skills-cards-container');
+      if (!container) return;
+      if (!filtered.length) {
+        container.innerHTML = '<div class="card muted">No skills match the current filter.</div>';
+        return;
+      }
+      container.innerHTML = filtered.map((s) => {
+        const flagsHtml = (s.flags || []).map((f) => \`<span class="badge"><code>\${esc(f)}</code></span>\`).join(' ');
+        return \`
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+              <div>
+                <code style="font-weight:600;font-size:13px;">/\${esc(s.name)}</code>
+                <span class="muted" style="font-size:11.5px;margin-left:4px;">($\${esc(s.name)})</span>
+              </div>
+              <span class="badge">\${esc(s.category)}</span>
+            </div>
+            \${flagsHtml ? \`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">\${flagsHtml}</div>\` : ''}
+            <div style="margin-bottom:4px;">\${esc(s.howToUse)}</div>
+            <div class="cmd-box">
+              <span>\${esc(s.quickStart)}</span>
+              <button class="badge" style="cursor:pointer;" data-cmd="\${esc(s.quickStart)}" onclick="copyQuickStart(this, this.dataset.cmd)">Copy</button>
+            </div>
+          </div>\`;
+      }).join('');
+    }
+
+    function renderSkills(data) {
+      const allSkills = data.catalog?.skills || [];
+      const categories = ['All', ...new Set(allSkills.map((s) => s.category))];
+      const catBtns = categories.map((c) => \`
+        <button class="tab-btn \${skillCategory === c ? 'active' : ''}" onclick="setSkillCategory('\${esc(c)}')">\${esc(c)}</button>\`).join('');
+      document.getElementById('view-skills').innerHTML = \`
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:6px;">Skills Catalog (\${allSkills.length} skills)</div>
+          <input type="text" class="search-input" placeholder="Search skills by name, flag, or use case (e.g. deep-research, review, team)..." value="\${esc(skillSearch)}" oninput="onSkillSearchInput(this.value)" />
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">\${catBtns}</div>
+        </div>
+        <div id="skills-cards-container"></div>
+      \`;
+      renderSkillsListOnly(data);
+    }
+
+    function renderSubagents(data) {
+      const allSubagents = data.catalog?.subagents || [];
+      const lanes = ['All', ...new Set(allSubagents.map((a) => a.lane))];
+      const laneBtns = lanes.map((l) => \`
+        <button class="tab-btn \${subagentLane === l ? 'active' : ''}" onclick="setSubagentLane('\${esc(l)}')">\${esc(l)}</button>\`).join('');
+      const filtered = allSubagents.filter((a) => subagentLane === 'All' || a.lane === subagentLane);
+      const cards = filtered.map((a) => \`
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+            <code style="font-weight:600;font-size:13px;">\${esc(a.name)}</code>
+            <div style="display:flex;gap:4px;align-items:center;">
+              <span class="badge">\${esc(a.lane)}</span>
+              <span class="badge badge-active">Model: \${esc(a.modelTier)}</span>
+            </div>
+          </div>
+          <div style="margin-bottom:4px;">\${esc(a.whenToUse)}</div>
+          <div class="muted" style="font-size:11.5px;">Invoke via <code>invoke_subagent(TypeName: "\${esc(a.name)}")</code></div>
+        </div>\`).join('');
+      document.getElementById('view-subagents').innerHTML = \`
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:4px;">Role Subagents (\${allSubagents.length} specialists)</div>
+          <div class="muted" style="margin-bottom:8px;">Work-shape model routing: <code>flash</code> for quick/mechanical lookups, <code>inherit</code> for cohesive implementation/research, and <code>pro</code> for architecture, critique, causal tracing, and security review.</div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">\${laneBtns}</div>
+        </div>
+        \${cards}
+      \`;
+    }
 
     function renderWiki(data) {
       const agItems = (data.wiki?.agreements || []).map((a) => \`
@@ -876,267 +1576,7 @@ const HUD_HTML = `<!DOCTYPE html>
       \`;
     }
 
-    function renderLoft(data) {
-      const items = data.loft || [];
-      if (!items.length) {
-        document.getElementById('view-loft').innerHTML = '<div class="card muted">No .omagy/artifacts/loft/&lt;slug&gt;/index.html prototypes found in this workspace.</div>';
-        return;
-      }
-      const current = items.find((i) => i.slug === selectedLoftSlug) || items[0];
-      const btns = items.map((i) => \`
-        <button class="tab-btn \${current.slug === i.slug ? 'active' : ''}" onclick="selectLoftSlug('\${esc(i.slug)}')">
-          \${esc(i.slug)} <span class="badge">\${esc(i.kind)}</span>
-        </button>\`).join('');
-      const src = artifactUrl(current.relPath, data.workspace);
-      document.getElementById('view-loft').innerHTML = \`
-        <div class="card">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
-            <div style="font-weight:600;">Loft Prototypes (.omagy/artifacts/loft/)</div>
-            <a href="\${esc(src)}" target="_blank" rel="noreferrer" class="badge">Open in Tab</a>
-          </div>
-          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">\${btns}</div>
-          <iframe src="\${esc(src)}" style="width:100%;height:520px;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:8px;background:var(--background,#0f1117);" sandbox="allow-scripts"></iframe>
-        </div>
-      \`;
-    }
-
-    function render(data) {
-      document.getElementById('status-line').textContent = data.statusLine || '[OMA] No active modes';
-
-      // 1. Overview
-      const modesRows = (data.modes || []).map((m) => \`
-        <tr>
-          <td><code>\${esc(m.mode)}</code></td>
-          <td><span class="badge">\${esc(m.phase)}</span></td>
-          <td>\${m.active ? (m.stale ? 'stale (>6h)' : 'active') : 'inactive'}</td>
-          <td>\${esc(m.iteration ?? '-')}</td>
-          <td class="muted">\${esc(m.session)}</td>
-        </tr>\`).join('');
-      const qgRows = (data.qualityGates || []).map((g) => \`<li><code>\${esc(g.stage)}</code> &rarr; <code>\${esc(g.skill)}</code> (\${esc(g.mode)}, \${esc(g.model)})</li>\`).join('');
-      document.getElementById('view-overview').innerHTML = \`
-        <div class="card">
-          <div style="font-weight:600;margin-bottom:6px;">Workspace</div>
-          <code>\${esc(data.workspace)}</code>
-        </div>
-        <div class="card">
-          <div style="font-weight:600;margin-bottom:8px;">Workflow Modes</div>
-          \${modesRows ? \`<table><thead><tr><th>Mode</th><th>Phase</th><th>State</th><th>Iter</th><th>Scope</th></tr></thead><tbody>\${modesRows}</tbody></table>\` : '<div class="muted">No active or recent mode state files in .omagy/state/.</div>'}
-        </div>
-        \${qgRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:6px;">Configured Quality Gates</div><ul style="margin:0;padding-left:18px;">\${qgRows}</ul></div>\` : ''}
-      \`;
-
-      // 2. Ultragoal
-      if (!data.ultragoal) {
-        document.getElementById('view-ultragoal').innerHTML = '<div class="card muted">No .omagy/ultragoal/goals.json found in this workspace.</div>';
-      } else {
-        const ug = data.ultragoal;
-        const goalRows = (ug.goals || []).map((g) => \`
-          <tr>
-            <td><code>\${esc(g.id)}</code></td>
-            <td>\${esc(g.title)}</td>
-            <td><span class="badge">\${esc(g.rigor)}</span></td>
-            <td><span class="badge">\${esc(g.status)}</span></td>
-            <td>\${g.productFailures}/3</td>
-          </tr>\`).join('');
-        const ledgerRows = (ug.recentLedger || []).map((l) => \`
-          <tr>
-            <td><code>\${esc(l.goal_id || '-')}</code></td>
-            <td>\${esc(l.event || '-')}</td>
-            <td>\${esc(l.status || '-')}</td>
-            <td class="muted">\${esc((l.evidence || l.note || '').slice(0, 80))}</td>
-          </tr>\`).join('');
-        document.getElementById('view-ultragoal').innerHTML = \`
-          <div class="card">
-            <div style="font-weight:600;">\${esc(ug.objective || 'Ultragoal Plan')}</div>
-            <div class="muted" style="margin-top:4px;">Progress: \${ug.counts.complete}/\${ug.counts.total} complete &middot; \${ug.counts.inProgress} in progress &middot; \${ug.counts.blocked} blocked</div>
-          </div>
-          <div class="card">
-            <div style="font-weight:600;margin-bottom:8px;">Goals</div>
-            <table><thead><tr><th>ID</th><th>Title</th><th>Rigor</th><th>Status</th><th>Retries</th></tr></thead><tbody>\${goalRows}</tbody></table>
-          </div>
-          \${ledgerRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:8px;">Recent Ledger Events</div><table><thead><tr><th>Goal</th><th>Event</th><th>Status</th><th>Evidence / Note</th></tr></thead><tbody>\${ledgerRows}</tbody></table></div>\` : ''}
-        \`;
-      }
-
-      // 3. Team DAG
-      if (!data.teams || !data.teams.length) {
-        document.getElementById('view-team').innerHTML = '<div class="card muted">No active team boards under .omagy/state/team/.</div>';
-      } else {
-        document.getElementById('view-team').innerHTML = data.teams.map((t) => {
-          const rows = (t.tasks || []).map((task) => \`
-            <tr>
-              <td><code>\${esc(task.id)}</code></td>
-              <td>\${esc(task.title)}</td>
-              <td><code>\${esc(task.role)}</code> (\${esc(task.model)})</td>
-              <td><span class="badge">\${esc(task.status)}</span></td>
-              <td>\${task.requiresCodeChange ? (task.hasEvidence ? 'verified' : 'pending') : 'n/a'}</td>
-            </tr>\`).join('');
-          return \`
-            <div class="card">
-              <div style="font-weight:600;margin-bottom:4px;">Team: <code>\${esc(t.team)}</code></div>
-              <div class="muted" style="margin-bottom:8px;">\${esc(t.objective)}</div>
-              <table><thead><tr><th>ID</th><th>Task</th><th>Role</th><th>Status</th><th>Evidence</th></tr></thead><tbody>\${rows}</tbody></table>
-            </div>\`;
-        }).join('');
-      }
-
-      // 4. Deep Interview Ambiguity & Readiness Radar
-      if (!data.interview) {
-        document.getElementById('view-interview').innerHTML = '<div class="card muted">No active or recent .omagy/state/deep-interview-state.json found.</div>';
-      } else {
-        const iv = data.interview;
-        const ambPct = Math.round((iv.currentAmbiguity || 0) * 100);
-        const threshPct = Math.round((iv.threshold || 0.2) * 100);
-        const dimRows = Object.entries(iv.dimensions || {}).map(([k, v]) => {
-          const scorePct = Math.round(Number(v || 0) * 100);
-          return \`
-            <div style="margin-bottom:6px;">
-              <div style="display:flex;justify-content:space-between;font-size:12px;"><span><code>\${esc(k)}</code></span><span>\${scorePct}%</span></div>
-              <div class="bar-track"><div class="bar-fill" style="width:\${ Math.max(0, Math.min(100, scorePct)) }%;"></div></div>
-            </div>\`;
-        }).join('');
-        const roundRows = (iv.rounds || []).map((r) => \`
-          <tr>
-            <td>#\${r.round}</td>
-            <td><code>\${esc(r.target)}</code></td>
-            <td><span class="badge">\${esc(r.label)}</span></td>
-            <td>\${esc(r.question.slice(0, 90))}</td>
-            <td class="muted">\${esc(r.answer.slice(0, 90))}</td>
-          </tr>\`).join('');
-        document.getElementById('view-interview').innerHTML = \`
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div style="font-weight:600;">Deep Interview: <code>\${esc(iv.slug || 'active')}</code></div>
-              <span class="badge">\${esc(iv.profile)} (\${esc(iv.type)})</span>
-            </div>
-            <div class="muted" style="margin-top:4px;">Ambiguity: <strong>\${ambPct}%</strong> (Threshold &le; \${threshPct}%) &middot; Stage: <code>\${esc(iv.currentStage)}</code> &middot; Focus: <code>\${esc(iv.currentFocus)}</code></div>
-            <div class="bar-track" style="margin-top:8px;"><div class="bar-fill" style="width:\${Math.max(0, Math.min(100, 100 - ambPct))}%;"></div></div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
-              <span class="badge">Non-goals: \${iv.readinessGates?.nonGoals ? 'PASS' : 'PENDING'}</span>
-              <span class="badge">Decision Boundaries: \${iv.readinessGates?.decisionBoundaries ? 'PASS' : 'PENDING'}</span>
-              <span class="badge">Pressure Pass: \${iv.readinessGates?.pressurePass ? 'PASS' : 'PENDING'}</span>
-            </div>
-          </div>
-          \${dimRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:8px;">Clarity Dimensions</div>\${dimRows}</div>\` : ''}
-          \${roundRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:8px;">Round Provenance Ledger</div><table><thead><tr><th>Rd</th><th>Target</th><th>Label</th><th>Question</th><th>Answer</th></tr></thead><tbody>\${roundRows}</tbody></table></div>\` : ''}
-        \`;
-      }
-
-      // 5. Ralplan / Hyperplan Consensus & Code Review Gate Board
-      const rp = data.reviews?.ralplan;
-      const hpList = data.reviews?.hyperplan || [];
-      const crList = data.reviews?.codeReviews || [];
-      if (!rp && !hpList.length && !crList.length) {
-        document.getElementById('view-reviews').innerHTML = '<div class="card muted">No Ralplan, Hyperplan, or Code Review artifacts found under .omagy/plans/ or .omagy/artifacts/.</div>';
-      } else {
-        const hpRows = hpList.map((h) => \`
-          <tr>
-            <td><code>\${esc(h.file)}</code></td>
-            <td><span class="badge">SURVIVES: \${h.survives}</span></td>
-            <td><span class="badge">WEAKENED: \${h.weakened}</span></td>
-            <td><span class="badge">KILLED: \${h.killed}</span></td>
-          </tr>\`).join('');
-        const crRows = crList.map((c) => \`
-          <tr>
-            <td><code>\${esc(c.file)}</code></td>
-            <td><span class="badge">\${esc(c.architectStatus)}</span></td>
-            <td><span class="badge">\${esc(c.recommendation)}</span></td>
-            <td>\${c.filesReviewed} files / \${c.totalIssues} issues</td>
-          </tr>\`).join('');
-        document.getElementById('view-reviews').innerHTML = \`
-          \${rp ? \`
-            <div class="card">
-              <div style="font-weight:600;margin-bottom:6px;">Ralplan Consensus Gate (Iter \${esc(rp.iteration)})</div>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <span class="badge">Phase: \${esc(rp.phase)}</span>
-                <span class="badge">Architect: \${esc(rp.architectVerdict)}</span>
-                <span class="badge">Critic: \${esc(rp.criticVerdict)}</span>
-                <span class="badge">Consensus: \${rp.consensusComplete ? 'COMPLETE' : 'PENDING'}</span>
-                <span class="badge">Handoff: \${rp.executionAuthorized ? 'AUTHORIZED' : 'LOCKED'}</span>
-              </div>
-            </div>\` : ''}
-          \${hpRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:8px;">Hyperplan 5-Persona Distillation</div><table><thead><tr><th>Artifact</th><th>Survives</th><th>Weakened</th><th>Killed</th></tr></thead><tbody>\${hpRows}</tbody></table></div>\` : ''}
-          \${crRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:8px;">Code Review Reports</div><table><thead><tr><th>Report</th><th>Architect</th><th>Verdict</th><th>Scope</th></tr></thead><tbody>\${crRows}</tbody></table></div>\` : ''}
-        \`;
-      }
-
-      // 6. Benchmarks: Performance Goals & Autoresearch
-      const pgList = data.benchmarks?.performanceGoals || [];
-      const arList = data.benchmarks?.autoresearch || [];
-      if (!pgList.length && !arList.length) {
-        document.getElementById('view-benchmarks').innerHTML = '<div class="card muted">No .omagy/goals/performance/ or .omagy/specs/autoresearch-*/ runs found.</div>';
-      } else {
-        const pgCards = pgList.map((pg) => {
-          const cpRows = (pg.checkpoints || []).map((c) => \`
-            <tr>
-              <td><span class="badge">\${esc(c.status)}</span></td>
-              <td>\${esc(c.patch)}</td>
-              <td class="muted">\${esc(c.evidence)}</td>
-            </tr>\`).join('');
-          return \`
-            <div class="card">
-              <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div style="font-weight:600;">Performance Goal: <code>\${esc(pg.slug)}</code></div>
-                <span class="badge">\${esc(pg.status)}</span>
-              </div>
-              <div class="muted" style="margin:4px 0;">\${esc(pg.objective)} &middot; Evaluator: <code>\${esc(pg.evaluatorCommand)}</code></div>
-              \${cpRows ? \`<table><thead><tr><th>Status</th><th>Patch</th><th>Evidence</th></tr></thead><tbody>\${cpRows}</tbody></table>\` : '<div class="muted">No checkpoints recorded yet.</div>'}
-            </div>\`;
-        }).join('');
-        const arCards = arList.map((ar) => \`
-          <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div style="font-weight:600;">Autoresearch: <code>\${esc(ar.slug)}</code></div>
-              <span class="badge">\${esc(ar.status)}</span>
-            </div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
-              <span class="badge">Launch Ready: \${ar.launchReady ? 'YES' : 'NO'}</span>
-              <span class="badge">[VERIFIED]: \${ar.claims.verified}</span>
-              <span class="badge">[DERIVED]: \${ar.claims.derived}</span>
-              <span class="badge">[ASSUMED]: \${ar.claims.assumed}</span>
-            </div>
-          </div>\`).join('');
-        document.getElementById('view-benchmarks').innerHTML = pgCards + arCards;
-      }
-
-      // 7. Visual Ralph Diff & Verdict Inspector
-      const vrList = data.visualRalph || [];
-      if (!vrList.length) {
-        document.getElementById('view-visual-ralph').innerHTML = '<div class="card muted">No .omagy/artifacts/visual-ralph/&lt;slug&gt;/ reference or verdict artifacts found.</div>';
-      } else {
-        document.getElementById('view-visual-ralph').innerHTML = vrList.map((vr) => {
-          const refImg = vr.images.find((i) => /reference/i.test(i.name)) || vr.images[0];
-          const curImg = vr.images.find((i) => /current|after/i.test(i.name)) || vr.images[1] || refImg;
-          const refUrl = refImg ? artifactUrl(refImg.relPath, data.workspace) : '';
-          const curUrl = curImg ? artifactUrl(curImg.relPath, data.workspace) : '';
-          const diffs = (vr.verdict?.differences || []).map((d) => \`<li>\${esc(d)}</li>\`).join('');
-          return \`
-            <div class="card">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <div style="font-weight:600;">Visual Ralph: <code>\${esc(vr.slug)}</code></div>
-                \${vr.verdict ? \`<span class="badge">Score: \${vr.verdict.score}/100 (\${esc(vr.verdict.verdict)})</span>\` : '<span class="badge">No verdict JSON</span>'}
-              </div>
-              \${refUrl && curUrl ? \`
-                <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;font-size:12px;">
-                  <span>Overlay Opacity (<span id="vr-opacity-label">\${vrOpacity}%</span>):</span>
-                  <input type="range" min="0" max="100" value="\${vrOpacity}" oninput="updateVrOpacity(this.value)" style="flex:1;" />
-                </div>
-                <div style="position:relative;width:100%;min-height:180px;border:1px solid var(--border,rgba(255,255,255,0.12));border-radius:8px;overflow:hidden;">
-                  <img src="\${esc(refUrl)}" alt="Reference" style="display:block;width:100%;height:auto;" />
-                  <img id="vr-overlay-img" src="\${esc(curUrl)}" alt="Current" style="position:absolute;inset:0;width:100%;height:auto;opacity:\${vrOpacity / 100};pointer-events:none;" />
-                </div>\` : ''}
-              \${diffs ? \`<div style="margin-top:8px;"><div style="font-weight:600;margin-bottom:4px;">Vision Differences</div><ul style="margin:0;padding-left:18px;">\${diffs}</ul></div>\` : ''}
-            </div>\`;
-        }).join('');
-      }
-
-      // 8. Loft Prototype Viewer
-      renderLoft(data);
-
-      // 9. Wiki & Agreements Explorer
-      renderWiki(data);
-
-      // 10. Doctor & Hook Diagnostics
+    function renderDoctor(data) {
       const doc = data.doctor || {};
       const errRows = (doc.hookErrors || []).map((e) => \`
         <tr>
@@ -1162,6 +1602,16 @@ const HUD_HTML = `<!DOCTYPE html>
           \${errRows ? \`<table><thead><tr><th>Time</th><th>Event</th><th>Error</th></tr></thead><tbody>\${errRows}</tbody></table>\` : '<div class="muted">Zero hook errors recorded.</div>'}
         </div>
       \`;
+    }
+
+    function render(data) {
+      document.getElementById('status-line').textContent = data.statusLine || '[OMA] No active modes';
+      renderOverview(data);
+      renderWorkflows(data);
+      renderSkills(data);
+      renderSubagents(data);
+      renderWiki(data);
+      renderDoctor(data);
     }
 
     loadSnapshot();
@@ -1236,6 +1686,7 @@ async function runSelftest() {
     fs.mkdirSync(path.join(ws, '.omagy', 'specs', 'autoresearch-cache'), { recursive: true });
     fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'visual-ralph', 'hero'), { recursive: true });
     fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'loft', 'nav-fork'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'research'), { recursive: true });
     fs.mkdirSync(path.join(ws, 'omagy_wiki'), { recursive: true });
 
     fs.writeFileSync(path.join(ws, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
@@ -1258,6 +1709,12 @@ async function runSelftest() {
     }));
     fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'hyperplan-distillation-auth.md'), '# Hyperplan\n- Option A: SURVIVES\n- Option B: KILLED\n');
     fs.writeFileSync(path.join(ws, '.omagy', 'artifacts', 'code-review-auth-1.md'), 'CODE REVIEW REPORT\nFiles Reviewed: 3\nTotal Issues: 0\nArchitectural Status: CLEAR\nRECOMMENDATION: APPROVE\n');
+    fs.writeFileSync(path.join(ws, '.omagy', 'artifacts', 'research', 'deep-research-vector.md'), [
+      '# Vector Indexing Tradeoffs: A Multi-Lens Deep Investigation',
+      '- **Lens(es)**: `technical`',
+      'Claim 1 [VERIFIED] and Claim 2 [DERIVED] with token ghp_1234567890abcdefghij123456.',
+      '| **Overall Composite** | >= 85 | 91.2 | Audited |',
+    ].join('\n'));
     fs.writeFileSync(path.join(ws, '.omagy', 'goals', 'performance', 'startup', 'state.json'), JSON.stringify({
       slug: 'startup', objective: 'Cut cold start by 20%', evaluator_command: 'npm run bench', status: 'complete',
     }));
@@ -1278,9 +1735,20 @@ async function runSelftest() {
     const snap = buildHudSnapshot([`file://${ws}`]);
     const validArtifact = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/nav-fork/index.html');
     const blockedTraversal = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/../../state/autopilot-state.json');
+    const deepResearchSkill = snap.catalog?.skills?.find((s) => s.name === 'deep-research');
+    const autopilotWf = snap.catalog?.workflows?.find((w) => w.id === 'autopilot');
 
-    const ok = snap.statusLine.includes('autopilot:ultragoal')
+    const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki', 'doctor'])
+      && snap.statusLine.includes('autopilot:ultragoal')
       && snap.statusLine.includes('ultragoal:1/1')
+      && snap.catalog?.skills?.length === 27
+      && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.quickStart.includes('/deep-research'))
+      && snap.catalog?.subagents?.length === 18
+      && snap.catalog?.workflows?.length >= 6
+      && Boolean(autopilotWf && autopilotWf.active === true && autopilotWf.currentPhase === 'ultragoal')
+      && snap.research?.length === 1
+      && snap.research[0].compositeScore === 91.2
+      && snap.research[0].claims.verified === 1
       && snap.interview?.slug === 'auth-flow'
       && snap.interview?.rounds?.[0]?.answer.includes('[REDACTED_TOKEN]')
       && snap.reviews?.hyperplan?.[0]?.survives === 1
@@ -1297,7 +1765,14 @@ async function runSelftest() {
       && Boolean(validArtifact && validArtifact.mime.includes('text/html'))
       && blockedTraversal === null;
 
-    process.stdout.write(`${JSON.stringify({ selftest: ok ? 'PASS' : 'FAIL', statusLine: snap.statusLine })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      selftest: ok ? 'PASS' : 'FAIL',
+      views: snap.allowedViews.length,
+      skills: snap.catalog?.skills?.length || 0,
+      subagents: snap.catalog?.subagents?.length || 0,
+      workflows: snap.catalog?.workflows?.length || 0,
+      statusLine: snap.statusLine,
+    })}\n`);
     process.exitCode = ok ? 0 : 1;
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
