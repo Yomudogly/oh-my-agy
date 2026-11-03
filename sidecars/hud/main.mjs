@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // oh-my-agy HUD Sidecar (UI Extension for Antigravity Auxiliary Pane).
-// Strictly read-only status, workflow, skill & subagent hub (OMX #3963 zero-mutation invariant) serving
-// `sidecar://oh-my-agy/hud/` (`?view=overview|workflows|skills|subagents|wiki|doctor`).
+// Read-only status polling (`GET /api/status`, OMX #3963 zero-mutation invariant) + authenticated `agentapi`
+// launcher (`POST /api/dispatch`) serving `sidecar://oh-my-agy/hud/` (`?view=overview|workflows|skills|subagents|wiki`).
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -13,9 +14,12 @@ import { redactSecrets, readJsonlRecords, validateQualityGates } from '../../hoo
 const BIND_HOST = '127.0.0.1';
 const STALE_MS = 6 * 3600 * 1000;
 const TEAM_COMPLETED_WINDOW_MS = 20 * 60 * 1000;
+const MAX_DISPATCH_BODY_BYTES = 16 * 1024;
 const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
 const WIKI_CATEGORIES = new Set(['architecture', 'decision', 'pattern', 'debugging', 'environment', 'session-log', 'reference', 'convention']);
-export const ALLOWED_VIEWS = ['overview', 'workflows', 'skills', 'subagents', 'wiki', 'doctor'];
+const ALLOWED_DISPATCH_MODES = new Set(['active-chat', 'new-chat', 'subagent-active', 'subagent-standalone']);
+const ALLOWED_CLI_MODELS = new Set(['flash_lite', 'flash', 'pro']);
+export const ALLOWED_VIEWS = ['overview', 'workflows', 'skills', 'subagents', 'wiki'];
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const MIME_BY_EXT = {
@@ -200,94 +204,119 @@ const SUBAGENT_GUIDE_META = {
   explore: {
     lane: 'Discovery & Research',
     modelTier: 'flash | inherit',
+    defaultPrompt: 'Map the key files, symbols, and call paths for the current feature',
     whenToUse: 'Fast, read-only repo lookup: locate files, symbols, call graphs, and existing dependency usage before planning or editing.',
   },
   researcher: {
     lane: 'Discovery & Research',
     modelTier: 'inherit',
+    defaultPrompt: 'Fetch official documentation and version constraints for the target API',
     whenToUse: 'External official documentation, upstream API signatures, release notes, RFCs, and Tier A-C evidence for /deep-research and /best-practice-research.',
   },
   'dependency-expert': {
     lane: 'Discovery & Research',
     modelTier: 'inherit',
+    defaultPrompt: 'Evaluate dependency options, maintenance health, license, and migration risks',
     whenToUse: 'Evaluate whether/which package or SDK to adopt, upgrade, replace, or migrate (maintenance, bundle size, license, security).',
   },
   analyst: {
     lane: 'Discovery & Research',
     modelTier: 'inherit',
+    defaultPrompt: 'Identify hidden requirements, product edge cases, and unstated assumptions',
     whenToUse: 'Surface hidden requirements, product/business edge cases, unstated assumptions, and lateral alternatives before planning.',
   },
   planner: {
     lane: 'Planning & Architecture',
     modelTier: 'inherit',
+    defaultPrompt: 'Draft a right-sized PRD and test spec in .omagy/plans/ for the active task',
     whenToUse: 'Author right-sized, evidence-backed implementation plans (prd-<slug>.md and test-spec-<slug>.md) with explicit task interfaces.',
   },
   architect: {
     lane: 'Planning & Architecture',
     modelTier: 'pro | inherit',
+    defaultPrompt: 'Review architectural boundaries, steelman tradeoffs, and ADR reversibility of recent changes',
     whenToUse: 'Read-only architectural review, steelman antithesis, Demolition/ADR tests, and CLEAR / WATCH / BLOCK rulings in /ralplan and /code-review.',
   },
   critic: {
     lane: 'Planning & Architecture',
     modelTier: 'pro | inherit',
+    defaultPrompt: 'Audit the active plan in .omagy/plans/ against quality, edge-case, and testability criteria',
     whenToUse: 'Sequential quality gate after Architect in /ralplan: issues APPROVE / ITERATE / REJECT against principles, edge cases, and testability.',
   },
   executor: {
     lane: 'Execution & Debugging',
     modelTier: 'inherit',
+    defaultPrompt: 'Implement the next bounded task slice and run its verification command',
     whenToUse: 'Autonomous implementation worker for bounded goal/task slices with explicit owned files, acceptance criteria, and verification commands.',
   },
   'team-worker': {
     lane: 'Execution & Debugging',
     modelTier: 'flash | inherit | pro',
+    defaultPrompt: 'Execute the assigned team task slice and record verification evidence in .omagy/evidence/',
     whenToUse: 'Dispatched by the /team leader on a shared git worktree/workspace to complete a DAG task and write .omagy/evidence/task-<id>.json.',
   },
   debugger: {
     lane: 'Execution & Debugging',
     modelTier: 'inherit',
+    defaultPrompt: 'Isolate the root cause of the failing test or runtime regression',
     whenToUse: 'Root-cause isolation, stack-trace backward tracing, find-polluter test bisection, and 4-layer defense-in-depth bug fixes.',
   },
   tracer: {
     lane: 'Execution & Debugging',
     modelTier: 'pro | inherit',
+    defaultPrompt: 'Form competing hypotheses and rank evidence to trace the causal chain of this issue',
     whenToUse: 'Competing-hypothesis causal tracing with 6-tier evidence ranking, disconfirmation probes, and discriminating next-step experiments.',
   },
   'code-simplifier': {
     lane: 'Execution & Debugging',
     modelTier: 'inherit',
+    defaultPrompt: 'Simplify recently modified code and remove dead abstractions without changing behavior',
     whenToUse: 'Post-modification cleanup pass to simplify control flow, remove dead wrappers, and tighten naming without changing behavior.',
   },
   'test-engineer': {
     lane: 'Review & Verification',
     modelTier: 'inherit',
+    defaultPrompt: 'Design high-signal unit and integration tests covering edge cases and failure modes',
     whenToUse: 'Design and harden unit/integration/e2e tests using Name-the-Break, Exercise-the-Real-Thing, mutation checks, and condition-based waiting.',
   },
   verifier: {
     lane: 'Review & Verification',
     modelTier: 'inherit',
+    defaultPrompt: 'Run independent fresh verification commands to confirm completion claims',
     whenToUse: 'Independent completion gate (AdversarialVerify) running fresh commands and Red-Green revert checks to confirm or reject a DoneClaim.',
   },
   'code-reviewer': {
     lane: 'Review & Verification',
     modelTier: 'inherit',
+    defaultPrompt: 'Perform a severity-rated code review of the current branch diff with file:line evidence',
     whenToUse: 'Severity-rated review of a pre-assembled review-package diff with file:line evidence, Spec-Silence checks, and scoped --re-review.',
   },
   'security-reviewer': {
     lane: 'Review & Verification',
     modelTier: 'pro | inherit',
+    defaultPrompt: 'Audit recent changes for OWASP Top 10, injection, auth, secret exposure, and path traversal risks',
     whenToUse: 'OWASP Top 10, auth/session boundaries, injection, path traversal, and secret exposure audit on security-sensitive changes.',
   },
   designer: {
     lane: 'Design & Visual',
     modelTier: 'inherit',
+    defaultPrompt: 'Audit UI layout, typography, color contrast, and responsive reflow against DESIGN.md',
     whenToUse: 'UI/UX design system authoring (DESIGN.md) and polished frontend implementation enforcing the Impeccable Craft Floor and 320px reflow.',
   },
   vision: {
     lane: 'Design & Visual',
     modelTier: 'inherit',
+    defaultPrompt: 'Compare the current UI screenshot against the visual reference target and score differences',
     whenToUse: 'Visual/media analysis of screenshots, mockups, and live renders, issuing scored Visual Ralph verdicts and pixel-diff fix lists.',
   },
 };
+
+export function normalizeCliModel(modelTier) {
+  const raw = String(modelTier || '').trim().toLowerCase();
+  if (!raw || raw === 'inherit' || raw.includes('flash | inherit | pro')) return '';
+  const first = raw.split('|')[0].trim();
+  return ALLOWED_CLI_MODELS.has(first) ? first : '';
+}
 
 const WORKFLOW_BLUEPRINTS = [
   {
@@ -530,10 +559,13 @@ export function buildPluginCatalog(pluginRoot = PLUGIN_ROOT, activeModes = []) {
         const name = String(meta?.name || file.slice(0, -3)).trim();
         const rawDesc = String(meta?.description || '').trim();
         const guide = SUBAGENT_GUIDE_META[name] || {};
+        const modelTier = guide.modelTier || 'inherit';
         subagents.push({
           name,
           lane: guide.lane || 'Execution & Debugging',
-          modelTier: guide.modelTier || 'inherit',
+          modelTier,
+          cliModel: normalizeCliModel(modelTier),
+          defaultPrompt: guide.defaultPrompt || `Run a ${name} review on the current workspace`,
           description: rawDesc,
           whenToUse: guide.whenToUse || rawDesc,
         });
@@ -555,6 +587,198 @@ export function buildPluginCatalog(pluginRoot = PLUGIN_ROOT, activeModes = []) {
   }));
 
   return { skills, subagents, workflows };
+}
+
+export function resolveActiveConversationId(workspaceRoot = process.cwd(), explicitId = '') {
+  const validIdRe = /^[a-zA-Z0-9_-]{6,80}$/;
+  const trimmedExplicit = String(explicitId || '').trim();
+  if (validIdRe.test(trimmedExplicit)) return trimmedExplicit;
+
+  const runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
+  try {
+    if (fs.existsSync(runtimeDir) && !fs.lstatSync(runtimeDir).isSymbolicLink()) {
+      const routingFiles = fs.readdirSync(runtimeDir)
+        .filter((f) => f.endsWith('.routing.json'))
+        .map((f) => {
+          const p = path.join(runtimeDir, f);
+          try {
+            const st = fs.lstatSync(p);
+            return st.isFile() && !st.isSymbolicLink() ? { id: f.replace(/\.routing\.json$/, ''), mtimeMs: st.mtimeMs } : null;
+          } catch { return null; }
+        })
+        .filter((r) => r && validIdRe.test(r.id))
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      if (routingFiles.length) return routingFiles[0].id;
+    }
+  } catch { /* ignore */ }
+
+  try {
+    const stateRoot = resolveStateRoot(uriToFsPath(workspaceRoot) || workspaceRoot || process.cwd());
+    const stateDir = path.join(stateRoot, '.omagy', 'state');
+    const records = [...readModeFilesInDir(stateDir, 'shared')];
+    const sessionsDir = path.join(stateDir, 'sessions');
+    if (fs.existsSync(sessionsDir) && !fs.lstatSync(sessionsDir).isSymbolicLink()) {
+      for (const name of fs.readdirSync(sessionsDir)) {
+        const p = path.join(sessionsDir, name);
+        try {
+          const st = fs.lstatSync(p);
+          if (st.isDirectory() && !st.isSymbolicLink()) {
+            records.push(...readModeFilesInDir(p, name.slice(0, 12)));
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    const sorted = records
+      .filter((r) => validIdRe.test(r.owner))
+      .sort((a, b) => b.updatedMs - a.updatedMs);
+    if (sorted.length) return sorted[0].owner;
+  } catch { /* ignore */ }
+
+  return '';
+}
+
+function resolveAgentApiBinary() {
+  if (process.env.OMAGY_AGENTAPI_BIN) {
+    return { bin: process.env.OMAGY_AGENTAPI_BIN, prefixArgs: [] };
+  }
+  const homeBin = path.join(os.homedir(), '.gemini', 'antigravity', 'bin', 'agentapi');
+  if (fs.existsSync(homeBin)) {
+    return { bin: homeBin, prefixArgs: [] };
+  }
+  const appLs = '/Applications/Antigravity.app/Contents/Resources/bin/language_server';
+  if (fs.existsSync(appLs)) {
+    return { bin: appLs, prefixArgs: ['agentapi'] };
+  }
+  return { bin: 'agentapi', prefixArgs: [] };
+}
+
+function makeDispatchTitle(prefix, prompt) {
+  const clean = String(prompt || '').replace(/\s+/g, ' ').trim().slice(0, 48);
+  return `[${prefix}] ${clean}`;
+}
+
+export function dispatchHudAction(payload = {}, options = {}) {
+  const mode = String(payload?.mode || '').trim();
+  if (!ALLOWED_DISPATCH_MODES.has(mode)) {
+    return { ok: false, status: 400, error: `Invalid dispatch mode: ${mode || '(empty)'}` };
+  }
+
+  const rawPrompt = String(payload?.prompt || '').trim();
+  if (!rawPrompt || rawPrompt.length > 4000) {
+    return { ok: false, status: 400, error: 'Prompt must be between 1 and 4000 characters' };
+  }
+
+  const pluginRoot = options.pluginRoot || PLUGIN_ROOT;
+  const workspaceRoot = options.workspaceRoot || payload?.workspace || process.env.OMAGY_WORKSPACE || process.cwd();
+  const catalog = buildPluginCatalog(pluginRoot);
+
+  let agentName = '';
+  let cliModel = '';
+  if (mode === 'subagent-active' || mode === 'subagent-standalone') {
+    agentName = String(payload?.agent || '').trim();
+    const subagentMeta = catalog.subagents.find((a) => a.name === agentName);
+    if (!agentName || !/^[a-z0-9-]+$/.test(agentName) || !subagentMeta) {
+      return { ok: false, status: 400, error: `Unknown subagent: ${agentName || '(empty)'}` };
+    }
+    const requestedModel = String(payload?.model || '').trim();
+    if (requestedModel && requestedModel !== 'inherit' && !ALLOWED_CLI_MODELS.has(requestedModel)) {
+      return { ok: false, status: 400, error: `Invalid model tier: ${requestedModel}` };
+    }
+    cliModel = requestedModel ? normalizeCliModel(requestedModel) : subagentMeta.cliModel;
+  }
+
+  const { bin, prefixArgs } = resolveAgentApiBinary();
+  const runner = typeof options.runner === 'function'
+    ? options.runner
+    : (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+
+  const invokeAgentApi = (subArgs) => {
+    const fullArgs = [...prefixArgs, ...subArgs];
+    const out = runner(bin, fullArgs);
+    return { command: bin, args: subArgs, output: String(out || '').trim() };
+  };
+
+  try {
+    if (mode === 'new-chat') {
+      const title = makeDispatchTitle('HUD', rawPrompt);
+      const res = invokeAgentApi(['new-conversation', `--title=${title}`, '--', rawPrompt]);
+      return { ok: true, status: 200, modeUsed: 'new-chat', fallback: false, ...res };
+    }
+
+    if (mode === 'active-chat') {
+      const convId = resolveActiveConversationId(workspaceRoot, payload?.conversationId);
+      const title = makeDispatchTitle('HUD', rawPrompt);
+      if (convId) {
+        try {
+          const res = invokeAgentApi(['send-message', `--title=${title}`, '--', convId, rawPrompt]);
+          return { ok: true, status: 200, modeUsed: 'active-chat', conversationId: convId, fallback: false, ...res };
+        } catch {
+          // Fall through to new-conversation if send-message fails on a closed/stale conversation.
+        }
+      }
+      const res = invokeAgentApi(['new-conversation', `--title=${title}`, '--', rawPrompt]);
+      return { ok: true, status: 200, modeUsed: 'new-chat', fallback: true, ...res };
+    }
+
+    if (mode === 'subagent-active') {
+      const modelLabel = cliModel || 'inherit';
+      const delegationPrompt = `Use invoke_subagent with TypeName="${agentName}" and Model="${modelLabel}" to complete this task: ${rawPrompt}`;
+      const title = makeDispatchTitle(agentName, rawPrompt);
+      const convId = resolveActiveConversationId(workspaceRoot, payload?.conversationId);
+      if (convId) {
+        try {
+          const res = invokeAgentApi(['send-message', `--title=${title}`, '--', convId, delegationPrompt]);
+          return {
+            ok: true,
+            status: 200,
+            modeUsed: 'subagent-active',
+            conversationId: convId,
+            agent: agentName,
+            model: modelLabel,
+            fallback: false,
+            ...res,
+          };
+        } catch {
+          // Fall through to standalone specialist conversation if active conversation is unreachable.
+        }
+      }
+      const stArgs = ['new-conversation', `--profile=${agentName}`];
+      if (cliModel) stArgs.push(`--model=${cliModel}`);
+      stArgs.push(`--title=${title}`, '--', rawPrompt);
+      const res = invokeAgentApi(stArgs);
+      return {
+        ok: true,
+        status: 200,
+        modeUsed: 'subagent-standalone',
+        agent: agentName,
+        model: modelLabel,
+        fallback: true,
+        ...res,
+      };
+    }
+
+    // mode === 'subagent-standalone'
+    const title = makeDispatchTitle(agentName, rawPrompt);
+    const stArgs = ['new-conversation', `--profile=${agentName}`];
+    if (cliModel) stArgs.push(`--model=${cliModel}`);
+    stArgs.push(`--title=${title}`, '--', rawPrompt);
+    const res = invokeAgentApi(stArgs);
+    return {
+      ok: true,
+      status: 200,
+      modeUsed: 'subagent-standalone',
+      agent: agentName,
+      model: cliModel || 'inherit',
+      fallback: false,
+      ...res,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 500,
+      error: redactSecrets(String(err?.message || err || 'Failed to invoke agentapi')),
+    };
+  }
 }
 
 export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
@@ -1172,16 +1396,47 @@ const HUD_HTML = `<!DOCTYPE html>
     }
     .cmd-box {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
       margin-top: 8px;
-      padding: 6px 9px;
+      padding: 8px;
       border-radius: 7px;
       background: rgba(0,0,0,0.28);
       border: 1px solid var(--border, rgba(255,255,255,0.09));
+    }
+    .cmd-input {
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(255,255,255,0.04);
+      color: var(--foreground, #e5e7eb);
+      border: 1px solid var(--border, rgba(255,255,255,0.14));
+      border-radius: 5px;
+      padding: 6px 8px;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11.5px;
+      font-size: 12px;
+    }
+    .cmd-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .action-btn {
+      cursor: pointer;
+      padding: 4px 9px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      border: 1px solid var(--border, rgba(255,255,255,0.18));
+      background: rgba(255,255,255,0.05);
+      color: var(--foreground, #e5e7eb);
+    }
+    .action-btn-primary {
+      border-color: rgba(96, 165, 250, 0.55);
+      background: rgba(96, 165, 250, 0.16);
+      color: var(--primary, #60a5fa);
     }
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); }
@@ -1204,7 +1459,6 @@ const HUD_HTML = `<!DOCTYPE html>
     <button class="tab-btn" data-view="skills">Skills</button>
     <button class="tab-btn" data-view="subagents">Subagents</button>
     <button class="tab-btn" data-view="wiki">Wiki</button>
-    <button class="tab-btn" data-view="doctor">Doctor</button>
   </div>
 
   <div id="view-overview" class="view-pane"></div>
@@ -1212,7 +1466,6 @@ const HUD_HTML = `<!DOCTYPE html>
   <div id="view-skills" class="view-pane" style="display:none;"></div>
   <div id="view-subagents" class="view-pane" style="display:none;"></div>
   <div id="view-wiki" class="view-pane" style="display:none;"></div>
-  <div id="view-doctor" class="view-pane" style="display:none;"></div>
 
   <script>
     const ALLOWED = ${JSON.stringify(ALLOWED_VIEWS)};
@@ -1225,6 +1478,7 @@ const HUD_HTML = `<!DOCTYPE html>
     let subagentLane = 'All';
     let workspaceUris = [];
     let latestData = null;
+    const editedPrompts = {};
 
     window.addEventListener('message', (event) => {
       if (event.data?.type === 'theme-change' && event.data.payload?.cssVariables) {
@@ -1241,14 +1495,82 @@ const HUD_HTML = `<!DOCTYPE html>
       return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
-    window.copyQuickStart = function(btn, text) {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => {
-          const prev = btn.textContent;
-          btn.textContent = 'Copied!';
-          setTimeout(() => { btn.textContent = prev; }, 1200);
-        }).catch(() => {});
+    function getPromptValue(key, fallback) {
+      return Object.prototype.hasOwnProperty.call(editedPrompts, key) ? editedPrompts[key] : fallback;
+    }
+
+    window.onPromptEdit = function(key, val) {
+      if (key) editedPrompts[key] = String(val ?? '');
+    };
+
+    function flashButton(btn, label, ms = 1400) {
+      if (!btn) return;
+      const prev = btn.dataset.origLabel || btn.textContent;
+      btn.dataset.origLabel = prev;
+      btn.textContent = label;
+      setTimeout(() => { btn.textContent = prev; }, ms);
+    }
+
+    window.copyFromInput = function(btn, inputId) {
+      const el = document.getElementById(inputId);
+      const text = el ? el.value : '';
+      if (text && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => flashButton(btn, 'Copied!')).catch(() => {});
       }
+    };
+
+    async function postDispatch(btn, body) {
+      const prevLabel = btn ? (btn.dataset.origLabel || btn.textContent) : '';
+      if (btn) {
+        btn.dataset.origLabel = prevLabel;
+        btn.disabled = true;
+        btn.textContent = 'Sending...';
+      }
+      try {
+        const q = new URLSearchParams();
+        if (token) q.set('token', token);
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['X-Sidecar-Token'] = token;
+        const res = await fetch('/api/dispatch?' + q.toString(), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            ...body,
+            workspace: latestData?.workspace || (workspaceUris[0] || ''),
+            conversationId: latestData?.doctor?.latestRouting?.conversationId || '',
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (btn) btn.disabled = false;
+        if (!res.ok || !data.ok) {
+          flashButton(btn, 'Error', 1800);
+          return;
+        }
+        if (data.fallback) {
+          flashButton(btn, 'Started New Chat!', 1800);
+        } else if (data.modeUsed === 'active-chat' || data.modeUsed === 'subagent-active') {
+          flashButton(btn, 'Sent to Chat!', 1600);
+        } else {
+          flashButton(btn, 'Launched Chat!', 1600);
+        }
+      } catch (e) {
+        if (btn) btn.disabled = false;
+        flashButton(btn, 'Failed', 1800);
+      }
+    }
+
+    window.runFromInput = function(btn, inputId, mode) {
+      const el = document.getElementById(inputId);
+      const prompt = el ? el.value.trim() : '';
+      if (!prompt) return;
+      postDispatch(btn, { mode, prompt });
+    };
+
+    window.invokeSubagentFromInput = function(btn, inputId, agent, model, mode) {
+      const el = document.getElementById(inputId);
+      const prompt = el ? el.value.trim() : '';
+      if (!prompt) return;
+      postDispatch(btn, { mode, agent, model, prompt });
     };
 
     function setTab(view) {
@@ -1400,6 +1722,35 @@ const HUD_HTML = `<!DOCTYPE html>
           </div>\`;
       }
 
+      // Consolidated Doctor & Runtime Diagnostics Card (folded from Doctor tab)
+      const doc = data.doctor || {};
+      const errRows = (doc.hookErrors || []).map((e) => \`
+        <tr>
+          <td><code>\${esc(e.at)}</code></td>
+          <td><code>\${esc(e.event)}</code></td>
+          <td class="muted">\${esc(e.error)}</td>
+        </tr>\`).join('');
+      const doctorHtml = \`
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
+            <div style="font-weight:600;">Diagnostics &amp; Runtime Health</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <span class="badge \${doc.qualityGatesOk ? 'badge-active' : ''}">Quality Gates: \${doc.qualityGatesOk ? 'OK' : 'INVALID'}</span>
+              <span class="badge">Stale Modes: \${(doc.staleModes || []).length ? esc(doc.staleModes.join(', ')) : 'none'}</span>
+            </div>
+          </div>
+          \${(doc.qualityGateErrors || []).length ? \`<ul style="margin:0 0 8px 0;padding-left:18px;">\${doc.qualityGateErrors.map((e) => \`<li>\${esc(e)}</li>\`).join('')}</ul>\` : ''}
+          \${qgRows ? \`<div style="margin-bottom:8px;"><div class="muted" style="font-size:12px;margin-bottom:4px;">Configured Quality Gates:</div><ul style="margin:0;padding-left:18px;">\${qgRows}</ul></div>\` : ''}
+          <div style="margin-bottom:8px;">
+            <span class="muted">Latest PreInvocation Routing:</span>
+            \${doc.latestRouting ? \` Conversation <code>\${esc(doc.latestRouting.conversationId)}</code> &middot; Skills: <code>\${esc((doc.latestRouting.skills || []).join(', ') || 'none')}</code>\` : ' <span class="muted">No .routing.json found yet.</span>'}
+          </div>
+          <div>
+            <div class="muted" style="margin-bottom:4px;">Recent Hook Errors (.omagy/logs/hook-errors.jsonl):</div>
+            \${errRows ? \`<table><thead><tr><th>Time</th><th>Event</th><th>Error</th></tr></thead><tbody>\${errRows}</tbody></table>\` : '<div class="muted">Zero hook errors recorded.</div>'}
+          </div>
+        </div>\`;
+
       const counts = {
         skills: data.catalog?.skills?.length || 0,
         subagents: data.catalog?.subagents?.length || 0,
@@ -1420,13 +1771,13 @@ const HUD_HTML = `<!DOCTYPE html>
         </div>
         <div class="card">
           <div style="font-weight:600;margin-bottom:8px;">Workflow Modes</div>
-          \${modesRows ? \`<table><thead><tr><th>Mode</th><th>Phase</th><th>State</th><th>Iter</th><th>Scope</th></tr></thead><tbody>\${modesRows}</tbody></table>\` : '<div class="muted">No active mode state files in .omagy/state/. Open the <strong>Workflows</strong> or <strong>Skills</strong> tab for quick-start commands.</div>'}
+          \${modesRows ? \`<table><thead><tr><th>Mode</th><th>Phase</th><th>State</th><th>Iter</th><th>Scope</th></tr></thead><tbody>\${modesRows}</tbody></table>\` : '<div class="muted">No active mode state files in .omagy/state/. Open the <strong>Workflows</strong>, <strong>Skills</strong>, or <strong>Subagents</strong> tab to edit and run commands directly.</div>'}
         </div>
         \${ugHtml}
         \${ivHtml}
         \${teamHtml}
         \${revResHtml}
-        \${qgRows ? \`<div class="card"><div style="font-weight:600;margin-bottom:6px;">Configured Quality Gates</div><ul style="margin:0;padding-left:18px;">\${qgRows}</ul></div>\` : ''}
+        \${doctorHtml}
       \`;
     }
 
@@ -1435,6 +1786,9 @@ const HUD_HTML = `<!DOCTYPE html>
       document.getElementById('view-workflows').innerHTML = list.map((wf) => {
         const stagesHtml = (wf.stages || []).map((s, idx) => \`
           <span class="badge">\${idx + 1}. \${esc(s)}</span>\`).join('<span class="muted" style="align-self:center;">&rarr;</span>');
+        const inputKey = 'wf:' + wf.id;
+        const inputId = 'input-wf-' + wf.id;
+        const val = getPromptValue(inputKey, wf.quickStart);
         return \`
           <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
@@ -1443,10 +1797,14 @@ const HUD_HTML = `<!DOCTYPE html>
             </div>
             <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">\${stagesHtml}</div>
             <div style="margin-bottom:6px;"><strong>When to use:</strong> <span class="muted">\${esc(wf.whenToUse)}</span></div>
-            <div class="muted" style="font-size:11.5px;"><strong>State / Artifacts:</strong> <code>\${esc(wf.artifacts)}</code></div>
+            <div class="muted" style="font-size:12px;"><strong>State / Artifacts:</strong> <code>\${esc(wf.artifacts)}</code></div>
             <div class="cmd-box">
-              <span>\${esc(wf.quickStart)}</span>
-              <button class="badge" style="cursor:pointer;" data-cmd="\${esc(wf.quickStart)}" onclick="copyQuickStart(this, this.dataset.cmd)">Copy</button>
+              <input type="text" class="cmd-input" id="\${esc(inputId)}" data-input-key="\${esc(inputKey)}" value="\${esc(val)}" oninput="onPromptEdit(this.dataset.inputKey, this.value)" />
+              <div class="cmd-actions">
+                <button class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
+                <button class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this command">New Chat</button>
+                <button class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>
+              </div>
             </div>
           </div>\`;
       }).join('');
@@ -1472,20 +1830,27 @@ const HUD_HTML = `<!DOCTYPE html>
       }
       container.innerHTML = filtered.map((s) => {
         const flagsHtml = (s.flags || []).map((f) => \`<span class="badge"><code>\${esc(f)}</code></span>\`).join(' ');
+        const inputKey = 'skill:' + s.name;
+        const inputId = 'input-skill-' + s.name;
+        const val = getPromptValue(inputKey, s.quickStart);
         return \`
           <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
               <div>
                 <code style="font-weight:600;font-size:13px;">/\${esc(s.name)}</code>
-                <span class="muted" style="font-size:11.5px;margin-left:4px;">($\${esc(s.name)})</span>
+                <span class="muted" style="font-size:12px;margin-left:4px;">($\${esc(s.name)})</span>
               </div>
               <span class="badge">\${esc(s.category)}</span>
             </div>
             \${flagsHtml ? \`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">\${flagsHtml}</div>\` : ''}
             <div style="margin-bottom:4px;">\${esc(s.howToUse)}</div>
             <div class="cmd-box">
-              <span>\${esc(s.quickStart)}</span>
-              <button class="badge" style="cursor:pointer;" data-cmd="\${esc(s.quickStart)}" onclick="copyQuickStart(this, this.dataset.cmd)">Copy</button>
+              <input type="text" class="cmd-input" id="\${esc(inputId)}" data-input-key="\${esc(inputKey)}" value="\${esc(val)}" oninput="onPromptEdit(this.dataset.inputKey, this.value)" />
+              <div class="cmd-actions">
+                <button class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
+                <button class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this skill command">New Chat</button>
+                <button class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>
+              </div>
             </div>
           </div>\`;
       }).join('');
@@ -1513,7 +1878,11 @@ const HUD_HTML = `<!DOCTYPE html>
       const laneBtns = lanes.map((l) => \`
         <button class="tab-btn \${subagentLane === l ? 'active' : ''}" onclick="setSubagentLane('\${esc(l)}')">\${esc(l)}</button>\`).join('');
       const filtered = allSubagents.filter((a) => subagentLane === 'All' || a.lane === subagentLane);
-      const cards = filtered.map((a) => \`
+      const cards = filtered.map((a) => {
+        const inputKey = 'sa:' + a.name;
+        const inputId = 'input-sa-' + a.name;
+        const val = getPromptValue(inputKey, a.defaultPrompt || '');
+        return \`
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
             <code style="font-weight:600;font-size:13px;">\${esc(a.name)}</code>
@@ -1523,8 +1892,15 @@ const HUD_HTML = `<!DOCTYPE html>
             </div>
           </div>
           <div style="margin-bottom:4px;">\${esc(a.whenToUse)}</div>
-          <div class="muted" style="font-size:11.5px;">Invoke via <code>invoke_subagent(TypeName: "\${esc(a.name)}")</code></div>
-        </div>\`).join('');
+          <div class="cmd-box">
+            <input type="text" class="cmd-input" id="\${esc(inputId)}" data-input-key="\${esc(inputKey)}" value="\${esc(val)}" oninput="onPromptEdit(this.dataset.inputKey, this.value)" placeholder="Task for \${esc(a.name)}..." />
+            <div class="cmd-actions">
+              <button class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(a.cliModel || '')}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-active')" title="Send into the active chat so the leader agent calls invoke_subagent">Dispatch into Active Chat</button>
+              <button class="action-btn" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(a.cliModel || '')}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-standalone')" title="Open a standalone specialist chat with --profile=\${esc(a.name)}">Launch Standalone Chat</button>
+            </div>
+          </div>
+        </div>\`;
+      }).join('');
       document.getElementById('view-subagents').innerHTML = \`
         <div class="card">
           <div style="font-weight:600;margin-bottom:4px;">Role Subagents (\${allSubagents.length} specialists)</div>
@@ -1576,42 +1952,19 @@ const HUD_HTML = `<!DOCTYPE html>
       \`;
     }
 
-    function renderDoctor(data) {
-      const doc = data.doctor || {};
-      const errRows = (doc.hookErrors || []).map((e) => \`
-        <tr>
-          <td><code>\${esc(e.at)}</code></td>
-          <td><code>\${esc(e.event)}</code></td>
-          <td class="muted">\${esc(e.error)}</td>
-        </tr>\`).join('');
-      document.getElementById('view-doctor').innerHTML = \`
-        <div class="card">
-          <div style="font-weight:600;margin-bottom:8px;">Runtime &amp; Quality Gate Health</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <span class="badge">Quality Gates: \${doc.qualityGatesOk ? 'OK' : 'INVALID'}</span>
-            <span class="badge">Stale Modes: \${(doc.staleModes || []).length ? esc(doc.staleModes.join(', ')) : 'none'}</span>
-          </div>
-          \${(doc.qualityGateErrors || []).length ? \`<ul style="margin-top:8px;padding-left:18px;">\${doc.qualityGateErrors.map((e) => \`<li>\${esc(e)}</li>\`).join('')}</ul>\` : ''}
-        </div>
-        <div class="card">
-          <div style="font-weight:600;margin-bottom:6px;">Latest PreInvocation Routing</div>
-          \${doc.latestRouting ? \`<div>Conversation: <code>\${esc(doc.latestRouting.conversationId)}</code> &middot; At: <code>\${esc(doc.latestRouting.at)}</code> &middot; Skills: <code>\${esc((doc.latestRouting.skills || []).join(', ') || 'none')}</code></div>\` : '<div class="muted">No .routing.json found in runtime tmpdir yet.</div>'}
-        </div>
-        <div class="card">
-          <div style="font-weight:600;margin-bottom:8px;">Recent Hook Errors (.omagy/logs/hook-errors.jsonl)</div>
-          \${errRows ? \`<table><thead><tr><th>Time</th><th>Event</th><th>Error</th></tr></thead><tbody>\${errRows}</tbody></table>\` : '<div class="muted">Zero hook errors recorded.</div>'}
-        </div>
-      \`;
+    function isEditingInContainer(containerId) {
+      const container = document.getElementById(containerId);
+      const active = document.activeElement;
+      return Boolean(container && active && container.contains(active) && active.tagName === 'INPUT');
     }
 
     function render(data) {
       document.getElementById('status-line').textContent = data.statusLine || '[OMA] No active modes';
       renderOverview(data);
-      renderWorkflows(data);
-      renderSkills(data);
-      renderSubagents(data);
+      if (!isEditingInContainer('view-workflows')) renderWorkflows(data);
+      if (!isEditingInContainer('view-skills')) renderSkills(data);
+      if (!isEditingInContainer('view-subagents')) renderSubagents(data);
       renderWiki(data);
-      renderDoctor(data);
     }
 
     loadSnapshot();
@@ -1620,7 +1973,7 @@ const HUD_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '') {
+export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '', options = {}) {
   return http.createServer((req, res) => {
     const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
     if (token && reqUrl.pathname.startsWith('/api/')) {
@@ -1650,6 +2003,43 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
       const snap = buildHudSnapshot(workspaces);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(snap));
+      return;
+    }
+    if (req.method === 'POST' && reqUrl.pathname === '/api/dispatch') {
+      const ct = String(req.headers['content-type'] || '').toLowerCase();
+      if (!ct.includes('application/json')) {
+        res.writeHead(415, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: 'Content-Type must be application/json' }));
+        return;
+      }
+      const chunks = [];
+      let totalBytes = 0;
+      let aborted = false;
+      req.on('data', (chunk) => {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_DISPATCH_BODY_BYTES) {
+          aborted = true;
+          res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'Payload too large' }));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('end', () => {
+        if (aborted) return;
+        let payload = {};
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
+          return;
+        }
+        const result = dispatchHudAction(payload, options);
+        res.writeHead(result.status || (result.ok ? 200 : 400), { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(result));
+      });
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/artifact') {
@@ -1690,7 +2080,7 @@ async function runSelftest() {
     fs.mkdirSync(path.join(ws, 'omagy_wiki'), { recursive: true });
 
     fs.writeFileSync(path.join(ws, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
-      mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 2, updated_at: new Date().toISOString(),
+      mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 2, owner_conversation_id: 'conv-owner-1234', updated_at: new Date().toISOString(),
     }));
     fs.writeFileSync(path.join(ws, '.omagy', 'state', 'deep-interview-state.json'), JSON.stringify({
       mode: 'deep-interview',
@@ -1737,15 +2127,102 @@ async function runSelftest() {
     const blockedTraversal = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/../../state/autopilot-state.json');
     const deepResearchSkill = snap.catalog?.skills?.find((s) => s.name === 'deep-research');
     const autopilotWf = snap.catalog?.workflows?.find((w) => w.id === 'autopilot');
+    const architectAgent = snap.catalog?.subagents?.find((a) => a.name === 'architect');
 
-    const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki', 'doctor'])
+    // H3-H7: Test dispatchHudAction across all 4 modes, fallback, and security rejections
+    const calls = [];
+    const mockRunner = (_bin, args) => {
+      calls.push(args);
+      return 'dispatched-ok';
+    };
+    const dActive = dispatchHudAction(
+      { mode: 'active-chat', prompt: '/autopilot ship feature', conversationId: 'conv-explicit-9999' },
+      { workspaceRoot: ws, runner: mockRunner }
+    );
+    const emptyWs = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-empty-'));
+    const prevRuntimeDir = process.env.OMAGY_RUNTIME_DIR;
+    process.env.OMAGY_RUNTIME_DIR = path.join(emptyWs, 'no-runtime');
+    const dFallback = dispatchHudAction(
+      { mode: 'active-chat', prompt: '/deep-research --technical "vector index"' },
+      { workspaceRoot: emptyWs, runner: mockRunner }
+    );
+    if (prevRuntimeDir === undefined) delete process.env.OMAGY_RUNTIME_DIR;
+    else process.env.OMAGY_RUNTIME_DIR = prevRuntimeDir;
+    fs.rmSync(emptyWs, { recursive: true, force: true });
+
+    const dSubActive = dispatchHudAction(
+      { mode: 'subagent-active', agent: 'architect', prompt: 'Review boundaries', conversationId: 'conv-explicit-9999' },
+      { workspaceRoot: ws, runner: mockRunner }
+    );
+    const dSubStandalone = dispatchHudAction(
+      { mode: 'subagent-standalone', agent: 'architect', prompt: 'Review boundaries' },
+      { workspaceRoot: ws, runner: mockRunner }
+    );
+    const dBadAgent = dispatchHudAction(
+      { mode: 'subagent-standalone', agent: 'evil;rm', prompt: 'test' },
+      { workspaceRoot: ws, runner: mockRunner }
+    );
+    const dBadMode = dispatchHudAction(
+      { mode: 'eval-shell', prompt: 'test' },
+      { workspaceRoot: ws, runner: mockRunner }
+    );
+
+    // H8: HTTP server POST /api/dispatch token & Content-Type test (in-memory request emit, sandbox-safe)
+    const srv = createHudServer('test-secret-token', { workspaceRoot: ws, runner: mockRunner });
+    const invokeHttp = (method, url, headers, bodyObj) => new Promise((resolve) => {
+      const reqListeners = {};
+      const req = {
+        method,
+        url,
+        headers,
+        on(ev, fn) { reqListeners[ev] = fn; return this; },
+        destroy() {},
+      };
+      let status = 200;
+      const res = {
+        writeHead(code) { status = code; },
+        end(str) {
+          let json = {};
+          try { json = JSON.parse(str || '{}'); } catch { /* ignore */ }
+          resolve({ status, json });
+        },
+      };
+      srv.emit('request', req, res);
+      if (reqListeners.data && bodyObj !== undefined) {
+        reqListeners.data(Buffer.from(typeof bodyObj === 'string' ? bodyObj : JSON.stringify(bodyObj), 'utf8'));
+      }
+      if (reqListeners.end) reqListeners.end();
+    });
+
+    const unauthRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' });
+    const badCtRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'text/plain', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
+    const authRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
+    const authJson = authRes.json;
+
+    const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
+      && !HUD_HTML.includes('data-view="doctor"')
+      && HUD_HTML.includes('Diagnostics &amp; Runtime Health')
+      && HUD_HTML.includes('class="cmd-actions"')
+      && !HUD_HTML.includes('copySubagentFromInput')
       && snap.statusLine.includes('autopilot:ultragoal')
       && snap.statusLine.includes('ultragoal:1/1')
       && snap.catalog?.skills?.length === 27
       && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.quickStart.includes('/deep-research'))
       && snap.catalog?.subagents?.length === 18
+      && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
+      && Boolean(architectAgent && architectAgent.cliModel === 'pro')
       && snap.catalog?.workflows?.length >= 6
       && Boolean(autopilotWf && autopilotWf.active === true && autopilotWf.currentPhase === 'ultragoal')
+      && Boolean(dActive.ok && dActive.modeUsed === 'active-chat' && !dActive.fallback && dActive.args.includes('send-message') && dActive.args.includes('--'))
+      && Boolean(dFallback.ok && dFallback.modeUsed === 'new-chat' && dFallback.fallback === true && dFallback.args.includes('new-conversation'))
+      && Boolean(dSubActive.ok && dSubActive.modeUsed === 'subagent-active' && dSubActive.args.some((x) => x.includes('invoke_subagent')))
+      && Boolean(dSubStandalone.ok && dSubStandalone.modeUsed === 'subagent-standalone' && dSubStandalone.args.includes('--profile=architect') && dSubStandalone.args.includes('--model=pro'))
+      && Boolean(!dBadAgent.ok && dBadAgent.status === 400)
+      && Boolean(!dBadMode.ok && dBadMode.status === 400)
+      && unauthRes.status === 401
+      && badCtRes.status === 415
+      && authRes.status === 200
+      && authJson.ok === true
       && snap.research?.length === 1
       && snap.research[0].compositeScore === 91.2
       && snap.research[0].claims.verified === 1
@@ -1771,6 +2248,7 @@ async function runSelftest() {
       skills: snap.catalog?.skills?.length || 0,
       subagents: snap.catalog?.subagents?.length || 0,
       workflows: snap.catalog?.workflows?.length || 0,
+      dispatchChecks: calls.length,
       statusLine: snap.statusLine,
     })}\n`);
     process.exitCode = ok ? 0 : 1;

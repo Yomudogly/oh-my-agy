@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.1`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.2`)** for Google Antigravity.
 
 ---
 
@@ -294,7 +294,7 @@ Generates `.omagy/artifacts/handoff-<slug>-<UTC>.md` (and `handoff-latest.md`) c
   ```
 
 #### `/hud` — Workflow Status Board & Auxiliary Pane UI (`sidecar://oh-my-agy/hud/`)
-Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`, and `Doctor` tabs).
+Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`5` tabs: `Overview` with consolidated workflow & Doctor diagnostics cards, `Workflows` and `Skills` with inline editable prompts + `Run in Chat` / `New Chat` execution, `Subagents` with `Dispatch into Active Chat` / `Launch Standalone Chat` invocation, and `Wiki`).
 - **Example**:
   ```text
   /hud

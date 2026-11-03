@@ -23,7 +23,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── plugin.json            # Antigravity manifest (v0.4.1, strict JSON)
+├── plugin.json            # Antigravity manifest (v0.4.2, strict JSON)
 ├── assets/logo.png        # Plugin icon
 ├── HOW_TO_USE.md          # Complete guide to all 27 skills, 18 subagents, hooks & recipes
 ├── rules/AGENTS.md        # always-on operating contract (<24 KB)
@@ -31,7 +31,7 @@ oh-my-agy/
 ├── hooks/
 │   ├── run.sh             # POSIX-portable Node locator (homebrew/volta/fnm/nvm/Windows), fails open if absent
 │   └── omagy-hook.mjs     # hook runtime + `review-package` + `goal-brief` + `research-matrix` + `audit-research` + `verify-evidence` + `quality-gates` + `append-jsonl` + `read-jsonl` + `selftest`
-├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`: Overview, Workflows, Skills, Subagents, Wiki, Doctor)
+├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`: Overview, Workflows, Skills, Subagents, Wiki)
 ├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
 └── skills/                # 27 workflow skills + progressive-disclosure `references/`
 ```

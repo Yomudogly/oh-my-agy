@@ -2,6 +2,24 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.4.2
+
+*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
+
+- **5-Tab HUD Consolidation with Doctor Diagnostics in Overview (`sidecars/hud/main.mjs`, `skills/hud/SKILL.md`, `rules/AGENTS.md`)**:
+  - Consolidated `ALLOWED_VIEWS` from 6 tabs down to **5 high-signal tabs**: `Overview`, `Workflows`, `Skills`, `Subagents`, and `Wiki` (normalizing `?view=doctor` and legacy `?view=` parameters to `overview`).
+  - Folded **Diagnostics & Runtime Health** (Quality Gates summary, Stale Modes, Configured Quality Gates, Latest PreInvocation Routing, and Recent Hook Errors) directly into the bottom of the `Overview` tab and removed the standalone `Doctor` tab.
+- **Inline Edit + Run from HUD for Workflows & Skills (`sidecars/hud/main.mjs`)**:
+  - Replaced static command blocks on all `8` `Workflows` cards and `27` `Skills` cards with a stacked `.cmd-box` containing a full-width, focus-safe inline editable `<input class="cmd-input">` field on top (preserving edits across 4-second live polling via `editedPrompts` and active focus guards) and a `.cmd-actions` button row underneath with three actions:
+    - **`Run in Chat`**: dispatches the edited command into the active conversation via `POST /api/dispatch` (`agentapi send-message`), automatically falling back to `agentapi new-conversation` when no active conversation ID is found.
+    - **`New Chat`**: launches a fresh Antigravity conversation seeded with the edited command (`agentapi new-conversation`).
+    - **`Copy`**: copies the edited command to the clipboard.
+- **Two-Mode Subagent Invocation from the `Subagents` Tab (`sidecars/hud/main.mjs`)**:
+  - Enriched all `18` specialist subagent cards with editable task briefs (`defaultPrompt`), CLI model mapping (`normalizeCliModel`: `flash -> flash`, `pro -> pro`, `inherit -> ''`), and two native invocation buttons:
+    - **`Dispatch into Active Chat`**: sends a structured delegation message to the active leader conversation (`agentapi send-message -- <conversationId> ...`) instructing it to call `invoke_subagent(TypeName: "<agent>", Model: "<tier>", Role: "<title>", Prompt: "<task>")` (with automatic `new-conversation` fallback).
+    - **`Launch Standalone Chat`**: spawns a dedicated specialist session (`agentapi new-conversation --profile=<agent> [--model=<flash|pro>] --title="[OMA] <agent>" -- <task>`).
+  - Hardened `POST /api/dispatch` with `Content-Type: application/json` enforcement (`415` on non-JSON requests), `X-Sidecar-Token` verification when configured (`401`), `16 KB` body size cap (`413`), and zero-shell-interpolation `execFileSync` with explicit `'--'` flag termination before positional arguments.
+
 ## 0.4.1
 
 *Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
