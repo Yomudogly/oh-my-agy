@@ -2,16 +2,16 @@
   "command": "sh",
   "args": ["./run.sh"],
   "restart_policy": "on-failure",
-  "display_name": "oh-my-agy HUD",
+  "display_name": "Oh My Agy",
   "description": "Live Auxiliary Pane UI for oh-my-agy workflows: mode status board, Ultragoal ledger, Team DAG board, Deep Interview ambiguity radar, Ralplan & Code Review gates, Performance/Autoresearch benchmarks, Visual Ralph diff comparator, Loft prototype viewer, Project Wiki & lint explorer, and Hook/Doctor diagnostics.",
   "has_web_ui": true,
   "ui_config": {
-    "display_name": "oh-my-agy HUD",
+    "display_name": "Oh My Agy",
     "views": [
       {
         "path": "/",
         "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
-        "title": "oh-my-agy HUD"
+        "title": "Oh My Agy"
       }
     ]
   }

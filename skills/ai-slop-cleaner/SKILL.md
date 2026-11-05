@@ -35,14 +35,21 @@ Classify before changing:
 - **Dead code**: unused/unreachable code, stale flags, debug leftovers.
 - **Needless abstraction**: pass-through wrappers, speculative indirection, single-use layers.
 - **Boundary violations**: hidden coupling, leaky responsibilities, wrong-layer imports/side effects.
-- **Missing tests**: behavior not locked or edge cases uncovered.
+- **Missing or junk tests**: behavior not locked, edge cases uncovered, or AI-generated junk tests (source-text greps, prose pinning, fixed sleeps, `.only`/`.skip` leftovers, tautological self-compares, weak `>= 0` lower bounds).
 - **UI/design slop**: context-sensitive signals, not absolute bans; preserve intentional brand, design-system, accessibility, or product-context exceptions. Challenge Korean body text at 11-12px (generally 14px or larger); gratuitous box shadows; repetitive eyebrow + title + description + paragraph stacks and generic emoji badges; default AI blue/purple such as `#3B82F6`; reflexive 3-column or 4-column grids; and extreme gradients unless justified by context.
 
 Resolve the fallback-like code resolution gate first, then one smell at a time:
 **Pass 1: Dead code deletion**; **Pass 2: Duplicate removal**; **Pass 3: Naming/error
-handling cleanup**; **Pass 4: Test reinforcement**. Re-run targeted verification after
+handling cleanup**; **Pass 4: Test reinforcement & junk-test pruning**. Re-run targeted verification after
 each pass and avoid unrelated refactors. Prefer deletion/existing utilities; no new
 abstractions or dependencies unless explicitly required.
+
+### Pass 4: Test Slop Classification (`R / F / C / D`) & Mutation Proof (ported from OMO `v5.1.54`–`v5.1.55` `#11967`, `#11968`, `#12017`)
+1. Run `sh <plugin>/hooks/run.sh check-test-junk <path...>` to flag regex-detectable junk-test smells (`source-grep`, `prose-pin`, `fixed-sleep`, `focused`, `skipped`, `self-compare`, `lower-bound`; suppress false positives with `// check-test-junk: ignore`).
+2. Evaluate every touched test against the **4-Question Authoring Gate**: (1) What user-visible bug breaks this? (2) Does it call real production code? (3) Would a harmless internal refactor break it? (4) Did a non-redundant assertion fail before passing?
+3. Classify each test as **`R`** (Real-behavior keeper), **`F`** (Weak/flaky -> strengthen in place), **`C`** (Redundant duplicate -> consolidate), or **`D`** (Junk -> delete), using the **2×2 Candidate-vs-Keeper Mutation Proof** before deleting/consolidating:
+   - Mutate the production code path: if **Candidate FAILS + Keeper FAILS** -> redundant (`C`, consolidate/delete); if **Candidate FAILS + Keeper PASSES** -> unique coverage (`R`, keep); if **Candidate PASSES** -> dead/tautological (`D`, delete).
+   - **Retention bar**: never delete a test that is the sole cover for a real bug mode unless replaced in the same change.
 
 ## Evidence/output contract
 

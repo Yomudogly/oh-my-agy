@@ -2,6 +2,26 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.4.3
+
+*Upstream references: **OMX** `v0.21.46` · **OMC** `v5.7.31` (+ `origin/dev`) · **OMO** `v5.1.61` · **obra/superpowers** `v7.0.2` · **Antigravity 2.0 Plugin & Sidecar Spec***
+
+- **Parent-Workspace `.omagy` Anchoring & Inner-Folder `.omagy` Discovery (`hooks/omagy-hook.mjs`, `sidecars/hud/main.mjs`, `rules/AGENTS.md`)**:
+  - Upgraded `stateRoot(root)` so working inside a child subfolder of an opened project (e.g., `"Travels/Summer trip"` inside `"Travels"`) walks upward and anchors `.omagy/` and `omagy_wiki/` at the parent workspace root rather than scattering `.omagy/` folders into child directories, while preserving isolated sub-projects that already own `.omagy` or `.git`.
+  - Added bounded, symlink-safe `discoverOmagyScopes(root, maxDepth = 3, maxDirs = 150)` and wired it into both `loadModeStates()` and the HUD sidecar's `buildHudSnapshot()` + `renderOverview()` so any inner folder that already has `.omagy/` (e.g., `"Travels/Summer trip/.omagy"` when `"Travels"` has no `.omagy/`) is automatically discovered, labeled (`Scope: Summer trip`), and aggregated across active modes, `ultragoal`, `team` boards, `deep-interview`, `reviews`, `deep-research`, `benchmarks`, `visual-ralph`, and `loft` prototypes.
+  - Updated `isPathInsideAllowedOmagy()` (`PreToolUse` planning guard) and `resolveSafeArtifactFile()` (HUD artifact server) to safely allow `<workspaceRoot>/<subpath>/.omagy/...` while rejecting symlinks and `..` traversal.
+  - Updated HUD `Overview` tables (`Ultragoal`, `Team Board`, `Workflow Modes`, `Hook Errors`) in `sidecars/hud/main.mjs` to use `table-layout: fixed; width: 100%;` with 3 balanced columns (`ID` | `Goal` / `Task` + compact subline | `Status`) and `.card { overflow: hidden; min-width: 0; overflow-wrap: anywhere; }` so tables never overflow card borders on resize, and updated `sidecars/hud/sidecar.json` display name to `"Oh My Agy"`.
+- **Hook Runtime Hardening & `check-test-junk` CLI (`hooks/omagy-hook.mjs`)**:
+  - Added `hardenWindowsExeSearch()` (`process.env.NoDefaultCurrentDirectoryInExePath = '1'` on `win32`) in `hooks/omagy-hook.mjs` and `sidecars/hud/main.mjs` (ported from OMX `v0.21.46` `#4002` / `#4003`).
+  - Upgraded `extractGoalBrief` (`goal-brief`) to match `#{2,4}` headings, include child subtasks (`7a`, `7.1` under task `7`), exit with code `4` (`unclosed_code_fence`) when an unclosed fence swallows subsequent task headings, and list up to 5 non-English task-shaped headings when no English `Task`/`Goal` matches; added `-C <dir>` flag support to `review-package` and `goal-brief` (ported from `obra/superpowers` `v7.0.2`).
+  - Added **`check-test-junk <path...> [--json]`** (`checkTestJunk`) scanning JS/TS/Py/Rust/Go test files for 7 AI-slop test smells (`source-grep`, `prose-pin`, `fixed-sleep`, `focused`, `skipped`, `self-compare`, `lower-bound`, suppressible via `check-test-junk: ignore`; ported from OMO `v5.1.54`–`v5.1.55` `#11967`, `#11968`, `#11972`, `#12017`).
+  - Expanded the offline hook selftest from `54` to `57` checks (`T6` skill directory dev-file hygiene from OMC `#4824`, plus `T20`–`T22`) and HUD selftest with `H9` inner-folder `.omagy` discovery verification.
+- **Rules, Skills & Specialist Agents Sync (`rules/AGENTS.md`, `skills/*`, `agents/*`)**:
+  - Added OMX `v0.21.46` (`#3989`, `#3997`) assignment-scoped role overlays (read-only/advisory roles never edit production code or require build/test runs) and atomic revertible-behavior commit + dirty-worktree rebase safety rules (`AGENTS.md`, `architect.md`, `executor.md`, `pr/SKILL.md`).
+  - Added OMO `v5.1.54`–`v5.1.55` (`#11967`, `#11968`, `#12017`) 4-Question Authoring Gate, `R / F / C / D` test classification, and 2×2 Candidate-vs-Keeper Mutation Proof to `ai-slop-cleaner/SKILL.md` and `agents/test-engineer.md`.
+  - Added OMO `v5.1.59` (`#12040`) **Evaluation Integrity Audit (`eval-integrity`)** (7 evaluation roles, independent ground-truth check, 8 independence failure probes, and `**Verdict: PASS | FAIL | INCONCLUSIVE**` badge surfaced in HUD `Overview`) to `performance-goal/SKILL.md`, `autoresearch/SKILL.md`, and `deep-research/SKILL.md`.
+  - Added `obra/superpowers` `v7.0.2` (`#2644`) open-"why"-first Socratic interview tuning and process-proposal rules to `deep-interview/SKILL.md` and `plan/SKILL.md`, plus OMC `v5.7.28` (`#4768`) `worktree_unmerged` worker branch preservation to `team/SKILL.md` and `pr/SKILL.md`.
+
 ## 0.4.2
 
 *Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***

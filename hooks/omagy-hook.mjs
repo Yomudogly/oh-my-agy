@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// oh-my-agy lifecycle hook runner for Antigravity (tracks OMX v0.21.43, OMC v5.7.22, OMO v5.1.52).
+// oh-my-agy lifecycle hook runner for Antigravity (tracks OMX v0.21.46, OMC v5.7.31, OMO v5.1.61, superpowers v7.0.2).
 // Replaces oh-my-codex's codex-native-hook.mjs (which delegated to the `omx` CLI) with a
 // dependency-free, fail-open implementation of the parts that map onto Antigravity hooks:
 //   session-start   : bounded project wiki index + active-mode reminder on new session start
@@ -9,6 +9,7 @@
 //   verify-evidence : deterministic validator for .omagy/evidence/<file>.json team task evidence
 //   review-package  : pre-assembled commit log + diffstat + -U10 diff for $code-review
 //   goal-brief      : single-goal or fence-aware markdown Task section extractor
+//   check-test-junk : 7-rule regex scanner for high-FP junk tests across JS/TS/Py/Rust/Go
 //   research-matrix : multi-lens Boolean query matrix & terminological blueprint generator for $deep-research
 //   audit-research  : 5-dimension >=85 rubric & required-section linter for $deep-research reports
 //   selftest        : offline verification of the above against an isolated temp workspace
@@ -19,6 +20,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
+
+export function hardenWindowsExeSearch() {
+  if (process.platform === 'win32') {
+    process.env.NoDefaultCurrentDirectoryInExePath = '1';
+  }
+}
+hardenWindowsExeSearch();
 
 const SKILLS = [
   'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'autoresearch', 'best-practice-research',
@@ -157,7 +165,23 @@ function isSubagentPayload(payload, userText = '') {
 }
 
 // ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root + OMX 0.21.31-36 symlink & OMX_ROOT guard) ----------
-function stateRoot(root) {
+const IGNORED_SCAN_DIRS = new Set([
+  '.git', '.hg', '.svn', '.omagy', 'omagy_wiki', 'omx_wiki', 'node_modules',
+  'dist', 'build', 'out', '.next', '.nuxt', '.svelte-kit', 'target', 'vendor',
+  'coverage', '.venv', 'venv', '__pycache__', '.tox', '.cache', '.turbo', 'sidecars',
+]);
+
+function hasProjectOrStateMarker(dir) {
+  try {
+    for (const marker of ['.omagy', 'omagy_wiki', 'omx_wiki', '.git']) {
+      const p = path.join(dir, marker);
+      if (fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink()) return true;
+    }
+  } catch { /* ignore */ }
+  return false;
+}
+
+export function stateRoot(root) {
   const baseRoot = canonicalizePath(root || process.cwd());
   const envOverride = (process.env.OMAGY_ROOT || process.env.OMAGY_STATE_ROOT || '').trim();
   if (envOverride) {
@@ -165,22 +189,81 @@ function stateRoot(root) {
     return path.basename(resolved) === '.omagy' ? path.dirname(resolved) : resolved;
   }
   let cur = baseRoot;
+  let ancestorProjectRoot = '';
+  const baseHasMarker = hasProjectOrStateMarker(baseRoot);
   for (let i = 0; i < MAX_WORKSPACE_WALK_DEPTH; i += 1) {
     try {
       if (fs.existsSync(path.join(cur, '.omagy-workspace')) || fs.existsSync(path.join(cur, '.omc-workspace'))) {
         return cur;
+      }
+      if (i > 0 && !baseHasMarker && !ancestorProjectRoot && hasProjectOrStateMarker(cur)) {
+        ancestorProjectRoot = cur;
       }
     } catch { /* ignore */ }
     const parent = path.dirname(cur);
     if (parent === cur) break;
     cur = parent;
   }
-  return baseRoot;
+  const envWs = (process.env.OMAGY_WORKSPACE || '').trim();
+  if (envWs && !baseHasMarker) {
+    const canonWs = canonicalizePath(envWs);
+    if (baseRoot === canonWs || baseRoot.startsWith(canonWs + path.sep)) {
+      return canonWs;
+    }
+  }
+  return ancestorProjectRoot || baseRoot;
 }
+
+export function discoverOmagyScopes(root, maxDepth = 3, maxDirs = 150) {
+  const baseRoot = canonicalizePath(root || process.cwd());
+  const scopes = [];
+  const seenRoots = new Set();
+  const addScope = (dirRoot, relScope) => {
+    const canon = canonicalizePath(dirRoot);
+    if (seenRoots.has(canon)) return;
+    const omagyDir = path.join(canon, '.omagy');
+    try {
+      const st = fs.lstatSync(omagyDir);
+      if (!st.isSymbolicLink() && st.isDirectory()) {
+        seenRoots.add(canon);
+        scopes.push({ root: canon, scope: relScope || '.', omagyDir });
+      }
+    } catch { /* ignore */ }
+  };
+  addScope(baseRoot, '.');
+  let visited = 0;
+  const queue = [{ dir: baseRoot, rel: '', depth: 0 }];
+  while (queue.length > 0 && visited < maxDirs) {
+    const { dir, rel, depth } = queue.shift();
+    if (depth >= maxDepth) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch { continue; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (visited >= maxDirs) break;
+      const name = entry.name;
+      if (name.startsWith('.') || IGNORED_SCAN_DIRS.has(name)) continue;
+      const full = path.join(dir, name);
+      let st;
+      try { st = fs.lstatSync(full); } catch { continue; }
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
+      visited += 1;
+      const childRel = rel ? `${rel}/${name}` : name;
+      addScope(full, childRel);
+      if (depth + 1 < maxDepth) {
+        queue.push({ dir: full, rel: childRel, depth: depth + 1 });
+      }
+    }
+  }
+  return scopes;
+}
+
 function omagyLogsDir(root) {
   return path.join(stateRoot(root), '.omagy', 'logs');
 }
-function readStateDir(dir, root, convId) {
+function readStateDir(dir, root, convId, scope = '.') {
   try {
     if (fs.lstatSync(dir).isSymbolicLink()) return [];
   } catch { return []; }
@@ -199,20 +282,37 @@ function readStateDir(dir, root, convId) {
     const mtimeMs = st.mtimeMs || 0;
     const owner = data.owner_conversation_id || data.conversation_id || data.session_id || '';
     const foreignOwner = Boolean(convId && owner && String(owner) !== String(convId));
-    out.push({ mode: String(data.mode || m[1]), file, data, mtimeMs, root, owner: String(owner || ''), foreignOwner });
+    out.push({ mode: String(data.mode || m[1]), file, data, mtimeMs, root, scope, owner: String(owner || ''), foreignOwner });
   }
   return out;
 }
 function loadModeStates(root, convId = '') {
   const sRoot = stateRoot(root);
   const byMode = new Map();
+  const consider = (s) => {
+    const prev = byMode.get(s.mode);
+    if (!prev || (!isActive(prev) && isActive(s))) {
+      byMode.set(s.mode, s);
+    }
+  };
   if (convId) {
     const sessDir = path.join(sRoot, '.omagy', 'state', 'sessions', safeId(convId));
-    for (const s of readStateDir(sessDir, sRoot, convId)) byMode.set(s.mode, s);
+    for (const s of readStateDir(sessDir, sRoot, convId, '.')) consider(s);
   }
   const sharedDir = path.join(sRoot, '.omagy', 'state');
-  for (const s of readStateDir(sharedDir, sRoot, convId)) {
-    if (!byMode.has(s.mode)) byMode.set(s.mode, s);
+  for (const s of readStateDir(sharedDir, sRoot, convId, '.')) consider(s);
+
+  // If the parent project folder has no .omagy (or no active state in parent .omagy), also check inner-folder .omagy scopes (e.g. Travels/Summer trip/.omagy)
+  if (byMode.size === 0 || ![...byMode.values()].some((s) => isActive(s))) {
+    for (const sc of discoverOmagyScopes(sRoot)) {
+      if (sc.root === sRoot) continue;
+      if (convId) {
+        const sessDir = path.join(sc.root, '.omagy', 'state', 'sessions', safeId(convId));
+        for (const s of readStateDir(sessDir, sc.root, convId, sc.scope)) consider(s);
+      }
+      const innerShared = path.join(sc.root, '.omagy', 'state');
+      for (const s of readStateDir(innerShared, sc.root, convId, sc.scope)) consider(s);
+    }
   }
   return [...byMode.values()];
 }
@@ -686,19 +786,34 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
     const deps = Array.isArray(goal.depends_on) && goal.depends_on.length ? goal.depends_on.join(', ') : 'none';
     extracted = `# Goal ${resolvedId}: ${title}\n\n- **Rigor**: \`${goal.rigor || 'light'}\`\n- **Depends On**: ${deps}\n\n## Objective\n${goal.objective || ''}\n${invariants}${acceptance}`;
   } else {
-    const escaped = rawId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const headingRe = new RegExp(`^(#{2,3})\\s+(?:(?:Task|Goal)\\s+)?(?:G?${escaped}|Task\\s+${escaped}|Goal\\s+${escaped})\\b[:\\s—-]*(.*)$`, 'i');
-    const anyHeadingRe = /^(#{1,3})\s+\S/;
+    const normalizeTaskId = (val) => String(val || '').trim().replace(/^G(?=\d)/i, '').toLowerCase();
+    const reqNorm = normalizeTaskId(rawId);
+    const isSubtaskOf = (candId, parentNorm) => {
+      const candNorm = normalizeTaskId(candId);
+      if (!candNorm.startsWith(parentNorm) || candNorm === parentNorm) return false;
+      const rest = candNorm.slice(parentNorm.length);
+      if (rest.startsWith('.')) return rest.length > 1;
+      if (/\d$/.test(parentNorm) && /^[a-z]/i.test(rest)) return true;
+      return false;
+    };
+    const taskHeadingRe = /^(#{2,4})\s+(?:(?:Task|Goal)\s+([A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)|(G[0-9][A-Za-z0-9.]*)|([0-9]+[A-Za-z0-9.]*)\s*(?=[:—-]))(?:\b|(?=\s|:|—|-))[:\s—-]*(.*)$/i;
+    const nonEnglishTaskShapeRe = /^(#{2,4})\s+[^\s#]+\s+[0-9]+[A-Za-z0-9.]*(?:\b|\s*[:.—-])/;
+    const anyHeadingRe = /^(#{1,4})\s+\S/;
     const fenceRe = /^ {0,3}(`{3,}|~{3,})/;
     const lines = raw.split(/\r?\n/);
     let inFence = false;
     let fenceChar = '';
     let fenceLen = 0;
+    let fenceOpenLine = 0;
+    let swallowedTaskHeading = false;
     let capturing = false;
     let captureLevel = 0;
     const outLines = [];
+    const englishTaskHeadings = [];
+    const taskShapedHeadings = [];
 
-    for (const line of lines) {
+    for (let idx = 0; idx < lines.length; idx += 1) {
+      const line = lines[idx];
       const fMatch = line.match(fenceRe);
       if (fMatch) {
         const marker = fMatch[1];
@@ -707,33 +822,60 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
           inFence = true;
           fenceChar = ch;
           fenceLen = marker.length;
+          fenceOpenLine = idx + 1;
         } else if (ch === fenceChar && marker.length >= fenceLen && /^ {0,3}(?:`+|~+)\s*$/.test(line)) {
           inFence = false;
           fenceChar = '';
           fenceLen = 0;
+          fenceOpenLine = 0;
+          swallowedTaskHeading = false;
         }
       }
-      if (!inFence) {
-        if (!capturing) {
-          const hMatch = line.match(headingRe);
-          if (hMatch) {
-            capturing = true;
-            captureLevel = hMatch[1].length;
-            title = (hMatch[2] || '').trim();
-            outLines.push(line);
-            continue;
-          }
-        } else {
-          const nextH = line.match(anyHeadingRe);
-          if (nextH && nextH[1].length <= captureLevel) {
+      if (inFence) {
+        if (taskHeadingRe.test(line)) swallowedTaskHeading = true;
+        if (capturing) outLines.push(line);
+        continue;
+      }
+      const tMatch = line.match(taskHeadingRe);
+      const candId = tMatch ? (tMatch[2] || tMatch[3] || tMatch[4] || '') : '';
+      if (tMatch && candId) {
+        englishTaskHeadings.push(line.trim());
+      } else if (nonEnglishTaskShapeRe.test(line)) {
+        taskShapedHeadings.push(line.trim());
+      }
+      if (!capturing) {
+        if (tMatch && candId && (normalizeTaskId(candId) === reqNorm || candId.toLowerCase() === rawId.toLowerCase())) {
+          capturing = true;
+          captureLevel = tMatch[1].length;
+          resolvedId = candId;
+          title = (tMatch[5] || '').trim();
+          outLines.push(line);
+          continue;
+        }
+      } else {
+        const nextH = line.match(anyHeadingRe);
+        if (nextH) {
+          const nextLevel = nextH[1].length;
+          const isChildSubtask = Boolean(tMatch && candId && isSubtaskOf(candId, reqNorm));
+          if (nextLevel <= captureLevel && !isChildSubtask) {
             break;
           }
         }
       }
       if (capturing) outLines.push(line);
     }
+    if (inFence && (capturing || swallowedTaskHeading)) {
+      return {
+        ok: false,
+        exitCode: 4,
+        error: `Unclosed code fence opened at line ${fenceOpenLine} in ${resolvedSource} swallowed subsequent headings.`,
+      };
+    }
     if (!outLines.length) {
-      return { ok: false, exitCode: 1, error: `Section for '${rawId}' not found in ${resolvedSource}.` };
+      const hint = englishTaskHeadings.length === 0 && taskShapedHeadings.length > 0
+        ? ` No 'Task N' / 'Goal N' headings found; task-shaped headings in file: ${taskShapedHeadings.slice(0, 5).join(' | ')}`
+        : '';
+      return { ok: false, exitCode: 1, error: `Section for '${rawId}' not found in ${resolvedSource}.${hint}` };
     }
     extracted = `${outLines.join('\n').trimEnd()}\n`;
   }
@@ -749,6 +891,113 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, extracted, { encoding: 'utf8', mode: 0o600 });
   return { ok: true, exitCode: 0, path: target, id: resolvedId, title };
+}
+
+// ---------- junk-test scanner (ported from OMO v5.1.54 #11967 check-test-junk-rules.ts) ----------
+const TEST_FILE_NAME_RE = /(?:^|[/\\])(?:__tests__|tests)[/\\].+\.(?:[cm]?[jt]sx?|py|rs|go)$|\.(?:test|spec)\.(?:[cm]?[jt]sx?)$|_test\.(?:py|go|rs)$|(?:^|[/\\])test_[^/\\]+\.py$/i;
+const TEST_JUNK_RULES = [
+  {
+    rule: 'source-grep',
+    message: 'Reads source file inside a test to grep implementation text (class 10 source-grep). Test runtime behavior instead.',
+    test: (line) => /\b(?:readFileSync|fs\.readFile|fsPromises\.readFile|os\.ReadFile|ioutil\.ReadFile|std::fs::read_to_string)\s*\(/.test(line),
+  },
+  {
+    rule: 'prose-pin',
+    message: 'Pins exact long prose (>80 chars) in an equality assertion (class 5 exact-error-prose). Match error code/type or key phrase.',
+    test: (line) => /\b(?:toBe|toEqual|toStrictEqual|assert_eq!|assertEqual)\s*\(\s*["'`][^"'`\n]{80,}["'`]\s*\)/.test(line),
+  },
+  {
+    rule: 'fixed-sleep',
+    message: 'Uses arbitrary fixed sleep in test (class 12 fixed-sleep). Await deterministic condition or fake timers.',
+    test: (line) => /\b(?:setTimeout\s*\(\s*resolve\s*,\s*\d+|sleep\s*\(\s*\d+|time\.sleep\s*\(\s*\d+|thread::sleep|time\.Sleep)\b/.test(line),
+  },
+  {
+    rule: 'focused',
+    message: 'Focused test (.only / #[test_only]) silently skips the rest of the suite.',
+    test: (line) => /\b(?:it|test|describe)\.only\s*\(|#\[\s*test_only\s*\]/.test(line),
+  },
+  {
+    rule: 'skipped',
+    message: 'Skipped test (.skip / #[ignore]) left in suite without suppression.',
+    test: (line) => /\b(?:it|test|describe|pytest\.mark)\.skip\s*\(|^\s*#\[\s*ignore(?:\s*\)|\s*\])/.test(line),
+  },
+  {
+    rule: 'self-compare',
+    message: 'Tautological self-comparison (expect(x).toBe(x) or assert(x == x)) (class 1 tautology).',
+    test: (line) => {
+      const m1 = /\bexpect\s*\(\s*([A-Za-z_$][A-Za-z0-9_$.]*)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*([A-Za-z_$][A-Za-z0-9_$.]*)\s*\)/.exec(line);
+      if (m1 && m1[1] === m1[2]) return true;
+      const m2 = /\b(?:assert|assert_eq!)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(?:===?|==|,)\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)/.exec(line);
+      return Boolean(m2 && m2[1] === m2[2]);
+    },
+  },
+  {
+    rule: 'lower-bound',
+    message: 'Weak lower-bound assertion (>= 0 or >= 1 on length/size/count) instead of exact expected shape.',
+    test: (line) => /\bexpect\s*\([^)]*\.(?:length|size|count)\s*\)\s*\.\s*toBeGreaterThanOrEqual\s*\(\s*[01]\s*\)|\b(?:len|count)\s*\([^)]+\)\s*>=\s*0\b/.test(line),
+  },
+];
+
+export function checkTestJunk(targets = []) {
+  const rawList = Array.isArray(targets) ? targets : [targets];
+  const files = [];
+  const seen = new Set();
+  const collect = (p, explicit) => {
+    const abs = path.resolve(String(p || ''));
+    if (!abs || seen.has(abs)) return;
+    let st;
+    try { st = fs.lstatSync(abs); } catch { return; }
+    if (st.isSymbolicLink()) return;
+    if (st.isFile()) {
+      if (explicit || TEST_FILE_NAME_RE.test(abs)) {
+        seen.add(abs);
+        files.push(abs);
+      }
+      return;
+    }
+    if (st.isDirectory()) {
+      let entries = [];
+      try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const e of entries) {
+        if (e.name.startsWith('.') || IGNORED_SCAN_DIRS.has(e.name)) continue;
+        collect(path.join(abs, e.name), false);
+      }
+    }
+  };
+  for (const t of rawList) {
+    if (t && String(t).trim()) collect(String(t).trim(), true);
+  }
+  const violations = [];
+  for (const file of files) {
+    let raw = '';
+    try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
+    const lines = raw.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed || /^(?:\/\/|#|\/\*|\*)/.test(trimmed)) continue;
+      const prevLine = i > 0 ? lines[i - 1] : '';
+      if (/check-test-junk:\s*ignore/i.test(line) || /check-test-junk:\s*ignore/i.test(prevLine)) continue;
+      for (const ruleObj of TEST_JUNK_RULES) {
+        if (ruleObj.test(line)) {
+          violations.push({
+            file,
+            line: i + 1,
+            rule: ruleObj.rule,
+            message: ruleObj.message,
+            snippet: trimmed.slice(0, 140),
+          });
+        }
+      }
+    }
+  }
+  return {
+    ok: violations.length === 0,
+    exitCode: violations.length === 0 ? 0 : 1,
+    filesScanned: files.length,
+    violations,
+  };
 }
 
 // ---------- deep-research helpers (research-matrix & audit-research) ----------
@@ -1268,10 +1517,22 @@ function isPathInsideAllowedOmagy(roots, rawTarget) {
     const sr = canonicalizePath(stateRoot(r));
     const wr = canonicalizePath(r);
     if (hasSymlinkSegment(r, rawResolved) || hasSymlinkSegment(sr, rawResolved) || hasSymlinkSegment(wr, rawResolved)) return false;
-    return resolved.startsWith(path.join(sr, '.omagy') + path.sep)
+    if (
+      resolved.startsWith(path.join(sr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(wr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(sr, 'omagy_wiki') + path.sep)
-      || resolved.startsWith(path.join(wr, 'omagy_wiki') + path.sep);
+      || resolved.startsWith(path.join(wr, 'omagy_wiki') + path.sep)
+    ) {
+      return true;
+    }
+    if (resolved.startsWith(wr + path.sep)) {
+      const rel = path.relative(wr, resolved).split(path.sep);
+      const omagyIdx = Math.max(rel.indexOf('.omagy'), rel.indexOf('omagy_wiki'));
+      if (omagyIdx >= 0 && omagyIdx < rel.length - 1 && !rel.includes('..')) {
+        return true;
+      }
+    }
+    return false;
   });
 }
 function preToolUse(payload) {
@@ -1602,6 +1863,7 @@ async function selftest() {
     fs.writeFileSync(path.join(multiParent, '.omagy-workspace'), '{}\n');
     writeJson(path.join(multiParent, '.omagy', 'state', 'ultragoal-state.json'), { mode: 'ultragoal', active: true, current_phase: 'executing', updated_at: new Date().toISOString() });
     const sMulti = await stop({ conversationId: `${conv}-multi`, workspacePaths: [childRepo], terminationReason: 'NO_TOOL_CALL' });
+    fs.rmSync(multiParent, { recursive: true, force: true });
     check('.omagy-workspace anchors state across child repos', sMulti.decision === 'continue');
 
     // Completion drift guard (git diff blocker scan)
@@ -1995,11 +2257,17 @@ async function selftest() {
           const refTarget = path.resolve(path.dirname(skillFile), rm[1]);
           if (!fs.existsSync(refTarget)) skillIssues.push(`${dirName}:missing-ref=${rm[1]}`);
         }
+        const dirEntries = fs.readdirSync(path.join(skillsDir, dirName));
+        for (const entryName of dirEntries) {
+          if (entryName === 'CREATION-LOG.md' || /^test-.*\.md$/i.test(entryName)) {
+            skillIssues.push(`${dirName}:dev-file=${entryName}`);
+          }
+        }
       }
     } catch (e) {
       skillIssues.push(e instanceof Error ? e.message : String(e));
     }
-    check('all 27 skills/*/SKILL.md match SKILLS, are <20KB, have SDO descriptions without ->, and resolve ./references/ links',
+    check('all 27 skills/*/SKILL.md match SKILLS, are <20KB, have SDO descriptions without ->, resolve ./references/ links, and have no dev files',
       skillsParity && skillIssues.length === 0,
       skillIssues.join(', ') || `count=${diskSkillCount}`);
 
@@ -2109,6 +2377,89 @@ async function selftest() {
       && auditPass.claimCounts.verified === 1 && auditPass.claimCounts.derived === 1 && auditPass.claimCounts.assumed === 1
       && auditFail.ok === false && auditFail.exitCode === 1 && auditFail.scores.systemicity === 78);
 
+    // T20: Parent-root .omagy anchoring (stateRoot) & inner-folder .omagy discovery (discoverOmagyScopes + loadModeStates + isPathInsideAllowedOmagy)
+    const travelsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-travels-'));
+    let t20Ok = false;
+    try {
+      const summerTripDir = path.join(travelsRoot, 'Summer trip');
+      fs.mkdirSync(summerTripDir, { recursive: true });
+      // 1) When parent project has .git or .omagy and subfolder does not, stateRoot(summerTripDir) anchors to parent travelsRoot
+      fs.mkdirSync(path.join(travelsRoot, '.git'), { recursive: true });
+      const anchoredParent = stateRoot(summerTripDir);
+      fs.rmSync(path.join(travelsRoot, '.git'), { recursive: true, force: true });
+      // 2) When parent folder "Travels" has no .git/.omagy and inner folder "Summer trip/.omagy" exists, discoverOmagyScopes & loadModeStates find it
+      const innerStateDir = path.join(summerTripDir, '.omagy', 'state');
+      fs.mkdirSync(innerStateDir, { recursive: true });
+      writeJson(path.join(innerStateDir, 'autopilot-state.json'), {
+        mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 1, updated_at: new Date().toISOString(),
+      });
+      const discScopes = discoverOmagyScopes(travelsRoot);
+      const innerModes = loadModeStates(travelsRoot);
+      const innerAllowed = isPathInsideAllowedOmagy([travelsRoot], path.join(summerTripDir, '.omagy', 'plans', 'trip-plan.md'));
+      const outerSrcBlocked = isPathInsideAllowedOmagy([travelsRoot], path.join(summerTripDir, 'src', 'app.js'));
+      t20Ok = anchoredParent === canonicalizePath(travelsRoot)
+        && discScopes.some((s) => s.scope === 'Summer trip')
+        && innerModes.length === 1 && innerModes[0].mode === 'autopilot' && innerModes[0].scope === 'Summer trip'
+        && innerAllowed === true && outerSrcBlocked === false;
+    } finally {
+      fs.rmSync(travelsRoot, { recursive: true, force: true });
+    }
+    check('stateRoot anchors subfolder to parent project root and loadModeStates/discoverOmagyScopes track inner-folder .omagy', t20Ok);
+
+    // T21: extractGoalBrief superpowers v7.0.2 hardening (unclosed fence exitCode 4, subtask retention 7a/7.1, non-English heading hint)
+    const unclosedFenceMd = path.join(ws, 'unclosed-fence.md');
+    fs.writeFileSync(unclosedFenceMd, [
+      '# Plan',
+      '### Task 1: First Task',
+      '```js',
+      'const x = 1;',
+      '### Task 2: Swallowed Task',
+      'Never closed fence',
+    ].join('\n'), 'utf8');
+    const unclosedRes1 = extractGoalBrief(unclosedFenceMd, '1', path.join(ws, 'out-unclosed1.md'));
+    const unclosedRes2 = extractGoalBrief(unclosedFenceMd, '2', path.join(ws, 'out-unclosed2.md'));
+    const subtaskMd = path.join(ws, 'subtask-plan.md');
+    fs.writeFileSync(subtaskMd, [
+      '# Plan',
+      '### Task 7: Parent Task',
+      'Parent step.',
+      '#### Task 7a: Child Subtask A',
+      'Subtask A step.',
+      '### Task 7.1: Child Subtask Dot',
+      'Subtask 7.1 step.',
+      '### Task 8: Next Task',
+      'Task 8 step.',
+    ].join('\n'), 'utf8');
+    const subBriefRes = extractGoalBrief(subtaskMd, '7', path.join(ws, 'out-t7.md'));
+    const subBriefText = fs.existsSync(path.join(ws, 'out-t7.md')) ? fs.readFileSync(path.join(ws, 'out-t7.md'), 'utf8') : '';
+    const nonEngMd = path.join(ws, 'non-eng-plan.md');
+    fs.writeFileSync(nonEngMd, '# План\n### Задача 1: Инициализация\nШаг 1\n### Задача 2: Тесты\n', 'utf8');
+    const nonEngRes = extractGoalBrief(nonEngMd, '1', path.join(ws, 'out-noneng.md'));
+    check('extractGoalBrief exits 4 on unclosed code fence, retains 7a/7.1 subtasks, and hints non-English task headings',
+      unclosedRes1.ok === false && unclosedRes1.exitCode === 4
+      && unclosedRes2.ok === false && unclosedRes2.exitCode === 4
+      && subBriefRes.ok === true && subBriefText.includes('Task 7a: Child Subtask A') && subBriefText.includes('Task 7.1: Child Subtask Dot') && !subBriefText.includes('Task 8')
+      && nonEngRes.ok === false && nonEngRes.error.includes('Задача 1'));
+
+    // T22: checkTestJunk 7 regex rules & check-test-junk: ignore suppression (OMO v5.1.54 #11967 parity)
+    const junkTestFile = path.join(ws, 'sample.test.js');
+    fs.writeFileSync(junkTestFile, [
+      "const src = fs.readFileSync('src/index.js', 'utf8');",
+      `expect(err.message).toBe('${'A'.repeat(85)}');`,
+      'await new Promise((resolve) => setTimeout(resolve, 500));',
+      "test.only('focused test', () => {});",
+      "test.skip('skipped test', () => {});",
+      'expect(result).toBe(result);',
+      'expect(items.length).toBeGreaterThanOrEqual(0);',
+      '// check-test-junk: ignore',
+      "test.skip('intentionally ignored skip', () => {});",
+    ].join('\n'), 'utf8');
+    const junkRes = checkTestJunk([junkTestFile]);
+    const rulesHit = new Set(junkRes.violations.map((v) => v.rule));
+    check('checkTestJunk detects all 7 junk-test rules and honors check-test-junk: ignore',
+      junkRes.ok === false && junkRes.exitCode === 1 && junkRes.violations.length === 7
+      && ['source-grep', 'prose-pin', 'fixed-sleep', 'focused', 'skipped', 'self-compare', 'lower-bound'].every((r) => rulesHit.has(r)));
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -2175,17 +2526,62 @@ async function main() {
     return;
   }
   if (event === 'review-package') {
-    const [, , , cwdArg, baseArg, headArg, outArg] = process.argv;
-    const res = buildReviewPackage(cwdArg || process.cwd(), baseArg, headArg || 'HEAD', outArg || '');
+    const rawArgs = process.argv.slice(3);
+    let dashC = '';
+    const pos = [];
+    for (let i = 0; i < rawArgs.length; i += 1) {
+      if (rawArgs[i] === '-C' && i + 1 < rawArgs.length) {
+        dashC = rawArgs[i + 1];
+        i += 1;
+      } else {
+        pos.push(rawArgs[i]);
+      }
+    }
+    const cwdArg = dashC || pos[0] || process.cwd();
+    const baseArg = dashC ? pos[0] : pos[1];
+    const headArg = (dashC ? pos[1] : pos[2]) || 'HEAD';
+    const outArg = (dashC ? pos[2] : pos[3]) || '';
+    const res = buildReviewPackage(cwdArg, baseArg, headArg, outArg);
     process.stdout.write(`${JSON.stringify(res)}\n`);
     process.exitCode = res.ok ? 0 : (res.exitCode || 1);
     return;
   }
   if (event === 'goal-brief') {
-    const [, , , sourceArg, idArg, outArg] = process.argv;
-    const res = extractGoalBrief(sourceArg, idArg, outArg || '');
+    const rawArgs = process.argv.slice(3);
+    let dashC = '';
+    const pos = [];
+    for (let i = 0; i < rawArgs.length; i += 1) {
+      if (rawArgs[i] === '-C' && i + 1 < rawArgs.length) {
+        dashC = rawArgs[i + 1];
+        i += 1;
+      } else {
+        pos.push(rawArgs[i]);
+      }
+    }
+    const baseDir = dashC ? path.resolve(dashC) : process.cwd();
+    const sourceArg = pos[0] ? (path.isAbsolute(pos[0]) ? pos[0] : path.resolve(baseDir, pos[0])) : '';
+    const idArg = pos[1] || '';
+    const outArg = pos[2] ? (path.isAbsolute(pos[2]) ? pos[2] : path.resolve(baseDir, pos[2])) : '';
+    const res = extractGoalBrief(sourceArg, idArg, outArg);
     process.stdout.write(`${JSON.stringify(res)}\n`);
     process.exitCode = res.ok ? 0 : (res.exitCode || 1);
+    return;
+  }
+  if (event === 'check-test-junk') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const targets = rawArgs.filter((a) => a !== '--json');
+    const res = checkTestJunk(targets.length ? targets : [process.cwd()]);
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    } else {
+      const lines = [`CHECK-TEST-JUNK: ${res.ok ? 'PASS' : 'FAIL'} (${res.filesScanned} file(s) scanned, ${res.violations.length} violation(s))`];
+      for (const v of res.violations) {
+        lines.push(`${v.file}:${v.line} [${v.rule}] ${v.message} :: ${v.snippet}`);
+      }
+      process.stdout.write(`${lines.join('\n')}\n`);
+    }
+    process.exitCode = res.exitCode;
     return;
   }
   if (event === 'research-matrix') {

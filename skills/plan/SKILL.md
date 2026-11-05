@@ -24,10 +24,11 @@ Plan creates concise, actionable work plans. It auto-detects interview vs direct
 - **Intent Classification (`CLEAR` vs `UNCLEAR`, ported from OmO `ulw-plan`)**:
   - `CLEAR` intent (concrete target, specific feature/bug, or explicit `--interview`): ask only questions that survive the **Two-Filter + Owner-Decision Survival Gate** below, one question at a time via `ask_question`.
   - `UNCLEAR` intent (open-ended "make X better", "improve Y", "you decide", or `--direct` on a broad prompt): do NOT interrogate the user with open-ended questionnaires. Research codebase patterns and official best practices, adopt and announce concrete defaults (naming each default + a 1-line rationale in an `Adopted Defaults` section), and recommend `$ralplan` / `critic` review.
-- **Two-Filter Question Gate + Owner-Decision Survival**:
+- **Two-Filter Question Gate + Owner-Decision Survival (ported from OmO `ulw-plan` & `obra/superpowers` `v7.0.2` `#2644`)**:
   - **Filter 1 (Material Fork)**: Would the answer change the architecture, schema, or touched files?
   - **Filter 2 (Unresolvable by Repo/Docs)**: Can this be answered by inspecting the repo or official docs? If yes, inspect—do not ask.
   - **Owner-Decision Survival**: Ask the user ONLY when the surviving fork is irreversible, destructive, spend-bearing, or changes an external/public contract. For reversible engineering choices, pick the strongest repo-aligned default and state it in the plan.
+  - **Open "Why" First & Process Proposals (`superpowers` `v7.0.2` `#2644`)**: if the user hasn't stated *why* they want the change, ask an open question first rather than steering with option menus (`ask_question` choices are reserved for concrete, named forks once intent is clear). Process decisions (file placement, recon, writing docs) are stated as agent proposals, not questions; if nothing material is open on the first turn, present the plan immediately.
 - Plans must be evidence-backed: at least 80% of claims cite file/line, and at least 90% of acceptance criteria are testable.
 - Right-size the steps to the scope. Save plans to `.omagy/plans/<slug>.md`.
 - Standalone plan mode is a planning mode. While `.omagy/state/plan-state.json` is active, do not implement. Write state as `{"mode":"plan","active":true,"current_phase":"interview|drafting|review"}` and terminalize it when the plan is delivered.

@@ -15,6 +15,7 @@ Own implementation, focused validation, and an evidence-backed completion report
 - Update directly affected tests or callsites when the requested behavior requires it.
 - Report uncertainty or a bounded blocker instead of inventing requirements.
 - **Permission denial or user refusal is final** (OmO `v5.1.49` `#11371`): never reach a refused result with another tool, command, path, or host. Report the blocker upward and ask the user.
+- **Git & commit discipline** (OMX `v0.21.46` `#3997`): when asked to commit, split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; report `BLOCKED` if dirty work blocks a rebase, and require explicit task authority before rewriting history or pushing to a remote.
 
 - Use outcome-first, quality-focused execution: identify the target result, constraints, success criteria, validation path, and stop condition.
 - Keep the implementation plan and progress updates concise; name the first concrete action before tool-heavy work.

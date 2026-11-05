@@ -40,6 +40,13 @@ Also write `.omagy/state/performance-goal-state.json` (`mode:"performance-goal"`
 5. **Complete** only when `lastValidation.status == "pass"` and the audit confirms no required work remains. Set `state.json` `status:"complete"` and write the mode state terminal (`active:false`, `current_phase:"complete"`, `completed_at`).
 6. **Blocked** (e.g. a missing fixture or benchmark infra): checkpoint `blocked`, set the mode state to `current_phase:"blocked"`, `active:false`, and ask the user.
 
+## Evaluation Integrity Audit (`eval-integrity`, ported from OMO `v5.1.59` `#12040`)
+
+Before declaring a benchmark or evaluator result trustworthy, audit the evaluation setup across:
+1. **7 Evaluation Roles**: map `Claim`, `System under test`, `Dataset and split`, `Designer`, `Evaluator or judge`, `Scorer`, and `Subjects`, and confirm an independent ground-truth signal exists.
+2. **8 Independence Failure Probes**: check for `Contamination` (benchmark leakage), `Invalid controls` (unfair baseline flags/warmup), `Circular judging` (system judging its own output), `Scorer-label coupling`, `Evaluator-designer coupling` (tuning the evaluator to make the patch pass), `Split/annotator dependence`, `Hypothesis priming`, and `Observer/demand effects`.
+3. **Verdict Line**: record a single `**Verdict: PASS | FAIL | INCONCLUSIVE**` line in `.omagy/goals/performance/<slug>/summary.md` (and `evalIntegrityVerdict` in `state.json` if needed), which the HUD `Overview` tab surfaces on the benchmark card.
+
 ## Completion gate
 
-A performance goal is incomplete unless `state.json` holds `lastValidation.status: "pass"` produced by the declared evaluator command, with the evidence recorded in `checkpoints.jsonl`. Report baseline vs final numbers, the patches kept, the patches reverted, and the residual risks, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can inspect the `Benchmarks` tab in the Auxiliary Pane.
+A performance goal is incomplete unless `state.json` holds `lastValidation.status: "pass"` produced by the declared evaluator command, with the evidence recorded in `checkpoints.jsonl` and an `eval-integrity` `**Verdict: PASS**` in `summary.md`. Report baseline vs final numbers, the patches kept, the patches reverted, and the residual risks, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can inspect the benchmark card in the Auxiliary Pane.

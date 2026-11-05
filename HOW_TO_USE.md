@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.2`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.3`)** for Google Antigravity.
 
 ---
 
@@ -309,7 +309,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session`)
-Verifies plugin placement, `hooks/run.sh selftest` (`54/54` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
+Verifies plugin placement, `hooks/run.sh selftest` (`57/57` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
 - **Examples**:
   ```text
   /doctor
@@ -403,6 +403,7 @@ All runtime state lives in your workspace under `.omagy/` (add `.omagy/` to `.gi
 - **Across conversations or after `/compact`**:
   1. Run `/handoff` before compacting or closing the session.
   2. In the new session, paste the generated **Resume Prompt** from `.omagy/artifacts/handoff-latest.md` (or say `Resume from .omagy/artifacts/handoff-latest.md`).
+- **Parent-Project Anchoring & Inner-Folder `.omagy` Discovery**: When you open a parent project (e.g., `"Travels"`) and work inside a child subfolder (e.g., `"Travels/Summer trip"`), `stateRoot` automatically walks upward to anchor `.omagy/` at the parent workspace root so `.omagy/` folders are not scattered across subfolders. If an inner folder already contains its own `.omagy/`, `loadModeStates` and the HUD `Overview` tab (`discoverOmagyScopes`) automatically discover, label (`Scope: Summer trip`), and track its active modes, ultragoal, team boards, interviews, reviews, research, benchmarks, visual-ralph, and loft prototypes.
 - **Multi-Repo Workspaces**: Place an empty `.omagy-workspace` file in a parent directory to anchor `.omagy/` and `omagy_wiki/` across multiple sibling repositories.
 
 ---
@@ -441,13 +442,13 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 54-check offline hook selftest
+# 1. Run the 57-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
-# 2. Pre-assemble a git review package (exits 3 on 0-commit or non-ancestor range)
+# 2. Pre-assemble a git review package (supports -C <dir>; exits 3 on 0-commit or non-ancestor range)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh review-package . main HEAD .omagy/artifacts/reviews/review-pkg.md
 
-# 3. Extract a single goal/task brief from goals.json or a fence-aware markdown plan
+# 3. Extract a single goal/task brief from goals.json or a fence-aware markdown plan (exits 4 on unclosed code fence)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh goal-brief .omagy/ultragoal/goals.json G1 .omagy/ultragoal/briefs/goal-G1.md
 
 # 4. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands)
@@ -467,6 +468,9 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh research-matrix "Distributed 
 
 # 9. Audit a /deep-research report against the 8-section & 5-dimension (>=85) rubric
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh audit-research .omagy/artifacts/research/report.md --json
+
+# 10. Scan test files for 7 AI-slop junk-test patterns (suppress with // check-test-junk: ignore)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh check-test-junk tests/ --json
 ```
 
 ---

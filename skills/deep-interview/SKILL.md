@@ -45,10 +45,11 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 - Durable doc/glossary/ADR updates are opt-in and public-safe only. Recommend them in the handoff; never auto-create them from interview transcripts.
 - If initial context is oversized, do not paste it into prompts. Make the first round a request for a prompt-safe summary (goals, constraints, success criteria, non-goals, decision boundaries, references to full sources). This gate blocks scoring, crystallizing, and handoff.
 - Route facts before judgment. Before each round, classify the needed information as a discoverable fact, a fact needing confirmation, or a human decision. The interview with the human is for judgment.
-- **Two-Filter Question Gate + Owner-Decision Survival (ported from OmO `ulw-plan`)**:
+- **Two-Filter Question Gate + Owner-Decision Survival (ported from OmO `ulw-plan` & `obra/superpowers` `v7.0.2` `#2644`)**:
   - **Filter 1 (Material Fork)**: Does the answer change architecture, scope, schema, or file boundaries?
   - **Filter 2 (Unresolvable by Repo/Docs)**: Can this be answered by inspecting the repo or official docs? If yes, inspect—do not ask.
   - **Owner-Decision Survival**: Unless the user explicitly asked for a deep Socratic grilling ("interview me", "ask me everything"), ask only decisions that are irreversible, destructive, spend-bearing, scope-defining, or change a public/external contract. For reversible engineering defaults, propose the recommended default and record it under `[adopted-default]` if the user says "you decide" / "use best practices".
+  - **Open "Why" First & Process Proposals (`superpowers` `v7.0.2` `#2644`)**: when the user hasn't stated *why* they want something, ask an open question first without steering option menus (`ask_question` with concrete choices is used once intent/"why" is known and a named fork exists). Process steps (where files go, doing recon, writing docs) are agent calls stated as proposals rather than questions. When nothing material is open on the first turn, present a short design/spec for approval immediately.
 - When ambiguity depends on current external best practices or version-aware behavior, use `$best-practice-research` before crystallizing.
 - Transcript/spec labels:
   - `[from-code][auto-confirmed]`: exact, high-confidence codebase facts with no prescription attached. Record them as context, not interview rounds.

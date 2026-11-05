@@ -61,12 +61,13 @@ Assemble a reviewer-ready Pull Request description directly from the repository 
    - Does it settle a real architectural or domain trade-off?
    If all three are "No", classify as a **Two-way door** and give the one-line revert command. If any is "Yes", classify accordingly, explain why, and recommend capturing the decision in `omagy_wiki/` or an ADR.
 
-## Branch Closeout & Worktree Hygiene
+## Branch Closeout, Atomic Commits & Worktree Hygiene
 
-When closing out a development branch or linked worktree after generating the PR body:
-1. Confirm a fresh passing test/verification run on the current `HEAD` before pushing or merging.
-2. Detect linked worktrees safely (`git rev-parse --git-dir` vs `--git-common-dir` combined with `[ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ]` so submodules are not misidentified as linked worktrees).
-3. Never run `git worktree remove --force` when untracked or unmerged files exist (`git status --porcelain --untracked-files=all`), and never delete a branch without explicit user confirmation.
+When preparing commits or closing out a development branch or linked worktree after generating the PR body:
+1. **Atomic revertible-behavior commits & dirty-worktree safety (OMX `v0.21.46` `#3997`)**: split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config together in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; if dirty changes block a rebase, stop and ask the user. Require explicit task authority before rewriting published history or pushing to remote branches.
+2. Confirm a fresh passing test/verification run on the current `HEAD` before pushing or merging.
+3. Detect linked worktrees safely (`git rev-parse --git-dir` vs `--git-common-dir` combined with `[ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ]` so submodules are not misidentified as linked worktrees).
+4. Never run `git worktree remove --force` when untracked or unmerged files/commits exist (`git status --porcelain --untracked-files=all` or unmerged commits on `HEAD` per `worktree_unmerged` OMC `v5.7.28` `#4768`), and never delete a branch without explicit user confirmation.
 
 ## Output
 

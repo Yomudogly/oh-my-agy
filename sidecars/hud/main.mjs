@@ -9,7 +9,16 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { redactSecrets, readJsonlRecords, validateQualityGates } from '../../hooks/omagy-hook.mjs';
+import {
+  discoverOmagyScopes,
+  hardenWindowsExeSearch,
+  redactSecrets,
+  readJsonlRecords,
+  stateRoot,
+  validateQualityGates,
+} from '../../hooks/omagy-hook.mjs';
+
+hardenWindowsExeSearch();
 
 const BIND_HOST = '127.0.0.1';
 const STALE_MS = 6 * 3600 * 1000;
@@ -122,9 +131,9 @@ const SKILL_GUIDE_META = {
   },
   'ai-slop-cleaner': {
     category: 'Review, QA & Cleanup',
-    flags: [],
+    flags: ['--review'],
     quickStart: '/ai-slop-cleaner clean up src/services/',
-    howToUse: 'Locks behavior with regression tests first, then removes dead code, duplicate wrappers, and unnecessary abstractions in bounded passes.',
+    howToUse: 'Locks behavior with regression tests first, runs check-test-junk and R/F/C/D test hygiene checks, and removes dead code and duplicate wrappers in bounded passes.',
   },
   pr: {
     category: 'Review, QA & Cleanup',
@@ -277,7 +286,7 @@ const SUBAGENT_GUIDE_META = {
     lane: 'Review & Verification',
     modelTier: 'inherit',
     defaultPrompt: 'Design high-signal unit and integration tests covering edge cases and failure modes',
-    whenToUse: 'Design and harden unit/integration/e2e tests using Name-the-Break, Exercise-the-Real-Thing, mutation checks, and condition-based waiting.',
+    whenToUse: 'Design and harden unit/integration/e2e tests using the 4-question authoring gate, R/F/C/D marks, 15 junk-test classes (check-test-junk), and 2x2 mutation proof.',
   },
   verifier: {
     lane: 'Review & Verification',
@@ -424,45 +433,36 @@ function uriToFsPath(uriOrPath) {
 }
 
 function resolveStateRoot(rawRoot) {
-  let cur = path.resolve(rawRoot);
-  for (let i = 0; i < 8; i += 1) {
-    try {
-      if (fs.existsSync(path.join(cur, '.omagy-workspace')) || fs.existsSync(path.join(cur, '.omc-workspace'))) {
-        return cur;
-      }
-    } catch { /* ignore */ }
-    const parent = path.dirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-  return path.resolve(rawRoot);
+  return stateRoot(rawRoot);
 }
 
 export function resolveSafeArtifactFile(workspaceRoot, relPath) {
   const cleanRel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (!cleanRel || cleanRel.includes('\0') || cleanRel.split('/').includes('..')) return null;
-  if (!cleanRel.startsWith('.omagy/artifacts/visual-ralph/')
-      && !cleanRel.startsWith('.omagy/artifacts/loft/')
-      && !cleanRel.startsWith('.omagy/artifacts/research/')) {
+  if (!/^(?:[^/]+\/)*\.omagy\/artifacts\/(?:visual-ralph|loft|research)\//.test(cleanRel)) {
     return null;
   }
   const ext = path.extname(cleanRel).toLowerCase();
   if (!MIME_BY_EXT[ext]) return null;
   try {
     const rootReal = fs.realpathSync(resolveStateRoot(workspaceRoot));
-    const allowedBase = path.join(rootReal, '.omagy', 'artifacts');
-    const candidate = path.resolve(rootReal, cleanRel);
-    const st = fs.lstatSync(candidate);
+    let cur = rootReal;
+    for (const part of cleanRel.split('/')) {
+      cur = path.join(cur, part);
+      if (fs.lstatSync(cur).isSymbolicLink()) return null;
+    }
+    const st = fs.lstatSync(cur);
     if (st.isSymbolicLink() || !st.isFile()) return null;
-    const candidateReal = fs.realpathSync(candidate);
-    if (!candidateReal.startsWith(allowedBase + path.sep)) return null;
+    const candidateReal = fs.realpathSync(cur);
+    const omagyArtifactsSeg = `${path.sep}.omagy${path.sep}artifacts${path.sep}`;
+    if (!candidateReal.startsWith(rootReal + path.sep) || !candidateReal.includes(omagyArtifactsSeg)) return null;
     return { filePath: candidateReal, mime: MIME_BY_EXT[ext] };
   } catch {
     return null;
   }
 }
 
-function readModeFilesInDir(dir, sessionLabel = 'shared') {
+function readModeFilesInDir(dir, sessionLabel = 'shared', scopeLabel = '.') {
   try {
     if (fs.lstatSync(dir).isSymbolicLink()) return [];
   } catch { return []; }
@@ -491,6 +491,7 @@ function readModeFilesInDir(dir, sessionLabel = 'shared') {
       updatedMs,
       stale: isStale,
       session: sessionLabel,
+      scope: scopeLabel,
       owner: String(data.owner_conversation_id || data.conversation_id || ''),
       raw: data,
     });
@@ -796,13 +797,42 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
 
   const roots = [...new Set(candidates.map(resolveStateRoot))];
   const primaryRoot = roots[0] || process.cwd();
+  const scopeEntries = [];
+  const seenScopeRoots = new Set();
+  const pushScopeEntry = (rootDir, scopeRel) => {
+    const abs = path.resolve(rootDir);
+    if (seenScopeRoots.has(abs)) return;
+    seenScopeRoots.add(abs);
+    scopeEntries.push({ root: abs, scope: scopeRel || '.' });
+  };
+  pushScopeEntry(primaryRoot, '.');
+  for (const root of roots) {
+    pushScopeEntry(root, '.');
+    for (const sc of discoverOmagyScopes(root, 3, 150)) {
+      pushScopeEntry(sc.root, sc.scope);
+    }
+  }
+  const trackedScopes = scopeEntries
+    .filter((sc) => {
+      try {
+        const p = path.join(sc.root, '.omagy');
+        return fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink();
+      } catch { return false; }
+    })
+    .map((sc) => ({
+      scope: sc.scope,
+      path: sc.root,
+      hasState: fs.existsSync(path.join(sc.root, '.omagy', 'state')),
+    }));
+
   const allModeRecords = [];
   const seenModeKeys = new Set();
 
-  for (const root of roots) {
-    const stateDir = path.join(root, '.omagy', 'state');
-    for (const m of readModeFilesInDir(stateDir, 'shared')) {
-      const k = `${root}:shared:${m.mode}`;
+  for (const sc of scopeEntries) {
+    const scopePrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
+    const stateDir = path.join(sc.root, '.omagy', 'state');
+    for (const m of readModeFilesInDir(stateDir, `${scopePrefix}shared`, sc.scope)) {
+      const k = `${sc.root}:shared:${m.mode}`;
       if (!seenModeKeys.has(k)) { seenModeKeys.add(k); allModeRecords.push(m); }
     }
     const sessionsDir = path.join(stateDir, 'sessions');
@@ -820,8 +850,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           .sort((a, b) => b.mtimeMs - a.mtimeMs)
           .slice(0, 5);
         for (const sess of sessEntries) {
-          for (const m of readModeFilesInDir(sess.path, sess.name.slice(0, 12))) {
-            const k = `${root}:${sess.name}:${m.mode}`;
+          for (const m of readModeFilesInDir(sess.path, `${scopePrefix}${sess.name.slice(0, 12)}`, sc.scope)) {
+            const k = `${sc.root}:${sess.name}:${m.mode}`;
             if (!seenModeKeys.has(k)) { seenModeKeys.add(k); allModeRecords.push(m); }
           }
         }
@@ -831,12 +861,13 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
 
   const modes = allModeRecords.map(({ raw: _raw, ...rest }) => rest);
 
-  // 1. Ultragoal summary
+  // 1. Ultragoal summary (across primaryRoot and discovered inner scopes)
   let ultragoal = null;
-  const goalsPath = path.join(primaryRoot, '.omagy', 'ultragoal', 'goals.json');
-  const goalsData = readJsonSafe(goalsPath);
-  if (goalsData && Array.isArray(goalsData.goals)) {
-    const ledgerPath = path.join(primaryRoot, '.omagy', 'ultragoal', 'ledger.jsonl');
+  for (const sc of scopeEntries) {
+    const goalsPath = path.join(sc.root, '.omagy', 'ultragoal', 'goals.json');
+    const goalsData = readJsonSafe(goalsPath);
+    if (!goalsData || !Array.isArray(goalsData.goals)) continue;
+    const ledgerPath = path.join(sc.root, '.omagy', 'ultragoal', 'ledger.jsonl');
     let recentLedger = [];
     try {
       if (fs.existsSync(ledgerPath)) {
@@ -859,48 +890,55 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
       else if (g.status === 'failed') counts.failed += 1;
       else counts.pending += 1;
     }
-    ultragoal = {
+    const candidateUg = {
+      scope: sc.scope,
       objective: String(goalsData.objective || ''),
       updatedAt: String(goalsData.updated_at || ''),
       counts,
       goals,
       recentLedger,
     };
+    if (!ultragoal || (ultragoal.counts.inProgress === 0 && candidateUg.counts.inProgress > 0)) {
+      ultragoal = candidateUg;
+    }
   }
 
-  // 2. Team boards summary (including 20-minute completed window per OMC #4661/#4662)
+  // 2. Team boards summary (including 20-minute completed window per OMC #4661/#4662, across all scopes)
   const teams = [];
-  const teamRoot = path.join(primaryRoot, '.omagy', 'state', 'team');
-  try {
-    if (fs.existsSync(teamRoot) && !fs.lstatSync(teamRoot).isSymbolicLink()) {
-      for (const slug of fs.readdirSync(teamRoot)) {
-        const dir = path.join(teamRoot, slug);
-        const tasksFile = path.join(dir, 'tasks.json');
-        const manifestFile = path.join(dir, 'manifest.json');
-        const board = readJsonSafe(tasksFile) || readJsonSafe(manifestFile);
-        if (!board || typeof board !== 'object') continue;
-        const tasks = Array.isArray(board.tasks) ? board.tasks : [];
-        const updatedMs = Date.parse(board.updated_at || '') || 0;
-        const allDone = tasks.length > 0 && tasks.every((t) => t.status === 'completed' || t.status === 'complete');
-        if (allDone && updatedMs > 0 && nowMs - updatedMs > TEAM_COMPLETED_WINDOW_MS) continue;
-        teams.push({
-          team: String(board.team || slug),
-          objective: String(board.objective || ''),
-          updatedAt: String(board.updated_at || ''),
-          tasks: tasks.map((t) => ({
-            id: String(t.id || ''),
-            title: String(t.title || ''),
-            role: String(t.role || 'team-worker'),
-            model: String(t.model || 'inherit'),
-            status: String(t.status || 'pending'),
-            dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
-            requiresCodeChange: Boolean(t.requires_code_change),
-            hasEvidence: fs.existsSync(path.join(primaryRoot, '.omagy', 'evidence', `task-${t.id}.json`)),
-          })),
-        });
+  for (const sc of scopeEntries) {
+    const teamRoot = path.join(sc.root, '.omagy', 'state', 'team');
+    try {
+      if (fs.existsSync(teamRoot) && !fs.lstatSync(teamRoot).isSymbolicLink()) {
+        for (const slug of fs.readdirSync(teamRoot)) {
+          const dir = path.join(teamRoot, slug);
+          const tasksFile = path.join(dir, 'tasks.json');
+          const manifestFile = path.join(dir, 'manifest.json');
+          const board = readJsonSafe(tasksFile) || readJsonSafe(manifestFile);
+          if (!board || typeof board !== 'object') continue;
+          const tasks = Array.isArray(board.tasks) ? board.tasks : [];
+          const updatedMs = Date.parse(board.updated_at || '') || 0;
+          const allDone = tasks.length > 0 && tasks.every((t) => t.status === 'completed' || t.status === 'complete');
+          if (allDone && updatedMs > 0 && nowMs - updatedMs > TEAM_COMPLETED_WINDOW_MS) continue;
+          teams.push({
+            team: String(board.team || slug),
+            scope: sc.scope,
+            objective: String(board.objective || ''),
+            updatedAt: String(board.updated_at || ''),
+            tasks: tasks.map((t) => ({
+              id: String(t.id || ''),
+              title: String(t.title || ''),
+              role: String(t.role || 'team-worker'),
+              model: String(t.model || 'inherit'),
+              status: String(t.status || 'pending'),
+              dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
+              requiresCodeChange: Boolean(t.requires_code_change),
+              hasEvidence: fs.existsSync(path.join(sc.root, '.omagy', 'evidence', `task-${t.id}.json`)),
+            })),
+          });
+        }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
+  }
 
   // 3. Deep Interview Ambiguity & Readiness Radar
   let interview = null;
@@ -913,6 +951,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     const dimensions = latestRound?.scores || st.scores || st.dimensions || {};
     const gatesRaw = st.readiness_gates || {};
     interview = {
+      scope: diRecord.scope || '.',
       slug: String(st.slug || ''),
       profile: String(st.profile || 'standard'),
       type: String(st.type || 'brownfield'),
@@ -949,6 +988,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
   if (rpRecord) {
     const ho = rpRecord.raw?.state?.handoff_artifacts?.ralplan || rpRecord.raw?.handoff_artifacts?.ralplan || rpRecord.raw?.state?.ralplan || rpRecord.raw?.state || {};
     reviews.ralplan = {
+      scope: rpRecord.scope || '.',
       active: rpRecord.active,
       phase: rpRecord.phase,
       iteration: rpRecord.iteration ?? 1,
@@ -959,203 +999,236 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
       planningArtifacts: Array.isArray(ho.planning_artifacts) ? ho.planning_artifacts.map(String) : [],
     };
   }
-  const plansDir = path.join(primaryRoot, '.omagy', 'plans');
-  try {
-    if (fs.existsSync(plansDir) && !fs.lstatSync(plansDir).isSymbolicLink()) {
-      for (const name of fs.readdirSync(plansDir)) {
-        if (name.startsWith('hyperplan-distillation-') && name.endsWith('.md')) {
-          const text = readTextSafe(path.join(plansDir, name));
-          const survives = (text.match(/\bSURVIVES\b/g) || []).length;
-          const weakened = (text.match(/\bWEAKENED\b/g) || []).length;
-          const killed = (text.match(/\bKILLED\b/g) || []).length;
-          reviews.hyperplan.push({
-            file: `.omagy/plans/${name}`,
-            survives,
-            weakened,
-            killed,
-          });
-        } else if (name.startsWith('ralplan-review-') && name.endsWith('.md') && !reviews.ralplan) {
-          const text = readTextSafe(path.join(plansDir, name));
-          const archMatch = /architect[^\n:]*:\s*(APPROVE|CLEAR|WATCH|BLOCK|ITERATE|REJECT)/i.exec(text);
-          const critMatch = /critic[^\n:]*:\s*(APPROVE|ITERATE|REJECT)/i.exec(text);
-          reviews.ralplan = {
-            active: false,
-            phase: 'complete',
-            iteration: 1,
-            architectVerdict: archMatch ? archMatch[1].toUpperCase() : 'recorded',
-            criticVerdict: critMatch ? critMatch[1].toUpperCase() : 'recorded',
-            consensusComplete: Boolean(critMatch && critMatch[1].toUpperCase() === 'APPROVE'),
-            executionAuthorized: false,
-            planningArtifacts: [`.omagy/plans/${name}`],
-          };
+  for (const sc of scopeEntries) {
+    const relPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
+    const plansDir = path.join(sc.root, '.omagy', 'plans');
+    try {
+      if (fs.existsSync(plansDir) && !fs.lstatSync(plansDir).isSymbolicLink()) {
+        for (const name of fs.readdirSync(plansDir)) {
+          if (name.startsWith('hyperplan-distillation-') && name.endsWith('.md')) {
+            const text = readTextSafe(path.join(plansDir, name));
+            const survives = (text.match(/\bSURVIVES\b/g) || []).length;
+            const weakened = (text.match(/\bWEAKENED\b/g) || []).length;
+            const killed = (text.match(/\bKILLED\b/g) || []).length;
+            reviews.hyperplan.push({
+              scope: sc.scope,
+              file: `${relPrefix}.omagy/plans/${name}`,
+              survives,
+              weakened,
+              killed,
+            });
+          } else if (name.startsWith('ralplan-review-') && name.endsWith('.md') && !reviews.ralplan) {
+            const text = readTextSafe(path.join(plansDir, name));
+            const archMatch = /architect[^\n:]*:\s*`?(APPROVE|CLEAR|WATCH|BLOCK|ITERATE|REJECT)`?/i.exec(text);
+            const critMatch = /critic[^\n:]*:\s*`?(APPROVE|ITERATE|REJECT)`?/i.exec(text);
+            reviews.ralplan = {
+              scope: sc.scope,
+              active: false,
+              phase: 'complete',
+              iteration: 1,
+              architectVerdict: archMatch ? archMatch[1].toUpperCase() : 'recorded',
+              criticVerdict: critMatch ? critMatch[1].toUpperCase() : 'recorded',
+              consensusComplete: Boolean(critMatch && critMatch[1].toUpperCase() === 'APPROVE'),
+              executionAuthorized: false,
+              planningArtifacts: [`${relPrefix}.omagy/plans/${name}`],
+            };
+          }
         }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
 
-  const artifactsDir = path.join(primaryRoot, '.omagy', 'artifacts');
-  try {
-    if (fs.existsSync(artifactsDir) && !fs.lstatSync(artifactsDir).isSymbolicLink()) {
-      for (const name of fs.readdirSync(artifactsDir)) {
-        if (name.startsWith('code-review-') && name.endsWith('.md')) {
-          const text = readTextSafe(path.join(artifactsDir, name));
-          const archMatch = /Architectural Status:\s*(CLEAR|WATCH|BLOCK)/i.exec(text);
-          const recMatch = /RECOMMENDATION:\s*(APPROVE|REQUEST CHANGES|COMMENT)/i.exec(text);
-          const filesMatch = /Files Reviewed:\s*([0-9]+)/i.exec(text);
-          const issuesMatch = /Total Issues:\s*([0-9]+)/i.exec(text);
-          reviews.codeReviews.push({
-            file: `.omagy/artifacts/${name}`,
-            architectStatus: archMatch ? archMatch[1].toUpperCase() : 'UNKNOWN',
-            recommendation: recMatch ? recMatch[1].toUpperCase() : 'UNKNOWN',
-            filesReviewed: filesMatch ? Number(filesMatch[1]) : 0,
-            totalIssues: issuesMatch ? Number(issuesMatch[1]) : 0,
-          });
+    const artifactsDir = path.join(sc.root, '.omagy', 'artifacts');
+    try {
+      if (fs.existsSync(artifactsDir) && !fs.lstatSync(artifactsDir).isSymbolicLink()) {
+        for (const name of fs.readdirSync(artifactsDir)) {
+          if (name.startsWith('code-review-') && name.endsWith('.md')) {
+            const text = readTextSafe(path.join(artifactsDir, name));
+            const archMatch = /Architectural Status:\s*(CLEAR|WATCH|BLOCK)/i.exec(text);
+            const recMatch = /RECOMMENDATION:\s*(APPROVE|REQUEST CHANGES|COMMENT)/i.exec(text);
+            const filesMatch = /Files Reviewed:\s*([0-9]+)/i.exec(text);
+            const issuesMatch = /Total Issues:\s*([0-9]+)/i.exec(text);
+            reviews.codeReviews.push({
+              scope: sc.scope,
+              file: `${relPrefix}.omagy/artifacts/${name}`,
+              architectStatus: archMatch ? archMatch[1].toUpperCase() : 'UNKNOWN',
+              recommendation: recMatch ? recMatch[1].toUpperCase() : 'UNKNOWN',
+              filesReviewed: filesMatch ? Number(filesMatch[1]) : 0,
+              totalIssues: issuesMatch ? Number(issuesMatch[1]) : 0,
+            });
+          }
         }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
+  }
 
-  // 4b. Deep Research reports (.omagy/artifacts/research/*.md)
+  // 4b. Deep Research reports (.omagy/artifacts/research/*.md across scopes, including eval-integrity Verdict)
   const research = [];
-  const researchDir = path.join(primaryRoot, '.omagy', 'artifacts', 'research');
-  try {
-    if (fs.existsSync(researchDir) && !fs.lstatSync(researchDir).isSymbolicLink()) {
-      for (const name of fs.readdirSync(researchDir)) {
-        if (!name.endsWith('.md')) continue;
-        const fullPath = path.join(researchDir, name);
-        const text = readTextSafe(fullPath, 32 * 1024);
-        if (!text) continue;
-        const titleMatch = /^#\s+([^\r\n]+)/m.exec(text);
-        const lensMatch = /Lens(?:\(es\))?:\**\s*`?([a-zA-Z0-9_, /|-]+)`?/i.exec(text);
-        const compMatch = /Overall\s+Composite[^\n|]*\|[^\n|]*\|\s*`?([0-9]+(?:\.[0-9]+)?)`?/i.exec(text);
-        research.push({
-          file: `.omagy/artifacts/research/${name}`,
-          title: redactSecrets((titleMatch ? titleMatch[1] : name).trim()),
-          lens: (lensMatch ? lensMatch[1] : 'multi-lens').trim(),
-          compositeScore: compMatch ? Number(compMatch[1]) : null,
-          claims: {
-            verified: (text.match(/\[VERIFIED\]/g) || []).length,
-            derived: (text.match(/\[DERIVED\]/g) || []).length,
-            assumed: (text.match(/\[ASSUMED\]/g) || []).length,
-          },
-        });
-      }
-    }
-  } catch { /* ignore */ }
-
-  // 5. Benchmarks: Performance Goals & Autoresearch (retained in snapshot for compatibility)
-  const benchmarks = { performanceGoals: [], autoresearch: [] };
-  const perfRoot = path.join(primaryRoot, '.omagy', 'goals', 'performance');
-  try {
-    if (fs.existsSync(perfRoot) && !fs.lstatSync(perfRoot).isSymbolicLink()) {
-      for (const slug of fs.readdirSync(perfRoot)) {
-        const dir = path.join(perfRoot, slug);
-        const stData = readJsonSafe(path.join(dir, 'state.json'));
-        if (!stData || typeof stData !== 'object') continue;
-        const cpFile = path.join(dir, 'checkpoints.jsonl');
-        const checkpoints = fs.existsSync(cpFile) ? readJsonlRecords(cpFile).records.slice(-10) : [];
-        benchmarks.performanceGoals.push({
-          slug: String(stData.slug || slug),
-          objective: String(stData.objective || ''),
-          evaluatorCommand: String(stData.evaluator_command || ''),
-          evaluatorContract: String(stData.evaluator_contract || ''),
-          status: String(stData.status || 'active'),
-          baseline: stData.baseline ?? null,
-          lastValidation: stData.lastValidation ?? null,
-          checkpoints: checkpoints.map((c) => ({
-            at: String(c.at || ''),
-            status: String(c.status || 'unknown'),
-            patch: redactSecrets(String(c.patch || '')),
-            evidence: redactSecrets(String(c.evidence || '')),
-          })),
-        });
-      }
-    }
-  } catch { /* ignore */ }
-
-  const specsDir = path.join(primaryRoot, '.omagy', 'specs');
-  try {
-    if (fs.existsSync(specsDir) && !fs.lstatSync(specsDir).isSymbolicLink()) {
-      for (const name of fs.readdirSync(specsDir)) {
-        if (!name.startsWith('autoresearch-')) continue;
-        const dir = path.join(specsDir, name);
-        let st;
-        try { st = fs.lstatSync(dir); } catch { continue; }
-        if (!st.isDirectory() || st.isSymbolicLink()) continue;
-        const slug = name.slice('autoresearch-'.length);
-        const resultData = readJsonSafe(path.join(dir, 'result.json')) || {};
-        const completionData = readJsonSafe(path.join(dir, 'completion.json')) || {};
-        const reportText = readTextSafe(path.join(dir, 'report.md'));
-        const verifiedCount = (reportText.match(/\[VERIFIED\]/g) || []).length;
-        const derivedCount = (reportText.match(/\[DERIVED\]/g) || []).length;
-        const assumedCount = (reportText.match(/\[ASSUMED\]/g) || []).length;
-        benchmarks.autoresearch.push({
-          slug,
-          launchReady: Boolean(resultData.launchReady ?? false),
-          passed: Boolean(completionData.passed || completionData.architect_review?.verdict === 'approved'),
-          status: String(completionData.status || completionData.architect_review?.verdict || (resultData.launchReady ? 'running' : 'draft')),
-          claims: { verified: verifiedCount, derived: derivedCount, assumed: assumedCount },
-        });
-      }
-    }
-  } catch { /* ignore */ }
-
-  // 6. Visual Ralph Diff & Verdict Inspector (retained in snapshot for compatibility)
-  const visualRalph = [];
-  const vrRoot = path.join(primaryRoot, '.omagy', 'artifacts', 'visual-ralph');
-  try {
-    if (fs.existsSync(vrRoot) && !fs.lstatSync(vrRoot).isSymbolicLink()) {
-      for (const slug of fs.readdirSync(vrRoot)) {
-        const dir = path.join(vrRoot, slug);
-        let st;
-        try { st = fs.lstatSync(dir); } catch { continue; }
-        if (!st.isDirectory() || st.isSymbolicLink()) continue;
-        const files = fs.readdirSync(dir);
-        const images = files
-          .filter((f) => /\.(png|jpe?g|webp|svg)$/i.test(f))
-          .map((f) => ({ name: f, relPath: `.omagy/artifacts/visual-ralph/${slug}/${f}` }));
-        const verdictFile = files.find((f) => f === 'verdict.json' || f.endsWith('-verdict.json'));
-        const verdictData = verdictFile ? readJsonSafe(path.join(dir, verdictFile)) : null;
-        if (images.length || verdictData) {
-          visualRalph.push({
-            slug,
-            images,
-            verdict: verdictData ? {
-              score: Number(verdictData.score ?? 0),
-              verdict: String(verdictData.verdict || 'unknown'),
-              categoryMatch: Boolean(verdictData.category_match ?? true),
-              differences: Array.isArray(verdictData.differences) ? verdictData.differences.map(String) : [],
-              suggestions: Array.isArray(verdictData.suggestions) ? verdictData.suggestions.map(String) : [],
-            } : null,
+  for (const sc of scopeEntries) {
+    const relPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
+    const researchDir = path.join(sc.root, '.omagy', 'artifacts', 'research');
+    try {
+      if (fs.existsSync(researchDir) && !fs.lstatSync(researchDir).isSymbolicLink()) {
+        for (const name of fs.readdirSync(researchDir)) {
+          if (!name.endsWith('.md')) continue;
+          const fullPath = path.join(researchDir, name);
+          const text = readTextSafe(fullPath, 32 * 1024);
+          if (!text) continue;
+          const titleMatch = /^#\s+([^\r\n]+)/m.exec(text);
+          const lensMatch = /Lens(?:\(es\))?:\**\s*`?([a-zA-Z0-9_, /|-]+)`?/i.exec(text);
+          const compMatch = /Overall\s+Composite[^\n|]*\|[^\n|]*\|\s*`?([0-9]+(?:\.[0-9]+)?)`?/i.exec(text);
+          const evalMatch = /\*{0,2}Verdict:\s*(PASS|FAIL|INCONCLUSIVE)\*{0,2}/i.exec(text);
+          research.push({
+            scope: sc.scope,
+            file: `${relPrefix}.omagy/artifacts/research/${name}`,
+            title: redactSecrets((titleMatch ? titleMatch[1] : name).trim()),
+            lens: (lensMatch ? lensMatch[1] : 'multi-lens').trim(),
+            compositeScore: compMatch ? Number(compMatch[1]) : null,
+            evalIntegrityVerdict: evalMatch ? evalMatch[1].toUpperCase() : null,
+            claims: {
+              verified: (text.match(/\[VERIFIED\]/g) || []).length,
+              derived: (text.match(/\[DERIVED\]/g) || []).length,
+              assumed: (text.match(/\[ASSUMED\]/g) || []).length,
+            },
           });
         }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
+  }
 
-  // 7. Loft Prototype Viewer (retained in snapshot for compatibility)
-  const loft = [];
-  const loftRoot = path.join(primaryRoot, '.omagy', 'artifacts', 'loft');
-  try {
-    if (fs.existsSync(loftRoot) && !fs.lstatSync(loftRoot).isSymbolicLink()) {
-      for (const slug of fs.readdirSync(loftRoot)) {
-        const dir = path.join(loftRoot, slug);
-        const indexFile = path.join(dir, 'index.html');
-        let st;
-        try { st = fs.lstatSync(indexFile); } catch { continue; }
-        if (st.isSymbolicLink() || !st.isFile()) continue;
-        const htmlText = readTextSafe(indexFile, 32 * 1024);
-        const hasLogicModule = fs.existsSync(path.join(dir, 'logic.mjs')) || fs.existsSync(path.join(dir, 'logic.js'));
-        loft.push({
-          slug,
-          relPath: `.omagy/artifacts/loft/${slug}/index.html`,
-          kind: hasLogicModule ? 'logic-fork' : 'ui-fork',
-          updatedAt: new Date(st.mtimeMs).toISOString(),
-          title: (/<title>([^<]+)<\/title>/i.exec(htmlText)?.[1] || slug).trim(),
-        });
+  // 5. Benchmarks: Performance Goals & Autoresearch (across scopes, with eval-integrity Verdict)
+  const benchmarks = { performanceGoals: [], autoresearch: [] };
+  for (const sc of scopeEntries) {
+    const perfRoot = path.join(sc.root, '.omagy', 'goals', 'performance');
+    try {
+      if (fs.existsSync(perfRoot) && !fs.lstatSync(perfRoot).isSymbolicLink()) {
+        for (const slug of fs.readdirSync(perfRoot)) {
+          const dir = path.join(perfRoot, slug);
+          const stData = readJsonSafe(path.join(dir, 'state.json'));
+          if (!stData || typeof stData !== 'object') continue;
+          const cpFile = path.join(dir, 'checkpoints.jsonl');
+          const checkpoints = fs.existsSync(cpFile) ? readJsonlRecords(cpFile).records.slice(-10) : [];
+          const summaryText = readTextSafe(path.join(dir, 'summary.md'), 16 * 1024);
+          const evalMatch = /\*{0,2}Verdict:\s*(PASS|FAIL|INCONCLUSIVE)\*{0,2}/i.exec(summaryText);
+          benchmarks.performanceGoals.push({
+            scope: sc.scope,
+            slug: String(stData.slug || slug),
+            objective: String(stData.objective || ''),
+            evaluatorCommand: String(stData.evaluator_command || ''),
+            evaluatorContract: String(stData.evaluator_contract || ''),
+            evalIntegrityVerdict: stData.eval_integrity_verdict
+              ? String(stData.eval_integrity_verdict).toUpperCase()
+              : (evalMatch ? evalMatch[1].toUpperCase() : null),
+            status: String(stData.status || 'active'),
+            baseline: stData.baseline ?? null,
+            lastValidation: stData.lastValidation ?? null,
+            checkpoints: checkpoints.map((c) => ({
+              at: String(c.at || ''),
+              status: String(c.status || 'unknown'),
+              patch: redactSecrets(String(c.patch || '')),
+              evidence: redactSecrets(String(c.evidence || '')),
+            })),
+          });
+        }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* ignore */ }
+
+    const specsDir = path.join(sc.root, '.omagy', 'specs');
+    try {
+      if (fs.existsSync(specsDir) && !fs.lstatSync(specsDir).isSymbolicLink()) {
+        for (const name of fs.readdirSync(specsDir)) {
+          if (!name.startsWith('autoresearch-')) continue;
+          const dir = path.join(specsDir, name);
+          let st;
+          try { st = fs.lstatSync(dir); } catch { continue; }
+          if (!st.isDirectory() || st.isSymbolicLink()) continue;
+          const slug = name.slice('autoresearch-'.length);
+          const resultData = readJsonSafe(path.join(dir, 'result.json')) || {};
+          const completionData = readJsonSafe(path.join(dir, 'completion.json')) || {};
+          const reportText = readTextSafe(path.join(dir, 'report.md'));
+          const evalMatch = /\*{0,2}Verdict:\s*(PASS|FAIL|INCONCLUSIVE)\*{0,2}/i.exec(reportText);
+          const verifiedCount = (reportText.match(/\[VERIFIED\]/g) || []).length;
+          const derivedCount = (reportText.match(/\[DERIVED\]/g) || []).length;
+          const assumedCount = (reportText.match(/\[ASSUMED\]/g) || []).length;
+          benchmarks.autoresearch.push({
+            scope: sc.scope,
+            slug,
+            launchReady: Boolean(resultData.launchReady ?? false),
+            passed: Boolean(completionData.passed || completionData.architect_review?.verdict === 'approved'),
+            status: String(completionData.status || completionData.architect_review?.verdict || (resultData.launchReady ? 'running' : 'draft')),
+            evalIntegrityVerdict: completionData.eval_integrity_verdict
+              ? String(completionData.eval_integrity_verdict).toUpperCase()
+              : (evalMatch ? evalMatch[1].toUpperCase() : null),
+            claims: { verified: verifiedCount, derived: derivedCount, assumed: assumedCount },
+          });
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 6. Visual Ralph Diff & Verdict Inspector (across scopes)
+  const visualRalph = [];
+  for (const sc of scopeEntries) {
+    const relPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
+    const vrRoot = path.join(sc.root, '.omagy', 'artifacts', 'visual-ralph');
+    try {
+      if (fs.existsSync(vrRoot) && !fs.lstatSync(vrRoot).isSymbolicLink()) {
+        for (const slug of fs.readdirSync(vrRoot)) {
+          const dir = path.join(vrRoot, slug);
+          let st;
+          try { st = fs.lstatSync(dir); } catch { continue; }
+          if (!st.isDirectory() || st.isSymbolicLink()) continue;
+          const files = fs.readdirSync(dir);
+          const images = files
+            .filter((f) => /\.(png|jpe?g|webp|svg)$/i.test(f))
+            .map((f) => ({ name: f, relPath: `${relPrefix}.omagy/artifacts/visual-ralph/${slug}/${f}` }));
+          const verdictFile = files.find((f) => f === 'verdict.json' || f.endsWith('-verdict.json'));
+          const verdictData = verdictFile ? readJsonSafe(path.join(dir, verdictFile)) : null;
+          if (images.length || verdictData) {
+            visualRalph.push({
+              scope: sc.scope,
+              slug,
+              images,
+              verdict: verdictData ? {
+                score: Number(verdictData.score ?? 0),
+                verdict: String(verdictData.verdict || 'unknown'),
+                categoryMatch: Boolean(verdictData.category_match ?? true),
+                differences: Array.isArray(verdictData.differences) ? verdictData.differences.map(String) : [],
+                suggestions: Array.isArray(verdictData.suggestions) ? verdictData.suggestions.map(String) : [],
+              } : null,
+            });
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 7. Loft Prototype Viewer (across scopes)
+  const loft = [];
+  for (const sc of scopeEntries) {
+    const relPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
+    const loftRoot = path.join(sc.root, '.omagy', 'artifacts', 'loft');
+    try {
+      if (fs.existsSync(loftRoot) && !fs.lstatSync(loftRoot).isSymbolicLink()) {
+        for (const slug of fs.readdirSync(loftRoot)) {
+          const dir = path.join(loftRoot, slug);
+          const indexFile = path.join(dir, 'index.html');
+          let st;
+          try { st = fs.lstatSync(indexFile); } catch { continue; }
+          if (st.isSymbolicLink() || !st.isFile()) continue;
+          const htmlText = readTextSafe(indexFile, 32 * 1024);
+          const hasLogicModule = fs.existsSync(path.join(dir, 'logic.mjs')) || fs.existsSync(path.join(dir, 'logic.js'));
+          loft.push({
+            scope: sc.scope,
+            slug,
+            relPath: `${relPrefix}.omagy/artifacts/loft/${slug}/index.html`,
+            kind: hasLogicModule ? 'logic-fork' : 'ui-fork',
+            updatedAt: new Date(st.mtimeMs).toISOString(),
+            title: (/<title>([^<]+)<\/title>/i.exec(htmlText)?.[1] || slug).trim(),
+          });
+        }
+      }
+    } catch { /* ignore */ }
+  }
 
   // 8. Wiki, Working Agreements & Read-Only Lint Explorer
   const wiki = {
@@ -1296,6 +1369,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
   return {
     at: new Date(nowMs).toISOString(),
     workspace: primaryRoot,
+    trackedScopes,
     statusLine,
     allowedViews: ALLOWED_VIEWS,
     modes,
@@ -1319,9 +1393,10 @@ const HUD_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>oh-my-agy HUD</title>
+  <title>Oh My Agy</title>
   <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
     body {
       margin: 0;
       padding: 14px;
@@ -1330,6 +1405,7 @@ const HUD_HTML = `<!DOCTYPE html>
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
       line-height: 1.45;
+      overflow-x: hidden;
     }
     .card {
       background: var(--card, rgba(255,255,255,0.03));
@@ -1337,6 +1413,12 @@ const HUD_HTML = `<!DOCTYPE html>
       border-radius: 10px;
       padding: 12px 14px;
       margin-bottom: 10px;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .muted { color: var(--muted-foreground, #9ca3af); }
     .badge {
@@ -1347,6 +1429,9 @@ const HUD_HTML = `<!DOCTYPE html>
       font-size: 11px;
       font-weight: 500;
       white-space: nowrap;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
       flex-shrink: 0;
       border: 1px solid var(--border, rgba(255,255,255,0.15));
       background: rgba(255,255,255,0.03);
@@ -1438,16 +1523,57 @@ const HUD_HTML = `<!DOCTYPE html>
       background: rgba(96, 165, 250, 0.16);
       color: var(--primary, #60a5fa);
     }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .table-wrap {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    table.hud-table {
+      width: 100%;
+      max-width: 100%;
+      table-layout: fixed;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    table.hud-table th,
+    table.hud-table td {
+      text-align: left;
+      padding: 6px 6px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border, rgba(255,255,255,0.08));
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    table.hud-table th {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--muted-foreground, #9ca3af);
+      font-weight: 600;
+    }
+    table.hud-table tbody tr:last-child td { border-bottom: none; }
+    table.hud-table .col-id { width: 44px; white-space: nowrap; }
+    table.hud-table .col-main { width: auto; }
+    table.hud-table .col-status { width: 96px; text-align: right; white-space: nowrap; }
+    table.hud-table .col-mode { width: 32%; }
+    table.hud-table .col-phase { width: 38%; }
+    table.hud-table .col-scope { width: 30%; }
+    table.hud-table .col-event { width: 38%; }
+    ul, li { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; margin: 0; }
   </style>
 </head>
 <body>
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
     <div>
-      <div style="font-weight:600;font-size:14px;">oh-my-agy HUD</div>
+      <div style="font-weight:600;font-size:14px;">Oh My Agy</div>
       <div id="status-line" class="muted" style="font-size:12px;font-family:ui-monospace,monospace;">[OMA] Loading...</div>
     </div>
     <button id="refresh-btn" class="tab-btn active" title="Refresh status">Refresh</button>
@@ -1629,11 +1755,12 @@ const HUD_HTML = `<!DOCTYPE html>
     function renderOverview(data) {
       const modesRows = (data.modes || []).map((m) => \`
         <tr>
-          <td><code>\${esc(m.mode)}</code></td>
-          <td><span class="badge \${m.active && !m.stale ? 'badge-active' : ''}">\${esc(m.phase)}</span></td>
-          <td>\${m.active ? (m.stale ? 'stale (>6h)' : 'active') : 'inactive'}</td>
-          <td>\${esc(m.iteration ?? '-')}</td>
-          <td class="muted">\${esc(m.session)}</td>
+          <td class="col-mode"><code>\${esc(m.mode)}</code></td>
+          <td class="col-phase">
+            <span class="badge \${m.active && !m.stale ? 'badge-active' : ''}">\${esc(m.phase)}</span>
+            <div class="muted" style="font-size:11px;margin-top:2px;">\${m.active ? (m.stale ? 'stale (>6h)' : 'active') : 'inactive'}\${m.iteration != null ? \` &middot; #\${esc(m.iteration)}\` : ''}</div>
+          </td>
+          <td class="col-scope muted">\${esc(m.session)}</td>
         </tr>\`).join('');
 
       const qgRows = (data.qualityGates || []).map((g) => \`<li><code>\${esc(g.stage)}</code> &rarr; <code>\${esc(g.skill)}</code> (\${esc(g.mode)}, \${esc(g.model)})</li>\`).join('');
@@ -1642,23 +1769,25 @@ const HUD_HTML = `<!DOCTYPE html>
       let ugHtml = '';
       if (data.ultragoal) {
         const ug = data.ultragoal;
+        const ugScope = ug.scope && ug.scope !== '.' ? \` <span class="badge">Scope: \${esc(ug.scope)}</span>\` : '';
         const pct = ug.counts.total > 0 ? Math.round((ug.counts.complete / ug.counts.total) * 100) : 0;
         const goalRows = (ug.goals || []).map((g) => \`
           <tr>
-            <td><code>\${esc(g.id)}</code></td>
-            <td>\${esc(g.title)}</td>
-            <td><span class="badge">\${esc(g.rigor)}</span></td>
-            <td><span class="badge \${g.status === 'in_progress' ? 'badge-active' : ''}">\${esc(g.status)}</span></td>
-            <td>\${g.productFailures}/3</td>
+            <td class="col-id"><code>\${esc(g.id)}</code></td>
+            <td class="col-main">
+              <div>\${esc(g.title)}</div>
+              <div class="muted" style="font-size:11px;margin-top:2px;">Rigor: <code>\${esc(g.rigor)}</code> &middot; Retries: \${g.productFailures}/3</div>
+            </td>
+            <td class="col-status"><span class="badge \${g.status === 'in_progress' ? 'badge-active' : ''}">\${esc(g.status)}</span></td>
           </tr>\`).join('');
         ugHtml = \`
           <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-              <div style="font-weight:600;">Ultragoal: \${esc(ug.objective || 'Active Plan')}</div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+              <div style="font-weight:600;min-width:0;flex:1 1 160px;overflow-wrap:anywhere;">Ultragoal: \${esc(ug.objective || 'Active Plan')}\${ugScope}</div>
               <span class="badge badge-active">\${ug.counts.complete}/\${ug.counts.total}</span>
             </div>
             <div class="bar-track" style="margin:8px 0;"><div class="bar-fill" style="width:\${pct}%;"></div></div>
-            <table><thead><tr><th>ID</th><th>Goal</th><th>Rigor</th><th>Status</th><th>Retries</th></tr></thead><tbody>\${goalRows}</tbody></table>
+            <div class="table-wrap"><table class="hud-table"><thead><tr><th class="col-id">ID</th><th class="col-main">Goal</th><th class="col-status">Status</th></tr></thead><tbody>\${goalRows}</tbody></table></div>
           </div>\`;
       }
 
@@ -1666,12 +1795,13 @@ const HUD_HTML = `<!DOCTYPE html>
       let ivHtml = '';
       if (data.interview) {
         const iv = data.interview;
+        const ivScope = iv.scope && iv.scope !== '.' ? \` <span class="badge">Scope: \${esc(iv.scope)}</span>\` : '';
         const ambPct = Math.round((iv.currentAmbiguity || 0) * 100);
         const threshPct = Math.round((iv.threshold || 0.2) * 100);
         ivHtml = \`
           <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div style="font-weight:600;">Deep Interview: <code>\${esc(iv.slug || 'session')}</code></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px;">
+              <div style="font-weight:600;min-width:0;flex:1 1 160px;overflow-wrap:anywhere;">Deep Interview: <code>\${esc(iv.slug || 'session')}</code>\${ivScope}</div>
               <span class="badge">\${esc(iv.profile)} (\${ambPct}% ambiguity &le; \${threshPct}%)</span>
             </div>
             <div class="bar-track" style="margin-top:8px;"><div class="bar-fill" style="width:\${Math.max(0, Math.min(100, 100 - ambPct))}%;"></div></div>
@@ -1687,19 +1817,21 @@ const HUD_HTML = `<!DOCTYPE html>
       let teamHtml = '';
       if (data.teams && data.teams.length) {
         teamHtml = data.teams.map((t) => {
+          const tScope = t.scope && t.scope !== '.' ? \` <span class="badge">Scope: \${esc(t.scope)}</span>\` : '';
           const rows = (t.tasks || []).map((task) => \`
             <tr>
-              <td><code>\${esc(task.id)}</code></td>
-              <td>\${esc(task.title)}</td>
-              <td><code>\${esc(task.role)}</code></td>
-              <td><span class="badge">\${esc(task.status)}</span></td>
-              <td>\${task.requiresCodeChange ? (task.hasEvidence ? 'verified' : 'pending') : 'n/a'}</td>
+              <td class="col-id"><code>\${esc(task.id)}</code></td>
+              <td class="col-main">
+                <div>\${esc(task.title)}</div>
+                <div class="muted" style="font-size:11px;margin-top:2px;">Role: <code>\${esc(task.role)}</code> &middot; Evidence: \${task.requiresCodeChange ? (task.hasEvidence ? 'verified' : 'pending') : 'n/a'}</div>
+              </td>
+              <td class="col-status"><span class="badge \${task.status === 'in_progress' ? 'badge-active' : ''}">\${esc(task.status)}</span></td>
             </tr>\`).join('');
           return \`
             <div class="card">
-              <div style="font-weight:600;margin-bottom:4px;">Team Board: <code>\${esc(t.team)}</code></div>
-              <div class="muted" style="margin-bottom:6px;">\${esc(t.objective)}</div>
-              <table><thead><tr><th>ID</th><th>Task</th><th>Role</th><th>Status</th><th>Evidence</th></tr></thead><tbody>\${rows}</tbody></table>
+              <div style="font-weight:600;margin-bottom:4px;min-width:0;overflow-wrap:anywhere;">Team Board: <code>\${esc(t.team)}</code>\${tScope}</div>
+              <div class="muted" style="margin-bottom:6px;min-width:0;overflow-wrap:anywhere;">\${esc(t.objective)}</div>
+              <div class="table-wrap"><table class="hud-table"><thead><tr><th class="col-id">ID</th><th class="col-main">Task</th><th class="col-status">Status</th></tr></thead><tbody>\${rows}</tbody></table></div>
             </div>\`;
         }).join('');
       }
@@ -1712,7 +1844,7 @@ const HUD_HTML = `<!DOCTYPE html>
       if (rp || crList.length || resList.length) {
         const rpLine = rp ? \`<div style="margin-bottom:6px;"><span class="badge">Ralplan Iter \${esc(rp.iteration)}</span> Architect: <strong>\${esc(rp.architectVerdict)}</strong> &middot; Critic: <strong>\${esc(rp.criticVerdict)}</strong> &middot; Consensus: <strong>\${rp.consensusComplete ? 'COMPLETE' : 'PENDING'}</strong></div>\` : '';
         const crRows = crList.map((c) => \`<div><span class="badge">\${esc(c.recommendation)}</span> <code>\${esc(c.file)}</code> (Architect: \${esc(c.architectStatus)}, \${c.filesReviewed} files)</div>\`).join('');
-        const resRows = resList.map((r) => \`<div style="margin-top:4px;"><span class="badge badge-active">Research \${r.compositeScore !== null ? r.compositeScore + '/100' : ''}</span> <strong>\${esc(r.title)}</strong> <span class="muted">(\${esc(r.lens)} &middot; V:\${r.claims.verified} D:\${r.claims.derived} A:\${r.claims.assumed})</span></div>\`).join('');
+        const resRows = resList.map((r) => \`<div style="margin-top:4px;"><span class="badge badge-active">Research \${r.compositeScore !== null ? r.compositeScore + '/100' : ''}</span>\${r.evalIntegrityVerdict ? \` <span class="badge">Eval: \${esc(r.evalIntegrityVerdict)}</span>\` : ''} <strong>\${esc(r.title)}</strong> <span class="muted">(\${esc(r.lens)} &middot; V:\${r.claims.verified} D:\${r.claims.derived} A:\${r.claims.assumed}\${r.scope && r.scope !== '.' ? \` &middot; \${esc(r.scope)}\` : ''})</span></div>\`).join('');
         revResHtml = \`
           <div class="card">
             <div style="font-weight:600;margin-bottom:6px;">Recent Reviews &amp; Deep Research</div>
@@ -1726,9 +1858,11 @@ const HUD_HTML = `<!DOCTYPE html>
       const doc = data.doctor || {};
       const errRows = (doc.hookErrors || []).map((e) => \`
         <tr>
-          <td><code>\${esc(e.at)}</code></td>
-          <td><code>\${esc(e.event)}</code></td>
-          <td class="muted">\${esc(e.error)}</td>
+          <td class="col-event">
+            <div><code>\${esc(e.event)}</code></div>
+            <div class="muted" style="font-size:11px;">\${esc(e.at)}</div>
+          </td>
+          <td class="col-main muted">\${esc(e.error)}</td>
         </tr>\`).join('');
       const doctorHtml = \`
         <div class="card">
@@ -1747,7 +1881,7 @@ const HUD_HTML = `<!DOCTYPE html>
           </div>
           <div>
             <div class="muted" style="margin-bottom:4px;">Recent Hook Errors (.omagy/logs/hook-errors.jsonl):</div>
-            \${errRows ? \`<table><thead><tr><th>Time</th><th>Event</th><th>Error</th></tr></thead><tbody>\${errRows}</tbody></table>\` : '<div class="muted">Zero hook errors recorded.</div>'}
+            \${errRows ? \`<div class="table-wrap"><table class="hud-table"><thead><tr><th class="col-event">Event</th><th class="col-main">Error</th></tr></thead><tbody>\${errRows}</tbody></table></div>\` : '<div class="muted">Zero hook errors recorded.</div>'}
           </div>
         </div>\`;
 
@@ -1757,11 +1891,16 @@ const HUD_HTML = `<!DOCTYPE html>
         workflows: data.catalog?.workflows?.length || 0,
       };
 
+      const trackedScopesHtml = (data.trackedScopes || []).length
+        ? \`<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center;"><span class="muted" style="font-size:11px;">Tracked .omagy scopes:</span>\${(data.trackedScopes || []).map((sc) => \`<span class="badge \${sc.scope !== '.' ? 'badge-active' : ''}"><code>\${esc(sc.scope)}</code></span>\`).join('')}</div>\`
+        : '';
+
       document.getElementById('view-overview').innerHTML = \`
         <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-          <div>
+          <div style="min-width:0;flex:1 1 180px;">
             <div style="font-weight:600;margin-bottom:2px;">Workspace</div>
             <code>\${esc(data.workspace)}</code>
+            \${trackedScopesHtml}
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <button class="badge" style="cursor:pointer;" onclick="setTab('workflows')">\${counts.workflows} Workflows</button>
@@ -1771,7 +1910,7 @@ const HUD_HTML = `<!DOCTYPE html>
         </div>
         <div class="card">
           <div style="font-weight:600;margin-bottom:8px;">Workflow Modes</div>
-          \${modesRows ? \`<table><thead><tr><th>Mode</th><th>Phase</th><th>State</th><th>Iter</th><th>Scope</th></tr></thead><tbody>\${modesRows}</tbody></table>\` : '<div class="muted">No active mode state files in .omagy/state/. Open the <strong>Workflows</strong>, <strong>Skills</strong>, or <strong>Subagents</strong> tab to edit and run commands directly.</div>'}
+          \${modesRows ? \`<div class="table-wrap"><table class="hud-table"><thead><tr><th class="col-mode">Mode</th><th class="col-phase">Phase</th><th class="col-scope">Scope</th></tr></thead><tbody>\${modesRows}</tbody></table></div>\` : '<div class="muted">No active mode state files in .omagy/state/. Open the <strong>Workflows</strong>, <strong>Skills</strong>, or <strong>Subagents</strong> tab to edit and run commands directly.</div>'}
         </div>
         \${ugHtml}
         \${ivHtml}
@@ -2199,10 +2338,49 @@ async function runSelftest() {
     const authRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
     const authJson = authRes.json;
 
+    // H9: Inner-folder .omagy tracking when parent project ("Travels") has no root .omagy and child ("Travels/Summer trip/.omagy") does
+    const travelsWs = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-travels-'));
+    let innerSnapOk = false;
+    try {
+      const summerTrip = path.join(travelsWs, 'Summer trip');
+      fs.mkdirSync(path.join(summerTrip, '.omagy', 'state'), { recursive: true });
+      fs.mkdirSync(path.join(summerTrip, '.omagy', 'ultragoal'), { recursive: true });
+      fs.mkdirSync(path.join(summerTrip, '.omagy', 'artifacts', 'research'), { recursive: true });
+      fs.mkdirSync(path.join(summerTrip, '.omagy', 'artifacts', 'loft', 'trip-ui'), { recursive: true });
+      fs.writeFileSync(path.join(summerTrip, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
+        mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 1, updated_at: new Date().toISOString(),
+      }));
+      fs.writeFileSync(path.join(summerTrip, '.omagy', 'ultragoal', 'goals.json'), JSON.stringify({
+        objective: 'Plan Summer trip itinerary',
+        goals: [{ id: 'G1', title: 'Book flights', rigor: 'light', status: 'in_progress', depends_on: [], product_failures: 0 }],
+      }));
+      fs.writeFileSync(path.join(summerTrip, '.omagy', 'artifacts', 'research', 'flights.md'), [
+        '# Flight Route Analysis',
+        '- **Lens**: `implementation`',
+        'Claim 1 [VERIFIED]',
+        '**Verdict: PASS**',
+      ].join('\n'));
+      fs.writeFileSync(path.join(summerTrip, '.omagy', 'artifacts', 'loft', 'trip-ui', 'index.html'), '<!DOCTYPE html><title>Trip UI</title><body>Trip</body>');
+      const tSnap = buildHudSnapshot([`file://${travelsWs}`]);
+      const innerArtifact = resolveSafeArtifactFile(travelsWs, 'Summer trip/.omagy/artifacts/loft/trip-ui/index.html');
+      const innerBlocked = resolveSafeArtifactFile(travelsWs, 'Summer trip/.omagy/artifacts/loft/../../../state/autopilot-state.json');
+      innerSnapOk = Array.isArray(tSnap.trackedScopes) && tSnap.trackedScopes.some((sc) => sc.scope === 'Summer trip')
+        && tSnap.modes.length === 1 && tSnap.modes[0].scope === 'Summer trip' && tSnap.modes[0].session === 'Summer trip/shared'
+        && tSnap.ultragoal?.scope === 'Summer trip' && tSnap.ultragoal?.counts?.inProgress === 1
+        && tSnap.research?.length === 1 && tSnap.research[0].scope === 'Summer trip' && tSnap.research[0].evalIntegrityVerdict === 'PASS'
+        && tSnap.loft?.length === 1 && tSnap.loft[0].relPath === 'Summer trip/.omagy/artifacts/loft/trip-ui/index.html'
+        && Boolean(innerArtifact && innerArtifact.mime.includes('text/html'))
+        && innerBlocked === null;
+    } finally {
+      fs.rmSync(travelsWs, { recursive: true, force: true });
+    }
+
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
       && !HUD_HTML.includes('data-view="doctor"')
       && HUD_HTML.includes('Diagnostics &amp; Runtime Health')
       && HUD_HTML.includes('class="cmd-actions"')
+      && HUD_HTML.includes('table-layout: fixed')
+      && HUD_HTML.includes('class="hud-table"')
       && !HUD_HTML.includes('copySubagentFromInput')
       && snap.statusLine.includes('autopilot:ultragoal')
       && snap.statusLine.includes('ultragoal:1/1')
@@ -2240,7 +2418,8 @@ async function runSelftest() {
       && snap.wiki.entries.length === 1
       && snap.wiki.lint.danglingLinks.includes('arch -> [[missing-page]]')
       && Boolean(validArtifact && validArtifact.mime.includes('text/html'))
-      && blockedTraversal === null;
+      && blockedTraversal === null
+      && innerSnapOk;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',

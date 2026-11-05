@@ -32,6 +32,7 @@ and Antigravity system instructions always take precedence over this file.
 - Prefer deletion, existing utilities, and existing patterns over new abstractions. Add dependencies only when explicitly requested.
 - Keep diffs small, reviewable, and reversible.
 - Verify with lint, typecheck, tests, and static analysis after changes. Final reports list changed files, simplifications, and remaining risks.
+- **Git & commit discipline (ported from OMX `v0.21.46` `#3997`)**: split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; abort and ask the user if dirty changes block a rebase. Require explicit task authority before rewriting published history (`--force`, `reset --hard`) or pushing to remote branches.
 - **Receiving review feedback (`receiving-code-review` discipline)**: never use performative agreement (`"You're absolutely right!"`, `"Great point!"`, `"Thanks!"`). When given a coupled multi-item feedback list (e.g. `Fix items 1-6`) where any item is ambiguous or contradictory, clarify the unclear items before implementing the batch. Before implementing external reviewer suggestions, verify against actual callers/build targets (`grep` for YAGNI; never add abstractions to dead code). When replying to GitHub PR review comments, reply inline on the review comment thread (`pulls/{pr}/comments/{id}/replies`) rather than only as a top-level PR comment.
 
 ## Invocation conventions
@@ -81,6 +82,7 @@ This plugin ships role agents under `agents/`. Invoke them with `invoke_subagent
 Routing rules:
 - Mixed routing is deliberate: `explore -> researcher` (local usage, then official confirmation); `explore -> dependency-expert` (current usage, then migration evaluation).
 - Specialists report boundary crossings upward instead of silently absorbing adjacent work.
+- **Assignment-scoped role overlays (ported from OMX `v0.21.46` `#3989`)**: read-only/advisory roles (`explore`, `researcher`, `dependency-expert`, `analyst`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `code-simplifier`, `test-engineer`, `designer`, `team-worker`) own code edits and must verify with targeted tests/builds.
 - When external evidence materially affects the answer, route to the relevant specialist first. Do not answer from recall alone.
 - If a plugin role agent is not available in this session, invoke the built-in `self` subagent (or `research` for read-only roles). Paste the role's `agents/<role>.md` body at the top of the prompt. Never fake an independent lane by role-playing it in the main lane.
 
@@ -103,7 +105,7 @@ Routing rules:
 
 ## Durable state (`.omagy/`)
 
-Workflow state lives under `.omagy/` at the workspace root (or at `OMAGY_ROOT` / `OMAGY_STATE_ROOT` when set, or at a parent directory containing `.omagy-workspace` / `.omc-workspace` for multi-repo workspaces). Suggest adding `.omagy/` to `.gitignore`.
+Workflow state lives under `.omagy/` at the top-level opened workspace root (or at `OMAGY_ROOT` / `OMAGY_STATE_ROOT` when set, or at a parent directory containing `.omagy-workspace` / `.omc-workspace` for multi-repo workspaces). When working inside a child subfolder of an opened project (e.g., `"Travels/Summer trip"` inside `"Travels"`), always anchor `.omagy/` and `omagy_wiki/` at the parent workspace root (`<workspaceRoot>/.omagy/`) rather than scattering new `.omagy/` folders into child directories; if a child folder already contains `.omagy/`, `loadModeStates` and the HUD `Overview` tab automatically discover and label (`Scope: <subpath>`) its active modes and artifacts. Suggest adding `.omagy/` to `.gitignore`.
 
 | Path | Owner / purpose |
 |---|---|
