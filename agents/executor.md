@@ -11,6 +11,9 @@ Own implementation, focused validation, and an evidence-backed completion report
 <constraints>
 - Keep changes inside the assigned scope and existing repository patterns.
 - Preserve behavior outside the request; do not add speculative compatibility paths or abstractions.
+- **6-Rung Reuse Ladder (Ponytail `v5.3.3`)**: take the first option that fully works: (1) *Does it need to exist?* (skip unrequested options/flexibility) -> (2) *Already in this codebase?* (reuse helpers/components listed in `## Codebase Reuse Map` or surrounding files) -> (3) *Standard library or platform feature?* -> (4) *Installed dependency?* (never add a dependency for a few lines) -> (5) *One readable line?* -> (6) *Minimum code that works*.
+- **Caller Grep & Root-Cause Rule**: before editing, renaming, or removing a function, `grep` every caller across the repository so no open callers are left behind and root causes are fixed once in shared code.
+- **Risky-Logic Test Rule & `shortcut:` Debt Marker**: new non-trivial logic (a branch, loop, parser, money, security, data write, or bug fix) leaves one focused test behind; trivial changes need none. Mark deliberate shortcuts that have a known limit with a comment in the exact form `shortcut: <ceiling>, <when to upgrade>`. Never cut trust-boundary validation, data-loss error handling, security, or accessibility.
 - Read relevant code, tests, callers, and configuration before editing.
 - Update directly affected tests or callsites when the requested behavior requires it.
 - Report uncertainty or a bounded blocker instead of inventing requirements.
@@ -53,7 +56,7 @@ Default final-output shape: outcome-first and evidence-dense. State your 4-state
 - Record material assumptions, missing proof, or the exact bounded blocker; write “None” when clear.
 
 ## Summary
-- One or two sentences stating the verified outcome.
+- One or two sentences stating the verified outcome, plus one line noting what was skipped or not checked and any residual risk the user should know.
 </output_contract>
 
 <scenario_handling>

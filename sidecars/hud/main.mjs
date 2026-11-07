@@ -10,10 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  analyzeDiffCodeHealth,
   discoverOmagyScopes,
   hardenWindowsExeSearch,
   redactSecrets,
   readJsonlRecords,
+  scanShortcutDebt,
   stateRoot,
   validateQualityGates,
 } from '../../hooks/omagy-hook.mjs';
@@ -101,9 +103,9 @@ const SKILL_GUIDE_META = {
   },
   analyze: {
     category: 'Research & Analysis',
-    flags: [],
+    flags: ['--audit'],
     quickStart: '/analyze why the session middleware drops cookies on redirect',
-    howToUse: 'Read-only cross-file repository analysis with 6-tier evidence ranking, competing hypothesis tracing, and Intent-vs-Reality diffs.',
+    howToUse: 'Read-only cross-file repository analysis with 6-tier evidence ranking, competing hypothesis tracing, Intent-vs-Reality diffs, and --audit whole-repo quality/lean audits.',
   },
   'best-practice-research': {
     category: 'Research & Analysis',
@@ -119,9 +121,9 @@ const SKILL_GUIDE_META = {
   },
   'code-review': {
     category: 'Review, QA & Cleanup',
-    flags: ['--re-review'],
+    flags: ['--re-review', '--audit'],
     quickStart: '/code-review the changes on my current branch',
-    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict.',
+    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict (or --audit repo-wide review).',
   },
   ultraqa: {
     category: 'Review, QA & Cleanup',
@@ -1353,6 +1355,35 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     hookErrors,
   };
 
+  // 9.5 Code Health & Technical Debt (Ponytail v5.3.3 reuse, openCallers, and shortcut: debt ledger)
+  const diffHealth = analyzeDiffCodeHealth([primaryRoot]);
+  const debtScan = scanShortcutDebt([primaryRoot]);
+  const reusedList = Array.isArray(diffHealth.reused) ? diffHealth.reused.map(String) : [];
+  const createdList = Array.isArray(diffHealth.created) ? diffHealth.created.map(String) : [];
+  const codeHealth = {
+    reused: reusedList,
+    created: createdList,
+    reusedCount: reusedList.length,
+    newCount: createdList.length,
+    reusePct: diffHealth.reusePct ?? null,
+    openCallers: (diffHealth.openCallers || []).slice(0, 10).map((oc) => ({
+      symbol: String(oc.symbol || ''),
+      file: String(oc.file || ''),
+      line: Number(oc.line || 0),
+      snippet: redactSecrets(String(oc.snippet || oc.text || '')),
+    })),
+    debtTotal: Number(debtScan.total || 0),
+    noTriggerCount: Number(debtScan.noTriggerCount || 0),
+    debtItems: (debtScan.items || []).slice(0, 10).map((it) => ({
+      file: String(it.file || ''),
+      line: Number(it.line || 0),
+      marker: String(it.marker || 'shortcut'),
+      ceiling: redactSecrets(String(it.ceiling || '')),
+      upgrade: redactSecrets(String(it.upgrade || '')),
+      noTrigger: Boolean(it.noTrigger),
+    })),
+  };
+
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
 
@@ -1381,6 +1412,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     benchmarks,
     visualRalph,
     loft,
+    codeHealth,
     wiki,
     qualityGates: qg.gates,
     doctor,
@@ -1560,6 +1592,51 @@ const HUD_HTML = `<!DOCTYPE html>
     table.hud-table .col-phase { width: 38%; }
     table.hud-table .col-scope { width: 30%; }
     table.hud-table .col-event { width: 38%; }
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .health-stat {
+      padding: 8px 10px;
+      border-radius: 7px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border, rgba(255,255,255,0.08));
+      min-width: 0;
+    }
+    .health-stat-label {
+      font-size: 11px;
+      color: var(--muted-foreground, #9ca3af);
+      margin-bottom: 3px;
+    }
+    .health-stat-val {
+      font-weight: 600;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .health-stat-sub {
+      font-size: 11px;
+      color: var(--muted-foreground, #9ca3af);
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+    }
+    .health-section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--muted-foreground, #9ca3af);
+      margin: 10px 0 6px 0;
+    }
+    .health-item {
+      padding: 8px 10px;
+      border-radius: 7px;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid var(--border, rgba(255,255,255,0.08));
+      margin-top: 6px;
+      min-width: 0;
+    }
     ul, li { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1854,6 +1931,119 @@ const HUD_HTML = `<!DOCTYPE html>
           </div>\`;
       }
 
+      // Benchmarks (Performance Goals & Autoresearch) Card
+      const perfList = data.benchmarks?.performanceGoals || [];
+      const autoList = data.benchmarks?.autoresearch || [];
+      let benchHtml = '';
+      if (perfList.length || autoList.length) {
+        const perfRows = perfList.map((p) => \`<div style="margin-bottom:4px;"><span class="badge \${p.status === 'active' ? 'badge-active' : ''}">Perf: \${esc(p.slug)}</span>\${p.evalIntegrityVerdict ? \` <span class="badge">Eval: \${esc(p.evalIntegrityVerdict)}</span>\` : ''} <span class="muted">\${esc(p.objective)} (Checkpoints: \${(p.checkpoints || []).length})</span></div>\`).join('');
+        const autoRows = autoList.map((a) => \`<div style="margin-top:4px;"><span class="badge \${a.passed ? 'badge-active' : ''}">Autoresearch: \${esc(a.slug)}</span> <span class="badge">\${esc(a.status)}</span>\${a.evalIntegrityVerdict ? \` <span class="badge">Eval: \${esc(a.evalIntegrityVerdict)}</span>\` : ''} <span class="muted">(V:\${a.claims?.verified || 0} D:\${a.claims?.derived || 0} A:\${a.claims?.assumed || 0})</span></div>\`).join('');
+        benchHtml = \`
+          <div class="card">
+            <div style="font-weight:600;margin-bottom:6px;">Benchmarks &amp; Autoresearch</div>
+            \${perfRows}
+            \${autoRows}
+          </div>\`;
+      }
+
+      // Visual Ralph & Loft Prototypes Card
+      const vrList = data.visualRalph || [];
+      const loftList = data.loft || [];
+      let vrLoftHtml = '';
+      if (vrList.length || loftList.length) {
+        const vrRows = vrList.map((v) => \`<div style="margin-bottom:4px;"><span class="badge badge-active">Visual Ralph: \${esc(v.slug)}</span>\${v.verdict ? \` <span class="badge">\${esc(v.verdict.verdict)} (\${esc(v.verdict.score)})</span>\` : ''} <span class="muted">(\${(v.images || []).length} image(s))</span></div>\`).join('');
+        const loftRows = loftList.map((l) => \`<div style="margin-top:4px;"><span class="badge">Loft (\${esc(l.kind)})</span> <strong>\${esc(l.title)}</strong> <code>\${esc(l.relPath)}</code></div>\`).join('');
+        vrLoftHtml = \`
+          <div class="card">
+            <div style="font-weight:600;margin-bottom:6px;">Visual Ralph &amp; Loft Prototypes</div>
+            \${vrRows}
+            \${loftRows}
+          </div>\`;
+      }
+
+      // Code Health & Technical Debt Card (Ponytail v5.3.3)
+      const ch = data.codeHealth || { reused: [], created: [], reusedCount: 0, newCount: 0, reusePct: null, openCallers: [], debtTotal: 0, noTriggerCount: 0, debtItems: [] };
+      const reusedSyms = Array.isArray(ch.reused) ? ch.reused : [];
+      const createdSyms = Array.isArray(ch.created) ? ch.created : [];
+      const hasDiffActivity = ch.reusedCount > 0 || ch.newCount > 0;
+      const reuseVal = !hasDiffActivity
+        ? 'Clean working tree'
+        : (ch.reusePct !== null ? \`\${ch.reusePct}% reused\` : \`\${ch.reusedCount} reused &middot; \${ch.newCount} new\`);
+      const reuseSub = !hasDiffActivity
+        ? 'No uncommitted symbol changes'
+        : \`\${ch.reusedCount} existing &middot; \${ch.newCount} new in git diff\`;
+      const openCallersCount = (ch.openCallers || []).length;
+      const openCallersVal = openCallersCount ? \`&#9888; \${openCallersCount} broken\` : '0 broken callers';
+      const openCallersSub = openCallersCount ? 'Calls to removed functions' : 'No calls to deleted functions';
+      const debtVal = \`\${ch.debtTotal} tracked\`;
+      const debtSub = ch.debtTotal === 0
+        ? 'No shortcut: comments'
+        : (ch.noTriggerCount ? \`\${ch.noTriggerCount} missing upgrade condition\` : 'All have upgrade conditions');
+
+      const fmtSymList = (arr) => {
+        const shown = arr.slice(0, 6).map((s) => \`<code>\${esc(s)}</code>\`).join(', ');
+        return arr.length > 6 ? \`\${shown} <span class="muted">(+\${arr.length - 6} more)</span>\` : shown;
+      };
+      const diffBreakdownHtml = hasDiffActivity ? \`
+        <div class="health-item" style="margin-top:0;margin-bottom:8px;font-size:12px;">
+          \${reusedSyms.length ? \`<div><span class="muted">Reused in diff:</span> \${fmtSymList(reusedSyms)}</div>\` : ''}
+          \${createdSyms.length ? \`<div style="\${reusedSyms.length ? 'margin-top:3px;' : ''}"><span class="muted">New in diff:</span> \${fmtSymList(createdSyms)}</div>\` : ''}
+        </div>\` : '';
+
+      const openCallersHtml = openCallersCount ? \`
+        <div class="health-section-title">Orphaned Call Sites (Removed in Diff, Still Called)</div>
+        \${(ch.openCallers || []).map((oc) => \`
+          <div class="health-item">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+              <code>\${esc(oc.symbol)}()</code>
+              <span class="badge badge-active">\${esc(oc.file)}:\${esc(oc.line)}</span>
+            </div>
+            \${oc.snippet ? \`<div class="muted" style="font-size:11px;margin-top:4px;"><code>\${esc(oc.snippet)}</code></div>\` : ''}
+          </div>\`).join('')}\` : '';
+
+      const debtItemsHtml = (ch.debtItems || []).length ? \`
+        <div class="health-section-title">Documented Shortcuts (<code>shortcut:</code> &amp; <code>ceiling:</code> comments)</div>
+        \${(ch.debtItems || []).map((it) => \`
+          <div class="health-item">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:4px;">
+              <code>\${esc(it.file)}:\${esc(it.line)}</code>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                <span class="badge">\${esc(it.marker || 'shortcut')}</span>
+                \${it.noTrigger ? '<span class="badge">missing upgrade condition</span>' : ''}
+              </div>
+            </div>
+            <div style="font-size:12px;"><span class="muted">Known limit:</span> \${esc(it.ceiling)}</div>
+            <div style="font-size:11px;margin-top:2px;"><span class="muted">Upgrade when:</span> \${it.upgrade ? esc(it.upgrade) : '<span class="muted">Not specified (add comma + upgrade condition)</span>'}</div>
+          </div>\`).join('')}\` : '<div class="muted" style="font-size:12px;margin-top:4px;">No <code>shortcut:</code> or <code>ceiling:</code> comments recorded in workspace.</div>';
+
+      const codeHealthHtml = \`
+        <div class="card">
+          <div style="margin-bottom:10px;">
+            <div style="font-weight:600;">Code Health &amp; Technical Debt</div>
+            <div class="muted" style="font-size:11px;margin-top:2px;">Uncommitted git diff symbol reuse, orphaned call sites, and documented code shortcuts</div>
+          </div>
+          <div class="health-grid">
+            <div class="health-stat">
+              <div class="health-stat-label">Diff Function Reuse</div>
+              <div class="health-stat-val">\${reuseVal}</div>
+              <div class="health-stat-sub">\${reuseSub}</div>
+            </div>
+            <div class="health-stat">
+              <div class="health-stat-label">Orphaned Call Sites</div>
+              <div class="health-stat-val">\${openCallersVal}</div>
+              <div class="health-stat-sub">\${openCallersSub}</div>
+            </div>
+            <div class="health-stat">
+              <div class="health-stat-label">Documented Shortcuts</div>
+              <div class="health-stat-val">\${debtVal}</div>
+              <div class="health-stat-sub">\${debtSub}</div>
+            </div>
+          </div>
+          \${diffBreakdownHtml}
+          \${openCallersHtml}
+          \${debtItemsHtml}
+        </div>\`;
+
       // Consolidated Doctor & Runtime Diagnostics Card (folded from Doctor tab)
       const doc = data.doctor || {};
       const errRows = (doc.hookErrors || []).map((e) => \`
@@ -1916,6 +2106,9 @@ const HUD_HTML = `<!DOCTYPE html>
         \${ivHtml}
         \${teamHtml}
         \${revResHtml}
+        \${benchHtml}
+        \${vrLoftHtml}
+        \${codeHealthHtml}
         \${doctorHtml}
       \`;
     }
@@ -2124,7 +2317,7 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
       }
     }
     if (req.method === 'GET' && (reqUrl.pathname === '/' || reqUrl.pathname === '/index.html')) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(HUD_HTML);
       return;
     }
@@ -2140,7 +2333,7 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
         }
       }
       const snap = buildHudSnapshot(workspaces);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(snap));
       return;
     }
@@ -2260,11 +2453,18 @@ async function runSelftest() {
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'agreements.md'), '- [by:human] Keep HUD strictly read-only with token ghp_1234567890abcdefghij123456.\n');
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'index.md'), '- [[arch]] — Architecture — architecture — core\n');
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'arch.md'), '---\ntitle: Architecture\ncategory: architecture\ntags: [core]\n---\nSee [[missing-page]].\n');
+    fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(ws, 'src', 'index.js'), [
+      'export function parseRows(rows) { return rows; }',
+      '// shortcut: 500 rows max with token ghp_1234567890abcdefghij123456, upgrade to streaming parser',
+    ].join('\n'));
 
     const snap = buildHudSnapshot([`file://${ws}`]);
     const validArtifact = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/nav-fork/index.html');
     const blockedTraversal = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/../../state/autopilot-state.json');
     const deepResearchSkill = snap.catalog?.skills?.find((s) => s.name === 'deep-research');
+    const analyzeSkill = snap.catalog?.skills?.find((s) => s.name === 'analyze');
+    const codeReviewSkill = snap.catalog?.skills?.find((s) => s.name === 'code-review');
     const autopilotWf = snap.catalog?.workflows?.find((w) => w.id === 'autopilot');
     const architectAgent = snap.catalog?.subagents?.find((a) => a.name === 'architect');
 
@@ -2378,6 +2578,9 @@ async function runSelftest() {
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
       && !HUD_HTML.includes('data-view="doctor"')
       && HUD_HTML.includes('Diagnostics &amp; Runtime Health')
+      && HUD_HTML.includes('Code Health &amp; Technical Debt')
+      && HUD_HTML.includes('Benchmarks &amp; Autoresearch')
+      && HUD_HTML.includes('Visual Ralph &amp; Loft Prototypes')
       && HUD_HTML.includes('class="cmd-actions"')
       && HUD_HTML.includes('table-layout: fixed')
       && HUD_HTML.includes('class="hud-table"')
@@ -2386,6 +2589,11 @@ async function runSelftest() {
       && snap.statusLine.includes('ultragoal:1/1')
       && snap.catalog?.skills?.length === 27
       && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.quickStart.includes('/deep-research'))
+      && Boolean(analyzeSkill && analyzeSkill.flags.includes('--audit'))
+      && Boolean(codeReviewSkill && codeReviewSkill.flags.includes('--audit'))
+      && snap.codeHealth?.debtTotal === 1
+      && snap.codeHealth?.debtItems?.[0]?.ceiling.includes('[REDACTED_TOKEN]')
+      && snap.codeHealth?.debtItems?.[0]?.upgrade === 'upgrade to streaming parser'
       && snap.catalog?.subagents?.length === 18
       && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
       && Boolean(architectAgent && architectAgent.cliModel === 'pro')

@@ -683,6 +683,378 @@ export function readJsonlRecords(filePath) {
   return { ok: true, file: resolved, records, skipped };
 }
 
+// ---------- Ponytail v5.3.3 codebase reuse map, shortcut debt ledger & diff code-health helpers ----------
+// shortcut: regex symbol scan skips dynamic/barrel re-exports, upgrade to tree-sitter if dynamic export misses matter
+const MAP_MAX_FILES = 4000;
+const MAP_SRC_RE = /\.(py|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|rs|rb|java|kt|kts|php|swift|cs)$/i;
+const MAP_SKIP_DIR_RE = /(^|\/)(node_modules|\.git|\.omagy|omagy_wiki|dist|build|out|vendor|venv|\.venv|__pycache__|coverage|\.next|target|migrations|versions|fixtures|tests?|__tests__|spec)(\/|$)/i;
+const MAP_SKIP_FILE_RE = /(^|\/)(test_[^/]*|[^/]*(_test|\.test|\.spec|\.gen|\.min|\.d)\.[a-z]+)$/i;
+const MAP_EXPORT_NAME_RE = /^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+[A-Za-z_$][\w$]*)?$/;
+const MAP_SAFE_PATH_RE = /^[\w.@+$()[\]\/-]+$/;
+const MAP_SHARED_RE = /(util|helper|lib|common|shared|service|component|hook|core|model|schema|api)/i;
+const MAP_PATTERNS = {
+  py: [/^(?:async\s+)?def\s+([A-Za-z]\w*)/gm, /^class\s+([A-Za-z]\w*)/gm],
+  js: [
+    /^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm,
+    /^export\s*\{([^}]+)\}/gm,
+  ],
+  go: [/^(?:func\s+(?:\([^)]*\)\s*)?|type\s+)([A-Z]\w*)/gm],
+  rs: [/^pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait|type)\s+(\w+)/gm],
+  rb: [/^\s*(?:def\s+(?:self\.)?|class\s+|module\s+)([A-Za-z]\w*[?!]?)/gm],
+  jvm: [/^\s*(?:public\s+|export\s+)?(?:abstract\s+|final\s+|sealed\s+|data\s+)?(?:class|interface|enum|record|struct|func|fun|function)\s+([A-Za-z]\w*)/gm],
+};
+const MAP_LANG = {
+  py: 'py',
+  js: 'js', jsx: 'js', mjs: 'js', cjs: 'js', ts: 'js', tsx: 'js', mts: 'js', cts: 'js',
+  go: 'go', rs: 'rs', rb: 'rb',
+  java: 'jvm', kt: 'jvm', kts: 'jvm', php: 'jvm', swift: 'jvm', cs: 'jvm',
+};
+const GENERIC_SYMBOLS = new Set([
+  'main', 'init', 'run', 'get', 'set', 'test', 'setup', 'open', 'close', 'read', 'write',
+  'start', 'stop', 'load', 'save', 'update', 'create', 'delete', 'handle', 'render', 'index',
+  'new', 'call', 'apply', 'remove', 'reset', 'clear', 'parse', 'format',
+]);
+const DIFF_DEF_PATTERNS = [
+  [/\.py$/i, [/^(?:async\s+)?def\s+([A-Za-z]\w*)/gm, /^class\s+([A-Za-z]\w*)/gm]],
+  [/\.[cm]?[jt]sx?$/i, [
+    /^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+([A-Za-z_$][\w$]*)/gm,
+    /^(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/gm,
+    /^class\s+([A-Za-z_$][\w$]*)/gm,
+  ]],
+  [/\.go$/i, [/^func\s+(?:\([^)]*\)\s*)?([A-Za-z]\w*)/gm]],
+  [/\.rs$/i, [/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/gm]],
+  [/\.rb$/i, [/^\s*def\s+(?:self\.)?([A-Za-z]\w*[?!]?)/gm]],
+  [/\.(?:java|kt|kts|php|swift|cs)$/i, [/^\s*(?:public\s+|export\s+)?(?:abstract\s+|final\s+|sealed\s+|data\s+)?(?:class|interface|enum|record|struct|func|fun|function)\s+([A-Za-z]\w*)/gm]],
+];
+
+function isMapSourceFile(relFile) {
+  const norm = String(relFile || '').replace(/\\/g, '/');
+  return MAP_SRC_RE.test(norm) && !MAP_SKIP_DIR_RE.test(norm) && !MAP_SKIP_FILE_RE.test(norm);
+}
+
+function listRepoSourceFiles(root) {
+  try {
+    const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+      cwd: root, encoding: 'utf8', timeout: 1500, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (out) {
+      return out.split('\n').slice(0, MAP_MAX_FILES * 5).filter((f) => MAP_SAFE_PATH_RE.test(f) && isMapSourceFile(f)).slice(0, MAP_MAX_FILES);
+    }
+  } catch { /* fall through to directory walk */ }
+  const files = [];
+  const walk = (dir, rel, depth) => {
+    if (depth > 6 || files.length >= MAP_MAX_FILES) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (files.length >= MAP_MAX_FILES) return;
+      if (e.name[0] === '.' || e.isSymbolicLink()) continue;
+      const sub = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (!MAP_SKIP_DIR_RE.test(sub)) walk(path.join(dir, e.name), sub, depth + 1);
+      } else if (e.isFile() && MAP_SAFE_PATH_RE.test(sub) && isMapSourceFile(sub)) {
+        files.push(sub);
+      }
+    }
+  };
+  walk(root, '', 0);
+  return files;
+}
+
+function extractExportedNames(text, ext) {
+  const rules = MAP_PATTERNS[MAP_LANG[ext]];
+  if (!rules) return [];
+  const names = [];
+  for (const re of rules) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      for (const rawPart of m[1].split(',')) {
+        const hit = MAP_EXPORT_NAME_RE.exec(rawPart.trim());
+        const id = hit && hit[1];
+        if (id && id[0] !== '_' && !names.includes(id)) names.push(id);
+      }
+    }
+  }
+  return names;
+}
+
+export function buildCodebaseMap(roots, budget = intOr(process.env.OMAGY_MAP_CHARS, 1800, 100)) {
+  const rootList = Array.isArray(roots) ? roots : [roots || process.cwd()];
+  const byDir = new Map();
+  const buf = Buffer.allocUnsafe(65536);
+  for (const rawRoot of rootList) {
+    const root = path.resolve(String(rawRoot || process.cwd()));
+    if (!fs.existsSync(root)) continue;
+    const files = listRepoSourceFiles(root).sort((a, b) => (Number(MAP_SHARED_RE.test(b)) - Number(MAP_SHARED_RE.test(a))) || a.localeCompare(b));
+    const prefix = rootList.length > 1 ? `${path.basename(root)}/` : '';
+    for (const f of files) {
+      let names;
+      try {
+        const full = path.join(root, f);
+        const st = fs.lstatSync(full);
+        if (!st.isFile() || st.isSymbolicLink()) continue;
+        const fd = fs.openSync(full, 'r');
+        try {
+          const n = fs.readSync(fd, buf, 0, 65536, 0);
+          names = extractExportedNames(buf.toString('utf8', 0, n), path.extname(f).slice(1).toLowerCase());
+        } finally {
+          fs.closeSync(fd);
+        }
+      } catch { continue; }
+      if (!names || !names.length) continue;
+      const rawDir = path.posix.dirname(f);
+      const dirKey = `${prefix}${rawDir === '.' ? '.' : `${rawDir}/`}`;
+      if (!byDir.has(dirKey)) byDir.set(dirKey, []);
+      byDir.get(dirKey).push(names);
+    }
+  }
+  if (!byDir.size) return '';
+  const header = '[oh-my-agy] Codebase map (what already exists; reuse it, read a file only when you need its details):';
+  const lines = [header];
+  let chars = header.length;
+  let shown = 0;
+  for (const [dir, perFile] of byDir) {
+    const per = perFile.length > 8 ? 1 : (perFile.length <= 2 ? 8 : 3);
+    const names = [...new Set(perFile.flatMap((n) => n.slice(0, per)))];
+    const line = `${dir}: ${names.slice(0, 30).join(', ')}${names.length > 30 ? ', ...' : ''}`;
+    if (chars + 1 + line.length > budget && shown > 0) break;
+    lines.push(line);
+    chars += 1 + line.length;
+    shown += 1;
+  }
+  if (shown === 0) return '';
+  if (shown < byDir.size) lines.push(`(${byDir.size - shown} more folders not listed)`);
+  return lines.join('\n');
+}
+
+export function scanShortcutDebt(roots, marker = '') {
+  const rootList = Array.isArray(roots) ? roots : [roots || process.cwd()];
+  const custom = String(marker || '').trim();
+  const escapedCustom = custom ? custom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+  const markerGroup = escapedCustom || '(?:shortcut|ceiling|ponytail)';
+  const commentRe = new RegExp(`(?:^\\s*(?:#|\\/\\/|\\/\\*+|\\*)|(?<![:"'\`\\\\])\\s+(?:#|\\/\\/|\\/\\*+))\\s*(${markerGroup})\\s*:\\s*(.+?)(?:\\s*\\*\\/)?$`, 'i');
+  const splitRe = /^(.*?)(?:\s*(?:,|;|->|=>|\bupgrade\s*:)\s*|\s+(?=(?:when|if|once|switch\s+to|upgrade\s+to|replace\s+with)\b))(.+)$/i;
+  const placeholderRe = /<[a-zA-Z][^>\n]{1,40}>/;
+  const items = [];
+  const seen = new Set();
+
+  for (const rawRoot of rootList) {
+    const root = path.resolve(String(rawRoot || process.cwd()));
+    if (!fs.existsSync(root)) continue;
+    let files = [];
+    try {
+      const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+        cwd: root, encoding: 'utf8', timeout: 1500, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (out) {
+        files = out.split('\n').filter((f) => CODE_EXTENSIONS.has(path.extname(f).toLowerCase()) && !MAP_SKIP_DIR_RE.test(f));
+      }
+    } catch { /* fallback below */ }
+    if (!files.length) {
+      const walk = (dir, rel, depth) => {
+        if (depth > 6 || files.length >= MAP_MAX_FILES) return;
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+          if (e.name[0] === '.' || e.isSymbolicLink()) continue;
+          const sub = rel ? `${rel}/${e.name}` : e.name;
+          if (e.isDirectory()) {
+            if (!MAP_SKIP_DIR_RE.test(sub)) walk(path.join(dir, e.name), sub, depth + 1);
+          } else if (e.isFile() && CODE_EXTENSIONS.has(path.extname(sub).toLowerCase())) {
+            files.push(sub);
+          }
+        }
+      };
+      walk(root, '', 0);
+    }
+    for (const relFile of files.slice(0, MAP_MAX_FILES)) {
+      const full = path.join(root, relFile);
+      let rawText = '';
+      try {
+        const st = fs.lstatSync(full);
+        if (!st.isFile() || st.isSymbolicLink() || st.size > 512 * 1024) continue;
+        rawText = fs.readFileSync(full, 'utf8');
+      } catch { continue; }
+      const lines = rawText.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const m = commentRe.exec(line);
+        if (!m) continue;
+        const foundMarker = m[1].toLowerCase();
+        const body = m[2].trim();
+        if (!body || placeholderRe.test(body)) continue;
+        // Skip lines that are regex literals or string assertions testing the marker itself
+        const trimmedLine = line.trimStart();
+        if (!/^(?:#|\/\/|\/\*|\*)/.test(trimmedLine) && /['"`/].*(?:shortcut|ceiling|ponytail)\s*:/.test(trimmedLine)) continue;
+        const key = `${relFile}:${i + 1}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const sp = splitRe.exec(body);
+        const ceiling = sp && sp[1].trim() ? sp[1].trim() : body;
+        const upgrade = sp && sp[2] && sp[2].trim() ? sp[2].trim() : '';
+        const noTrigger = !upgrade;
+        items.push({
+          file: relFile,
+          line: i + 1,
+          marker: foundMarker,
+          raw: body,
+          ceiling,
+          upgrade,
+          noTrigger,
+          rotRisk: noTrigger,
+        });
+      }
+    }
+  }
+  const noTriggerCount = items.filter((it) => it.noTrigger).length;
+  return { ok: true, total: items.length, noTriggerCount, items };
+}
+
+function defsInSource(filePath, text) {
+  const norm = String(filePath || '').replace(/\\/g, '/');
+  const entry = DIFF_DEF_PATTERNS.find(([extRe]) => extRe.test(norm));
+  if (!entry) return [];
+  const names = new Set();
+  for (const re of entry[1]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m[1] && m[1][0] !== '_') names.add(m[1]);
+    }
+  }
+  return [...names];
+}
+
+export function analyzeDiffCodeHealth(roots, opts = {}) {
+  const rootList = Array.isArray(roots) ? roots : [roots || process.cwd()];
+  const onlyOpenCallers = Boolean(opts && opts.onlyOpenCallers);
+  const createdSet = new Set();
+  const removedSet = new Set();
+  const reusedSet = new Set();
+  const openCallers = [];
+
+  for (const rawRoot of rootList) {
+    const cwd = path.resolve(String(rawRoot || process.cwd()));
+    if (!fs.existsSync(cwd)) continue;
+    let diff = '';
+    try {
+      diff = execFileSync('git', ['diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', 'HEAD', '--'], {
+        cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500, maxBuffer: 8 * 1024 * 1024,
+      });
+    } catch { continue; }
+    if (!diff) continue;
+
+    const perFileDiff = new Map();
+    let curFile = '';
+    let curOldFile = '';
+    for (const rawLine of diff.split('\n')) {
+      if (rawLine.startsWith('diff --git ')) {
+        curFile = '';
+        curOldFile = '';
+        continue;
+      }
+      if (rawLine.startsWith('--- a/')) {
+        curOldFile = rawLine.slice(6).trim();
+        continue;
+      }
+      if (rawLine.startsWith('+++ b/')) {
+        curFile = rawLine.slice(6).trim();
+        continue;
+      }
+      if (rawLine.startsWith('+++ /dev/null')) {
+        curFile = curOldFile;
+        continue;
+      }
+      if (!curFile || !isMapSourceFile(curFile)) continue;
+      if (rawLine.startsWith('+++') || rawLine.startsWith('---') || rawLine.startsWith('@@')) continue;
+      if (!perFileDiff.has(curFile)) perFileDiff.set(curFile, { added: [], removed: [] });
+      if (rawLine.startsWith('+')) perFileDiff.get(curFile).added.push(rawLine.slice(1));
+      else if (rawLine.startsWith('-')) perFileDiff.get(curFile).removed.push(rawLine.slice(1));
+    }
+    if (!perFileDiff.size) continue;
+
+    const rootRemoved = new Set();
+    const rootCreated = new Set();
+    const allAddedLines = [];
+    for (const [file, changes] of perFileDiff) {
+      const oldDefs = defsInSource(file, changes.removed.join('\n'));
+      const newDefs = defsInSource(file, changes.added.join('\n'));
+      for (const n of newDefs) {
+        if (!oldDefs.includes(n)) {
+          rootCreated.add(n);
+          createdSet.add(n);
+        }
+      }
+      for (const n of oldDefs) {
+        if (!newDefs.includes(n) && !GENERIC_SYMBOLS.has(n.toLowerCase())) {
+          rootRemoved.add(n);
+        }
+      }
+      if (!onlyOpenCallers && changes.added.length) {
+        allAddedLines.push(...changes.added);
+      }
+    }
+
+    // Short-circuit: if only checking openCallers (e.g. Stop hook) and zero non-generic definitions were removed, skip repo scan
+    if (onlyOpenCallers && rootRemoved.size === 0) continue;
+
+    const sourceFiles = listRepoSourceFiles(cwd);
+    const currentRepoDefs = new Map();
+    const fileTextCache = new Map();
+    for (const relFile of sourceFiles) {
+      const full = path.join(cwd, relFile);
+      try {
+        const st = fs.lstatSync(full);
+        if (!st.isFile() || st.isSymbolicLink() || st.size > 256 * 1024) continue;
+        const text = fs.readFileSync(full, 'utf8');
+        fileTextCache.set(relFile, text);
+        for (const defName of defsInSource(relFile, text)) {
+          if (!currentRepoDefs.has(defName)) currentRepoDefs.set(defName, relFile);
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (!onlyOpenCallers && allAddedLines.length) {
+      const addedJoined = allAddedLines.join('\n');
+      const callRe = /(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+      let cm;
+      while ((cm = callRe.exec(addedJoined)) !== null) {
+        const name = cm[1];
+        if (currentRepoDefs.has(name) && !rootCreated.has(name) && !GENERIC_SYMBOLS.has(name.toLowerCase())) {
+          reusedSet.add(name);
+        }
+      }
+    }
+
+    const trulyRemoved = [...rootRemoved].filter((sym) => !currentRepoDefs.has(sym));
+    for (const sym of trulyRemoved) {
+      removedSet.add(sym);
+      const escaped = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const symCallRe = new RegExp(`(?<![.\\w$])${escaped}\\s*\\(`);
+      for (const [relFile, text] of fileTextCache) {
+        const lines = text.split(/\r?\n/);
+        for (let idx = 0; idx < lines.length; idx += 1) {
+          const line = lines[idx];
+          if (/^\s*(?:\/\/|#|\/\*|\*)/.test(line)) continue;
+          if (symCallRe.test(line)) {
+            const snippet = line.trim().slice(0, 160);
+            openCallers.push({ symbol: sym, file: relFile, line: idx + 1, snippet, text: snippet });
+          }
+        }
+      }
+    }
+  }
+
+  const reused = [...reusedSet];
+  const created = [...createdSet];
+  const removed = [...removedSet];
+  const total = reused.length + created.length;
+  // shortcut: reusePct is omitted below 3 functions (where 1 new helper reads as 0%), upgrade to weighted LOC reuse if small-diff percentages are needed
+  const reusePct = total >= 3 ? Math.round((reused.length / total) * 100) : null;
+  return { reused, created, removed, reusePct, openCallers };
+}
+
 // ---------- context-saving subagent handoff helpers (ported from superpowers v6/v7) ----------
 function isSafeGitRef(ref) {
   return typeof ref === 'string' && ref.trim().length > 0 && !ref.trim().startsWith('-');
@@ -888,6 +1260,12 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
       return { ok: false, exitCode: 1, error: 'Refusing to overwrite symlinked brief path.' };
     }
   } catch { /* ignore */ }
+  if (process.env.OMAGY_MAP !== '0') {
+    const mapBlock = buildCodebaseMap([stateRoot(path.dirname(resolvedSource))], 1200);
+    if (mapBlock) {
+      extracted = `${extracted.trimEnd()}\n\n## Codebase Reuse Map\n\`\`\`text\n${mapBlock}\n\`\`\`\n`;
+    }
+  }
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, extracted, { encoding: 'utf8', mode: 0o600 });
   return { ok: true, exitCode: 0, path: target, id: resolvedId, title };
@@ -1352,6 +1730,10 @@ function scanDiffBlockers(roots) {
       }
     }
   }
+  const health = analyzeDiffCodeHealth(roots, { onlyOpenCallers: true });
+  for (const oc of health.openCallers) {
+    hits.push({ file: oc.file, line: oc.line, kind: `open caller of removed symbol '${oc.symbol}'` });
+  }
   return hits;
 }
 function hasRalplanArtifacts(sRoot) {
@@ -1433,7 +1815,16 @@ function sessionStart(payload) {
       wikiInjected = true;
     }
   }
-  writeJson(recordFile, { ...record, wikiInjected, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
+  const isSubagent = Boolean(record.isSubagent) || isSubagentPayload(payload);
+  let mapInjected = Boolean(record.mapInjected);
+  if (!isSubagent && !mapInjected && process.env.OMAGY_MAP !== '0') {
+    const mapMsg = buildCodebaseMap(roots);
+    if (mapMsg) {
+      messages.push(mapMsg);
+      mapInjected = true;
+    }
+  }
+  writeJson(recordFile, { ...record, wikiInjected, mapInjected, isSubagent, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
@@ -1474,13 +1865,21 @@ function preInvocation(payload) {
         wikiInjected = true;
       }
     }
+    let mapInjected = Boolean(record.mapInjected);
+    if (!mapInjected && process.env.OMAGY_MAP !== '0') {
+      const mapMsg = buildCodebaseMap(roots);
+      if (mapMsg) {
+        messages.push(mapMsg);
+        mapInjected = true;
+      }
+    }
     const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
     for (const m of subdir.messages) messages.push(m);
-    writeJson(recordFile, { lastUserKey: userKey, wikiInjected, isSubagent: false, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
+    writeJson(recordFile, { lastUserKey: userKey, wikiInjected, mapInjected, isSubagent: false, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   } else {
     const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
     for (const m of subdir.messages) messages.push(m);
-    writeJson(recordFile, { lastUserKey: userKey, wikiInjected: Boolean(record.wikiInjected), isSubagent: true, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
+    writeJson(recordFile, { lastUserKey: userKey, wikiInjected: Boolean(record.wikiInjected), mapInjected: Boolean(record.mapInjected), isSubagent: true, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   }
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
@@ -2460,6 +2859,155 @@ async function selftest() {
       junkRes.ok === false && junkRes.exitCode === 1 && junkRes.violations.length === 7
       && ['source-grep', 'prose-pin', 'fixed-sleep', 'focused', 'skipped', 'self-compare', 'lower-bound'].every((r) => rulesHit.has(r)));
 
+    // T23 (T-MAP-1): buildCodebaseMap shared-folder priority, adaptive <=2-file symbol sampling, and budget cap
+    const mapWs = path.join(ws, 'map-repo');
+    fs.mkdirSync(path.join(mapWs, '.omagy'), { recursive: true });
+    fs.mkdirSync(path.join(mapWs, 'pages'), { recursive: true });
+    fs.mkdirSync(path.join(mapWs, 'shared'), { recursive: true });
+    fs.writeFileSync(path.join(mapWs, 'pages', 'home.js'), 'export function renderHome() {}\nexport function renderFooter() {}\n', 'utf8');
+    fs.writeFileSync(path.join(mapWs, 'shared', 'utils.js'), [
+      'export function s1() {}',
+      'export function s2() {}',
+      'export function s3() {}',
+      'export function s4() {}',
+      'export function s5() {}',
+      'export function s6() {}',
+    ].join('\n'), 'utf8');
+    const fullMap = buildCodebaseMap([mapWs], 1800);
+    const tightMap = buildCodebaseMap([mapWs], 125);
+    check('buildCodebaseMap prioritizes shared folders, samples up to 8 symbols in <=2-file folders, and respects budget',
+      fullMap.includes('shared/: s1, s2, s3, s4, s5, s6')
+      && fullMap.indexOf('shared/:') < fullMap.indexOf('pages/:')
+      && tightMap.includes('shared/:')
+      && !tightMap.includes('pages/:')
+      && tightMap.includes('(1 more folders not listed)'));
+
+    // T24 (T-MAP-2 & T-MAP-3): sessionStart/preInvocation once-per-session codebase-map injection, OMAGY_MAP=0 opt-out, and extractGoalBrief map section
+    const mapConv = `${conv}-map`;
+    const sMap1 = sessionStart({ conversationId: mapConv, workspacePaths: [mapWs] });
+    const sMap1Text = (sMap1.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    const pMap2 = preInvocation({ conversationId: mapConv, workspacePaths: [mapWs], lastUserInput: 'check status' });
+    const pMap2Text = (pMap2.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    const prevOmagyMap = process.env.OMAGY_MAP;
+    process.env.OMAGY_MAP = '0';
+    const optOutConv = `${conv}-nomap`;
+    const sOptOut = sessionStart({ conversationId: optOutConv, workspacePaths: [mapWs] });
+    const sOptOutText = (sOptOut.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    if (prevOmagyMap === undefined) delete process.env.OMAGY_MAP;
+    else process.env.OMAGY_MAP = prevOmagyMap;
+    const subMapConv = `${conv}-submap`;
+    const sSubMap = sessionStart({ conversationId: subMapConv, workspacePaths: [mapWs], parentConversationId: conv });
+    const sSubMapText = (sSubMap.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    const mapPlanGoals = path.join(mapWs, 'goals.json');
+    writeJson(mapPlanGoals, {
+      objective: 'Test map in goal-brief',
+      goals: [{ id: 'G1', title: 'Map Goal', objective: 'Use shared utils', rigor: 'light', acceptance: ['A1'] }],
+    });
+    const mapBriefOut = path.join(mapWs, 'brief-g1.md');
+    extractGoalBrief(mapPlanGoals, 'G1', mapBriefOut);
+    const mapBriefContent = fs.existsSync(mapBriefOut) ? fs.readFileSync(mapBriefOut, 'utf8') : '';
+    check('sessionStart/preInvocation inject codebase-map once per session (honoring OMAGY_MAP=0 and subagent skip) and extractGoalBrief appends Codebase Reuse Map',
+      sMap1Text.includes('[oh-my-agy] Codebase map')
+      && !pMap2Text.includes('[oh-my-agy] Codebase map')
+      && !sOptOutText.includes('[oh-my-agy] Codebase map')
+      && !sSubMapText.includes('[oh-my-agy] Codebase map')
+      && mapBriefContent.includes('## Codebase Reuse Map')
+      && mapBriefContent.includes('shared/: s1'));
+
+    // T25 (T-DEBT-1): scanShortcutDebt parses shortcut:/ceiling:/ponytail:, splits ceiling vs upgrade, tags noTrigger, and ignores <...> placeholders
+    const debtWs = path.join(ws, 'debt-repo');
+    fs.mkdirSync(path.join(debtWs, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(debtWs, 'src', 'worker.js'), [
+      '// shortcut: <ceiling>, <when to upgrade>',
+      '// shortcut: 500 items in memory, switch to cursor pagination',
+      '// ceiling: single node only',
+      '# ponytail: 10 req/s -> add token bucket',
+    ].join('\n'), 'utf8');
+    const debtRes = scanShortcutDebt(debtWs);
+    check('scanShortcutDebt extracts shortcut/ceiling/ponytail comments, splits ceiling vs upgrade, tags noTrigger, and ignores template placeholders',
+      debtRes.ok === true && debtRes.total === 3 && debtRes.noTriggerCount === 1
+      && debtRes.items[0].ceiling === '500 items in memory' && debtRes.items[0].upgrade === 'switch to cursor pagination' && debtRes.items[0].noTrigger === false
+      && debtRes.items[1].ceiling === 'single node only' && debtRes.items[1].noTrigger === true
+      && debtRes.items[2].ceiling === '10 req/s' && debtRes.items[2].upgrade === 'add token bucket');
+
+    // T26 (T-CALLER-1, T-CALLER-2, T-REUSE-1): analyzeDiffCodeHealth & scanDiffBlockers detect open callers (including $ identifiers), ignore moved/generic/.method calls, and compute reusePct
+    const healthRepo = path.join(ws, 'health-repo');
+    let healthOk = false;
+    let healthErr = '';
+    try {
+      fs.mkdirSync(healthRepo, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: healthRepo });
+      execFileSync('git', ['config', 'user.email', 'selftest@example.com'], { cwd: healthRepo });
+      execFileSync('git', ['config', 'user.name', 'Selftest'], { cwd: healthRepo });
+      fs.writeFileSync(path.join(healthRepo, 'a.js'), [
+        'export function deadFn(x) { return x + 1; }',
+        'export function movedFn(x) { return x + 2; }',
+        'export function $dollarFn(x) { return x + 3; }',
+        'export function existingHelper(x) { return x * 2; }',
+        'export function secondHelper(x) { return x + 10; }',
+        'export function get(x) { return x; }',
+      ].join('\n'), 'utf8');
+      fs.writeFileSync(path.join(healthRepo, 'd.js'), 'export function deletedFileFn(x) { return x - 1; }\n', 'utf8');
+      fs.writeFileSync(path.join(healthRepo, 'b.js'), [
+        'import { deadFn, movedFn, $dollarFn, get } from "./a.js";',
+        'export function runAll(obj) {',
+        '  const v1 = deadFn(1);',
+        '  const v2 = movedFn(2);',
+        '  const v3 = $dollarFn(3);',
+        '  const v4 = obj.deadFn(4);',
+        '  const v5 = get(5);',
+        '  const v6 = deletedFileFn(6);',
+        '  return v1 + v2 + v3 + v4 + v5 + v6;',
+        '}',
+      ].join('\n'), 'utf8');
+      execFileSync('git', ['add', 'a.js', 'b.js', 'd.js'], { cwd: healthRepo });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'initial commit'], { cwd: healthRepo });
+      // Modify working tree: remove deadFn, movedFn, $dollarFn, get from a.js; delete d.js; add brandNewFn calling existingHelper + secondHelper; move movedFn to c.js
+      fs.rmSync(path.join(healthRepo, 'd.js'));
+      fs.writeFileSync(path.join(healthRepo, 'a.js'), [
+        'export function existingHelper(x) { return x * 2; }',
+        'export function secondHelper(x) { return x + 10; }',
+        'export function brandNewFn(y) {',
+        '  return secondHelper(existingHelper(y));',
+        '}',
+      ].join('\n'), 'utf8');
+      fs.writeFileSync(path.join(healthRepo, 'c.js'), 'export function movedFn(x) { return x + 2; }\n', 'utf8');
+      const ch = analyzeDiffCodeHealth(healthRepo);
+      const blockers = scanDiffBlockers([healthRepo]);
+      const openSyms = [...new Set(ch.openCallers.map((c) => c.symbol))].sort();
+      const deadEntries = ch.openCallers.filter((c) => c.symbol === 'deadFn');
+      healthOk = JSON.stringify(openSyms) === JSON.stringify(['$dollarFn', 'deadFn', 'deletedFileFn'])
+        && deadEntries.length === 1 && deadEntries[0].file === 'b.js' && deadEntries[0].line === 3
+        && ch.reused.includes('existingHelper')
+        && ch.reused.includes('secondHelper')
+        && ch.created.includes('brandNewFn')
+        && ch.reusePct === 67
+        && blockers.some((b) => b.kind.includes("removed symbol 'deadFn'"))
+        && blockers.some((b) => b.kind.includes("removed symbol '$dollarFn'"))
+        && blockers.some((b) => b.kind.includes("removed symbol 'deletedFileFn'"))
+        && !blockers.some((b) => b.kind.includes('movedFn'))
+        && !blockers.some((b) => b.kind.includes("removed symbol 'get'"));
+    } catch (e) {
+      healthErr = e instanceof Error ? e.message : String(e);
+    }
+    check('analyzeDiffCodeHealth & scanDiffBlockers detect open callers (including $ symbols), ignore moved/generic/.method calls, and compute reusePct',
+      healthOk, healthErr);
+
+    // T27 (T-RULES-1): Ponytail v5.3.3 contract markers across rules/AGENTS.md, agents, and skills
+    const agentsRuleText = fs.readFileSync(path.join(pluginRoot, 'rules', 'AGENTS.md'), 'utf8');
+    const execAgentText = fs.readFileSync(path.join(pluginRoot, 'agents', 'executor.md'), 'utf8');
+    const revAgentText = fs.readFileSync(path.join(pluginRoot, 'agents', 'code-reviewer.md'), 'utf8');
+    const crSkillText = fs.readFileSync(path.join(pluginRoot, 'skills', 'code-review', 'SKILL.md'), 'utf8');
+    const anSkillText = fs.readFileSync(path.join(pluginRoot, 'skills', 'analyze', 'SKILL.md'), 'utf8');
+    const hudSkillText = fs.readFileSync(path.join(pluginRoot, 'skills', 'hud', 'SKILL.md'), 'utf8');
+    check('rules/AGENTS.md, executor, code-reviewer, code-review, analyze, and hud document 6-Rung Reuse Ladder, shortcut:, caller-grep, Lean:, and --audit',
+      agentsRuleText.includes('6-Rung Reuse Ladder') && agentsRuleText.includes('shortcut:')
+      && execAgentText.includes('6-Rung Reuse Ladder') && execAgentText.includes('shortcut:')
+      && revAgentText.includes('Lean:') && revAgentText.includes('shortcut:')
+      && crSkillText.includes('--audit') && crSkillText.includes('Lean:')
+      && anSkillText.includes('--audit')
+      && hudSkillText.includes('scanShortcutDebt'));
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
@@ -2623,6 +3171,40 @@ async function main() {
       process.stdout.write(`${lines.join('\n')}\n`);
     }
     process.exitCode = res.ok ? 0 : (res.exitCode || 1);
+    return;
+  }
+  if (event === 'codebase-map') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const positional = rawArgs.filter((a) => a !== '--json');
+    const targetRoot = positional[0] ? path.resolve(positional[0]) : process.cwd();
+    const budgetArg = positional[1] ? intOr(positional[1], 1800, 100) : intOr(process.env.OMAGY_MAP_CHARS, 1800, 100);
+    const mapText = buildCodebaseMap([targetRoot], budgetArg);
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify({ ok: true, root: targetRoot, budget: budgetArg, map: mapText }, null, 2)}\n`);
+    } else if (mapText) {
+      process.stdout.write(`${mapText}\n`);
+    }
+    process.exitCode = 0;
+    return;
+  }
+  if (event === 'scan-debt') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const positional = rawArgs.filter((a) => a !== '--json');
+    const targetRoot = positional[0] ? path.resolve(positional[0]) : process.cwd();
+    const markerArg = positional[1] || '';
+    const res = scanShortcutDebt([targetRoot], markerArg);
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    } else if (res.total === 0) {
+      process.stdout.write('No shortcut debt. Clean ledger.\n');
+    } else {
+      const lines = res.items.map((it) => `${it.file}:${it.line}, ceiling: ${it.ceiling}. upgrade: ${it.upgrade || '[no-trigger]'}${it.noTrigger ? ' [no-trigger]' : ''}.`);
+      lines.push(`${res.total} marker${res.total === 1 ? '' : 's'}, ${res.noTriggerCount} with no trigger.`);
+      process.stdout.write(`${lines.join('\n')}\n`);
+    }
+    process.exitCode = 0;
     return;
   }
   const payload = parseJson(readStdin());

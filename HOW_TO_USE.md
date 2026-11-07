@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.3`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.4`)** for Google Antigravity.
 
 ---
 
@@ -98,10 +98,12 @@ Runs a 5-phase investigation across **Technical**, **Business**, **Idea / Produc
 Read-only cross-file investigation using a **6-tier Evidence Strength Hierarchy** (`[T1]` Direct runtime reproduction down to `[T6]` Structural inference), an **Intent-vs-Reality Diff** table (`Match | Undocumented | Broken | Stale`), and a mandatory self-disconfirmation rebuttal pass.
 - **Flags**:
   - `--deep`: Spawns up to **3 parallel `tracer` subagents** on competing hypotheses (`H1`, `H2`, `H3`) before synthesizing.
+  - `--audit [path]`: Runs a read-only whole-repo (or subtree) quality & lean audit using `codebase-map` and `scan-debt`, ranking structural bloat (`Lean: -<N> lines`), duplicate helpers, and un-triggered `shortcut:` debt.
 - **Examples**:
   ```text
   /analyze Why does session refresh race when two tabs wake from sleep?
   /analyze --deep Trace why webhook retries occasionally duplicate ledger rows
+  /analyze --audit src/
   ```
 
 #### `/best-practice-research` — Official Docs & Upstream Standards Research
@@ -240,11 +242,16 @@ Requires an upfront benchmark evaluator command and quantitative target, capture
 
 ### 3.4 Verification, QA, Cleanup & Shipping
 
-#### `/code-review` — Dual-Lane Merge-Readiness Review
-Runs `code-reviewer` and `architect` in parallel across two axes (**Axis 1: Spec & Requirement Compliance**, **Axis 2: Code Quality & Operational Standards**) plus the **Demolition Test** and **ADR Test**, then computes a deterministic verdict (`APPROVE`, `REQUEST CHANGES`, or `COMMENT`).
-- **Example**:
+#### `/code-review` — Dual-Lane Merge-Readiness & Whole-Repo Audit Review
+Runs `code-reviewer` and `architect` in parallel across two axes (**Axis 1: Spec & Requirement Compliance**, **Axis 2: Code Quality & Operational Standards**) plus the **Demolition Test**, **ADR Test**, caller-grep verification on signature/behavior changes, expected-load calibration, and `shortcut:` ceiling checks, then computes a deterministic verdict (`APPROVE`, `REQUEST CHANGES`, or `COMMENT`) using a 4-part finding schema (`Location` + `Symptom` + `Why` + `Fix`) and `Lean: -<N> lines` estimates.
+- **Flags**:
+  - `--re-review`: Scopes the pass to verifying prior review fixes and checking for newly introduced regressions.
+  - `--audit [path]`: Runs a read-only whole-repo (or subtree) quality & lean audit (`codebase-map` + `scan-debt`), producing a `Lean: -<N> lines` ledger and `shortcut:` debt report without requiring a branch diff.
+- **Examples**:
   ```text
   /code-review Review the current branch diff against main
+  /code-review --re-review
+  /code-review --audit src/
   ```
 
 #### `/ultraqa` — 9-Class Adversarial End-to-End QA
@@ -294,7 +301,7 @@ Generates `.omagy/artifacts/handoff-<slug>-<UTC>.md` (and `handoff-latest.md`) c
   ```
 
 #### `/hud` — Workflow Status Board & Auxiliary Pane UI (`sidecar://oh-my-agy/hud/`)
-Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`5` tabs: `Overview` with consolidated workflow & Doctor diagnostics cards, `Workflows` and `Skills` with inline editable prompts + `Run in Chat` / `New Chat` execution, `Subagents` with `Dispatch into Active Chat` / `Launch Standalone Chat` invocation, and `Wiki`).
+Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`5` tabs: `Overview` with consolidated workflow, `Code Health & Technical Debt` 3-tile KPI strip, `Benchmarks & Autoresearch`, `Visual Ralph & Loft Prototypes`, and `Diagnostics & Runtime Health` cards; `Workflows` and `Skills` with inline editable prompts + `Run in Chat` / `New Chat` execution; `Subagents` with `Dispatch into Active Chat` / `Launch Standalone Chat` invocation; and `Wiki`).
 - **Example**:
   ```text
   /hud
@@ -309,7 +316,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session`)
-Verifies plugin placement, `hooks/run.sh selftest` (`57/57` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
+Verifies plugin placement, `hooks/run.sh selftest` (`62/62` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
 - **Examples**:
   ```text
   /doctor
@@ -429,11 +436,12 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
   - Detects `/skill` and `$skill` triggers and natural-language routing keywords while stripping code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), and preserving leading `$skill` invocations on reference-heavy prompts.
   - Injects a 1-line reminder of active `.omagy/state/*-state.json` modes owned by the current conversation (honoring `OMAGY_ROOT` / `OMAGY_STATE_ROOT` overrides).
   - Injects bounded (`<= 3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` once per session, skipping expired `expires: <ISO 8601>` entries/pages and redacting standalone secret tokens.
+  - Injects a once-per-session shared-first `[oh-my-agy] Codebase map` (`<= 1,800` chars, opt-out via `OMAGY_MAP=0`, configurable budget via `OMAGY_MAP_CHARS`; also appended to `goal-brief` packets) so agents and worker subagents know existing helpers before writing code.
   - Injects unseen subdirectory `AGENTS.md` files and child-project `omagy_wiki/` along touched workspace paths.
-  - Automatically skips leader skill routing and unowned parent states when invoked inside a delegated subagent prompt (`isSubagentPayload`).
+  - Automatically skips leader skill routing, codebase map injection, and unowned parent states when invoked inside a delegated subagent prompt (`isSubagentPayload`).
 - **`Stop` (Enabled by default)**:
   - Continues active `autopilot`, `ultragoal`, `ultraqa`, `autoresearch`, or `performance-goal` loops on normal stops (`NO_TOOL_CALL`), bounded to at most 2 consecutive nudges without a state update, while enforcing that a permission denial or user refusal is final (must mark the task/goal `blocked` instead of retrying via another tool/path).
-  - Scans `git diff` on completion claims for left-behind blocker patterns (`test.skip`, `test.only`, `TODO: implement`, `throw new Error("Not implemented")`).
+  - Scans `git diff` on completion claims for left-behind blocker patterns (`test.skip`, `test.only`, `TODO: implement`, `throw new Error("Not implemented")`, and `open-caller:<symbol>` broken call sites of removed non-generic symbols).
 - **`PreToolUse` (Opt-in in `hooks.json`)**:
   - Blocks file writes outside `.omagy/` and `omagy_wiki/` while a planning mode (`deep-interview`, `ralplan`, `plan`, or `autopilot` planning phase) is active, inspecting all target paths across `Path`, `TargetFile`, `filePath`, rename/move destinations, `edits[]`, and `apply_patch` (`*** Add/Update/Delete File:` and `*** Move to:`) headers, and failing closed when an explicit file-mutation tool omits its path argument.
   - Enforces `agreements-guard`: blocks full overwrites of `omagy_wiki/agreements.md` that drop `[by:human]` entries.
@@ -442,13 +450,13 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 57-check offline hook selftest
+# 1. Run the 62-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Pre-assemble a git review package (supports -C <dir>; exits 3 on 0-commit or non-ancestor range)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh review-package . main HEAD .omagy/artifacts/reviews/review-pkg.md
 
-# 3. Extract a single goal/task brief from goals.json or a fence-aware markdown plan (exits 4 on unclosed code fence)
+# 3. Extract a single goal/task brief + Codebase Reuse Map from goals.json or a fence-aware markdown plan (exits 4 on unclosed code fence)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh goal-brief .omagy/ultragoal/goals.json G1 .omagy/ultragoal/briefs/goal-G1.md
 
 # 4. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands)
@@ -471,6 +479,12 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh audit-research .omagy/artifac
 
 # 10. Scan test files for 7 AI-slop junk-test patterns (suppress with // check-test-junk: ignore)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh check-test-junk tests/ --json
+
+# 11. Build a shared-first codebase export map (prioritizes shared/utils/lib folders)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh codebase-map . 1800
+
+# 12. Harvest shortcut: / ceiling: technical debt markers and upgrade conditions
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh scan-debt . --json
 ```
 
 ---

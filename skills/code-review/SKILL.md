@@ -31,6 +31,7 @@ sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha> .omagy
 1. Identify changed files and review boundaries. Do not silently widen the scope.
    - **Anti-Pre-Judging Guard**: never poison reviewer prompts with instructions to ignore or down-rate specific areas (`"do not flag X"`, `"at most LOW"`). Let the reviewer grade findings independently.
    - **Scoped Fix Re-Review (`--re-review <fix_base_sha>`)**: on fix-round re-reviews after a `REQUEST CHANGES` verdict, generate a review package for `<fix_base_sha>..HEAD` and pass the prior findings list. Reviewers verify only whether prior findings were resolved and whether `<fix_base_sha>..HEAD` introduced new defects, quarantining untouched-code observations under `Out-of-Scope Observations`.
+   - **Whole-Repo / Folder Quality & Lean Audit (`--audit [path]`, ported from Ponytail `v5.3.3` `/ponytail-audit`)**: when invoked with `--audit [path]`, map entry points, data flow, expected load (`single-user script` vs `concurrent service`), and existing `shortcut:` debt (`sh <plugin>/hooks/run.sh scan-debt <workspace>`) first, then audit the target scope ranked by importance (`Must fix` -> `Should fix` -> `Nice to have`, capped at 20 findings), reporting 4-part finding cards (`What this is`, `Problem`, `Fix`, `If we skip it`) and `Lean: -<N> lines, -<M> dependencies possible`.
 2. Launch both lanes **in parallel**, in one `invoke_subagent` call with two entries, each on a clean context with explicit scope and artifacts. Respect the user's model selection (`Model: "inherit"`).
    - `TypeName: "code-reviewer"`, prompt:
      ```text
@@ -40,7 +41,9 @@ sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha> .omagy
         - Spec silence is not permission: grade unhandled inputs by their effect on a reasonable user, not LOW merely because the spec omitted the trigger.
         - Flag any defect mandated by the plan itself as HIGH (plan-mandated).
      2) Standards Axis: AGENTS.md, DESIGN.md, omagy_wiki/ conventions, security, quality, performance, and maintainability.
-     List any cross-task or out-of-diff items under "Cannot Verify from Diff".
+        - Grep repo callers whenever a signature, return value, export, or behavior changes; reserve "Cannot Verify from Diff" for external/dynamic boundaries only.
+        - State assumed load; treat `shortcut: <ceiling>, <upgrade>` comments as documented decisions unless expected load crosses the ceiling.
+        - Every finding requires a concrete input/scenario case and 4 fields (What this is, Problem, Fix, If we skip it), plus `Lean: -<N> lines possible` when bloat exists.
      Return files reviewed, severity-rated findings with file:line evidence and concrete fixes,
      and a recommendation: APPROVE / REQUEST CHANGES / COMMENT. Do not review architecture.
      Scope: <review-package file path or diff command, spec/acceptance paths>

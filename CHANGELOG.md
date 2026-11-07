@@ -2,6 +2,25 @@
 
 Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
 
+## 0.4.4
+
+*Upstream references: **Ponytail** `v5.3.3` · **OMX** `v0.21.46` · **OMC** `v5.7.31` · **OMO** `v5.1.61` · **obra/superpowers** `v7.0.2` · **Antigravity 2.0 Plugin & Sidecar Spec***
+
+- **Shared-First Codebase Export Map & Subagent Brief Injection (`hooks/omagy-hook.mjs`, `rules/AGENTS.md`)**:
+  - Added `buildCodebaseMap(roots, budget = 1800)` (`sh ./hooks/run.sh codebase-map [root] [budget] [--json]`) scanning repository source directories (`JS/TS/Py/Go/Rust/Ruby/PHP/Java/Kotlin`) with shared-folder priority (`shared/`, `common/`, `lib/`, `utils/`, `helpers/`, `core/`, `hooks/`, `components/`, `ui/`, `types/`, `models/`, `services/`, `api/`, `db/`, `store/`) and adaptive per-file symbol sampling (`<= 2` files -> up to 8 symbols/file; `<= 8` -> 3; `> 8` -> 1) so single-file directories like `hooks/` and `sidecars/hud/` remain well-represented.
+  - Wired once-per-conversation `[oh-my-agy] Codebase map` injection into `SessionStart` and `PreInvocation` (`!isSubagent`, tracked via `record.mapInjected`, opt-out via `OMAGY_MAP=0`, configurable budget via `OMAGY_MAP_CHARS`) and appended a `## Codebase Reuse Map` section to `extractGoalBrief` (`goal-brief`) so delegated worker subagents know existing helpers before writing code.
+- **Shortcut Debt Ledger, Diff Code-Health Analyzer, & Open-Caller Drift Guard (`hooks/omagy-hook.mjs`)**:
+  - Added `scanShortcutDebt(root)` (`sh ./hooks/run.sh scan-debt [root] [--json]`) harvesting `shortcut: <ceiling>, <when to upgrade>` (plus `ceiling:` and `ponytail:`) comments across source files, splitting ceiling vs upgrade trigger, tagging `noTrigger` and `rotRisk` (`!upgrade`), and ignoring `<...>` documentation template placeholders.
+  - Added `analyzeDiffCodeHealth(root)` computing git-diff reuse ratios (`reused`, `created`, `reusePct`) and detecting open callers (`openCallers`) when a removed non-generic symbol (`!GENERIC_SYMBOL_NAMES`) has `0` remaining definitions repo-wide and `>= 1` live source call sites (excluding `.method()` member calls and safely escaping `$` in identifier regexes).
+  - Extended `scanDiffBlockers` (`Stop` hook completion-claim guard) to surface `open-caller:<symbol>` findings so deleted/renamed functions with un-updated callers trigger a single continuation nudge before completion.
+- **6-Rung Reuse Ladder, Risky-Logic Test Rule, & `--audit` Whole-Repo Mode (`rules/AGENTS.md`, `agents/executor.md`, `agents/code-reviewer.md`, `skills/code-review/SKILL.md`, `skills/analyze/SKILL.md`, `skills/hud/SKILL.md`)**:
+  - Added the **6-Rung Reuse Ladder & Minimal Complete Change**, **Risky-Logic Test Rule**, and **`shortcut: <ceiling>, <when to upgrade>`** authoring & review contract to `rules/AGENTS.md` (`20,042` bytes `< 24 KB`) and `agents/executor.md`.
+  - Upgraded `agents/code-reviewer.md` and `skills/code-review/SKILL.md` with the caller-grep mandate on signature/behavior changes, expected-load calibration, `shortcut:` review exemption within ceiling, 4-part finding schema (`Location` + `Symptom` + `Why` + `Fix`), `Lean: -<N> lines` estimates, and **`--audit [path]`** whole-repo quality & lean audit mode (also added `--audit [path]` to `skills/analyze/SKILL.md`).
+- **Aux Pane HUD `codeHealth` & Complete Overview Telemetry Cards (`sidecars/hud/main.mjs`)**:
+  - Updated `buildHudSnapshot()` to populate `codeHealth` (`reusePct`, `reused`, `created`, `openCallers`, and secret-redacted `debtItems`) and added `--audit` to `SKILL_GUIDE_META` for `analyze` and `code-review`.
+  - Updated `renderOverview()` in `HUD_HTML` to render **Code Health & Technical Debt** (with a resize-safe 3-tile `.health-grid` KPI strip for Diff Function Reuse, Orphaned Call Sites, and Documented Shortcuts, inline `Reused in diff:` / `New in diff:` symbol pills, and stacked `.health-item` cards), **Benchmarks & Autoresearch** (`performanceGoals` + `autoresearch`), and **Visual Ralph & Loft Prototypes** (`visualRalph` + `loft`), while adding `Cache-Control: no-store` on `/` and `/api/status` and keeping `GET /api/status` strictly read-only.
+  - Expanded the offline hook selftest from `57` to `62` checks (`T23`–`T27`) and HUD `--selftest` (`T-HUD-1`).
+
 ## 0.4.3
 
 *Upstream references: **OMX** `v0.21.46` · **OMC** `v5.7.31` (+ `origin/dev`) · **OMO** `v5.1.61` · **obra/superpowers** `v7.0.2` · **Antigravity 2.0 Plugin & Sidecar Spec***

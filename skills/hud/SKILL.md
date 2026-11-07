@@ -26,6 +26,7 @@ Accept `$hud --preset=<name>`. A default can be stored in `.omagy/config.json` a
 - `.omagy/ultragoal/goals.json` and the tail of `ledger.jsonl`: goal counts by status, current goal
 - `.omagy/state/team/*/tasks.json`: task counts by status, worker assignments. Show active team boards even when no session `team-state.json` snapshot exists, and hide completed team runs whose `updated_at` is older than 20 minutes in team-only views (OMC `#4661`, `#4662`).
 - `.omagy/goals/performance/*/state.json`: baseline vs `lastValidation`
+- **Code Health & Technical Debt (`analyzeDiffCodeHealth` & `scanShortcutDebt`, ported from Ponytail `v5.3.3`)**: working-tree function reuse ratio (`used` vs `new` symbols, `reusePct`), open callers of removed symbols (`⚠ N open callers`), and the repository `shortcut:` / `ceiling:` debt ledger (`total` markers and `no-trigger` rot risk count).
 - `manage_subagents list` and `manage_task list`: live subagents and background tasks
 
 ## Rendering

@@ -1,7 +1,7 @@
 {
   "name": "oh-my-agy",
   "displayName": "oh-my-agy",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Multi-agent workflow layer for Antigravity: /autopilot, /deep-interview, /ralplan, /ultragoal, /team, /code-review, /wiki, HUD sidecar, 27 skills, 18 agents.",
   "logo": "assets/logo.png",
   "author": {
