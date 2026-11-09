@@ -5,7 +5,7 @@ description: "[oh-my-agy] Create a structured, self-contained session handoff ar
 
 # Handoff — Structured Session Continuation Artifact
 
-Use `$handoff` (ported from `oh-my-openagent` `/handoff`) when a conversation is getting long, before running Antigravity's `/compact` slash command, or when handing work over to a fresh conversation or another engineer/agent.
+Use `$handoff` when a conversation is getting long, before running Antigravity's `/compact` slash command, or when handing work over to a fresh conversation or another engineer/agent.
 
 ## When to use
 

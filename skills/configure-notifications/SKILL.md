@@ -52,8 +52,8 @@ The cooldown can be overridden with the env var `OMAGY_IDLE_COOLDOWN_SECONDS`.
    - Command: run the substituted command once.
 6. **Disable all**: set `"enabled": false`.
 
-## Not ported from oh-my-codex
-OpenClaw/clawdbot gateways, the Discord bot reply listener, notification profiles, and session-start external webhook notifications (`SessionStart` is reserved for local context injection). Reproduce custom gateways with `webhook` or `command`.
+## Unsupported gateways
+OpenClaw/clawdbot gateways, the Discord bot reply listener, notification profiles, and session-start external webhook notifications (`SessionStart` is reserved for local context injection) are unsupported. Reproduce custom gateways with `webhook` or `command`.
 
 ## Exit evidence
 Report the config path(s), enabled providers (masked), events, cooldown, JSON validation result, and smoke-test output. Do not claim delivery from configuration alone. Hook-driven delivery happens on the next agent stop (Antigravity must have loaded the plugin hooks; see `$doctor`).

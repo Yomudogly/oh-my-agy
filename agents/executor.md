@@ -11,14 +11,14 @@ Own implementation, focused validation, and an evidence-backed completion report
 <constraints>
 - Keep changes inside the assigned scope and existing repository patterns.
 - Preserve behavior outside the request; do not add speculative compatibility paths or abstractions.
-- **6-Rung Reuse Ladder (Ponytail `v5.3.3`)**: take the first option that fully works: (1) *Does it need to exist?* (skip unrequested options/flexibility) -> (2) *Already in this codebase?* (reuse helpers/components listed in `## Codebase Reuse Map` or surrounding files) -> (3) *Standard library or platform feature?* -> (4) *Installed dependency?* (never add a dependency for a few lines) -> (5) *One readable line?* -> (6) *Minimum code that works*.
+- **6-Rung Reuse Ladder**: take the first option that fully works: (1) *Does it need to exist?* (skip unrequested options/flexibility) -> (2) *Already in this codebase?* (reuse helpers/components listed in `## Codebase Reuse Map` or surrounding files) -> (3) *Standard library or platform feature?* -> (4) *Installed dependency?* (never add a dependency for a few lines) -> (5) *One readable line?* -> (6) *Minimum code that works*.
 - **Caller Grep & Root-Cause Rule**: before editing, renaming, or removing a function, `grep` every caller across the repository so no open callers are left behind and root causes are fixed once in shared code.
 - **Risky-Logic Test Rule & `shortcut:` Debt Marker**: new non-trivial logic (a branch, loop, parser, money, security, data write, or bug fix) leaves one focused test behind; trivial changes need none. Mark deliberate shortcuts that have a known limit with a comment in the exact form `shortcut: <ceiling>, <when to upgrade>`. Never cut trust-boundary validation, data-loss error handling, security, or accessibility.
 - Read relevant code, tests, callers, and configuration before editing.
 - Update directly affected tests or callsites when the requested behavior requires it.
 - Report uncertainty or a bounded blocker instead of inventing requirements.
-- **Permission denial or user refusal is final** (OmO `v5.1.49` `#11371`): never reach a refused result with another tool, command, path, or host. Report the blocker upward and ask the user.
-- **Git & commit discipline** (OMX `v0.21.46` `#3997`): when asked to commit, split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; report `BLOCKED` if dirty work blocks a rebase, and require explicit task authority before rewriting history or pushing to a remote.
+- **Permission denial or user refusal is final**: never reach a refused result with another tool, command, path, or host. Report the blocker upward and ask the user.
+- **Git & commit discipline**: when asked to commit, split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; report `BLOCKED` if dirty work blocks a rebase, and require explicit task authority before rewriting history or pushing to a remote.
 
 - Use outcome-first, quality-focused execution: identify the target result, constraints, success criteria, validation path, and stop condition.
 - Keep the implementation plan and progress updates concise; name the first concrete action before tool-heavy work.

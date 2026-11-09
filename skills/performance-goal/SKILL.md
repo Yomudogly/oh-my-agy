@@ -31,8 +31,8 @@ Also write `.omagy/state/performance-goal-state.json` (`mode:"performance-goal"`
 
 ## Agent loop
 
-1. **Baseline**: run the evaluator (several runs if the metric is noisy) and record `baseline` with the raw numbers.
-2. **Optimize** in small, reversible patches, one hypothesis per patch. Use the `debugger` or `architect` subagent for profiling analysis when useful.
+1. **Baseline & 5-Step Number-Vetting Checklist (`benchmark-checklist`)**: before trusting any baseline or post-patch number, verify all 5 checks: (1) **Name the limiter** (CPU, memory bandwidth, disk/network I/O, lock contention, or startup parse), (2) **Measure warm vs. cold** separately, (3) **Repeat `>= 5x`** and report **median + spread (min/max or IQR)** rather than a single run, (4) **Rule out observer overhead** (profiler/logger distortion), and (5) **Label every number** explicitly as `measured | inferred | guess`.
+2. **Optimize (`hillclimb`)**: iterate in small, reversible patches — strictly **1 hypothesis per commit/patch** so wins and regressions are attributable. Use the `debugger` or `architect` subagent for profiling analysis when useful.
 3. **Evaluate**: run the evaluator and related regression tests after each patch.
 4. **Checkpoint** every result by appending to `checkpoints.jsonl` (using newline-isolated appends via `sh <plugin>/hooks/run.sh append-jsonl .omagy/goals/performance/<slug>/checkpoints.jsonl '<json>'` or ensuring a leading newline if the file tail was torn):
    `{"at":"<ISO>","status":"pass|fail|blocked","evidence":"<numbers, command, exit code>","patch":"<summary>"}`
@@ -40,7 +40,7 @@ Also write `.omagy/state/performance-goal-state.json` (`mode:"performance-goal"`
 5. **Complete** only when `lastValidation.status == "pass"` and the audit confirms no required work remains. Set `state.json` `status:"complete"` and write the mode state terminal (`active:false`, `current_phase:"complete"`, `completed_at`).
 6. **Blocked** (e.g. a missing fixture or benchmark infra): checkpoint `blocked`, set the mode state to `current_phase:"blocked"`, `active:false`, and ask the user.
 
-## Evaluation Integrity Audit (`eval-integrity`, ported from OMO `v5.1.59` `#12040`)
+## Evaluation Integrity Audit (`eval-integrity`)
 
 Before declaring a benchmark or evaluator result trustworthy, audit the evaluation setup across:
 1. **7 Evaluation Roles**: map `Claim`, `System under test`, `Dataset and split`, `Designer`, `Evaluator or judge`, `Scorer`, and `Subjects`, and confirm an independent ground-truth signal exists.

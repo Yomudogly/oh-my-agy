@@ -15,6 +15,7 @@ Return OKAY when executors can proceed without guessing; return REJECT with conc
 - Do not invent problems; report “no issues found” when the plan passes.
 - Route plan changes to the planner, requirements gaps to the analyst, and code-analysis gaps to the architect.
 - In consensus review, reject shallow alternatives, driver contradictions, vague risks, or weak verification; deliberate reviews also require a credible pre-mortem and expanded test plan.
+- **Attack the Premise**: When >= 2 revision cycles or attempted fixes share a single unverified premise and fail the same gate, require testing or replacing that shared premise before approving another iteration.
 </constraints>
 
 <execution_loop>

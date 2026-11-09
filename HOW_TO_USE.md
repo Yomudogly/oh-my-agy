@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.4`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.5`)** for Google Antigravity.
 
 ---
 
@@ -272,11 +272,14 @@ Locks behavior with regression tests first, classifies fallbacks (`Essential | S
   /ai-slop-cleaner --review Audit src/api/ for speculative fallbacks and dead abstractions
   ```
 
-#### `/pr` — Assemble a Review-Ready PR Body from the `.omagy/` Paper Trail
-Reads `.omagy/plans/`, `.omagy/ultragoal/`, `.omagy/evidence/`, and review artifacts to generate `.omagy/artifacts/pr-body-<slug>.md` with a 1-line summary, ASCII/Mermaid architecture visual, Before/After verification commands, and ADR-tested reversibility notes (plus optional `gh pr create` / `gh pr edit`).
-- **Example**:
+#### `/pr` — Assemble a Review-Ready PR Body & Watch Open PRs (`--watch`)
+Reads `.omagy/plans/`, `.omagy/ultragoal/`, `.omagy/evidence/`, and review artifacts to generate `.omagy/artifacts/pr-body-<slug>.md` with a 1-line summary, ASCII/Mermaid architecture visual, Before/After verification commands, and ADR-tested reversibility notes (plus optional `gh pr create` / `gh pr edit`). With `--watch`, runs deterministic PR/CI/review triage (`watch-pr`, 60s zero-checks confirmation window, `real / flaky / environmental` CI failure triage, and 3-surface + GraphQL `reviewThreads` review comment care).
+- **Flags**:
+  - `--watch`: Classify PR state (`ready | waiting | blocked | gone`), triage CI failures, and resolve review threads.
+- **Examples**:
   ```text
   /pr Draft the PR description for this branch
+  /pr --watch
   ```
 
 ---
@@ -315,16 +318,17 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   /cancel team
   ```
 
-#### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session`)
-Verifies plugin placement, `hooks/run.sh selftest` (`62/62` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, and stale `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`).
+#### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session` / `--session-compare`)
+Verifies plugin placement, `hooks/run.sh selftest` (`69/69` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, `.omagy/` size budget & dead-PID `.tmp` hygiene, and stale or `awaiting_confirmation` `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`). With `--session-compare <baseline.jsonl> <candidate.jsonl>`, runs privacy-safe A/B transcript regression analysis (`session-compare`).
 - **Examples**:
   ```text
   /doctor
   /doctor --session
+  /doctor --session-compare baseline.jsonl candidate.jsonl
   ```
 
-#### `/omagy-setup` — Plugin Setup, Project Bootstrap & `.omx` Migration
-Verifies user or project plugin installation, optionally creates a project `AGENTS.md` (with canonical `realpath` and symlink target safety checks), updates `.gitignore`, and migrates legacy `.omx/` / `omx_wiki/` directories.
+#### `/omagy-setup` — Plugin Setup & Project Bootstrap
+Verifies user or project plugin installation, optionally creates a project `AGENTS.md` (with canonical `realpath` and symlink target safety checks), and updates `.gitignore`.
 - **Example**:
   ```text
   /omagy-setup
@@ -450,7 +454,7 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 ### Built-In Hook CLI Commands
 
 ```bash
-# 1. Run the 62-check offline hook selftest
+# 1. Run the 69-check offline hook selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Pre-assemble a git review package (supports -C <dir>; exits 3 on 0-commit or non-ancestor range)
@@ -459,32 +463,47 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh review-package . main HEAD .o
 # 3. Extract a single goal/task brief + Codebase Reuse Map from goals.json or a fence-aware markdown plan (exits 4 on unclosed code fence)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh goal-brief .omagy/ultragoal/goals.json G1 .omagy/ultragoal/briefs/goal-G1.md
 
-# 4. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands)
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh verify-evidence .omagy/evidence/task-1.json
+# 4. Validate a /team task's completion evidence file (rejects echo/printf/true no-op commands, validates VERIFICATION_VERDICTS & verified_head)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh verify-evidence . .omagy/evidence/task-1.json alpha 1
 
-# 5. Validate optional .omagy/config.json qualityGates (deep-interview, ralplan, code-review)
+# 5. Validate a /team task board fail-closed (errors with team_task_read_failed on corrupt/mismatched task files)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh validate-team-tasks . alpha
+
+# 6. Validate optional .omagy/config.json qualityGates (deep-interview, ralplan, code-review)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh quality-gates .
 
-# 6. Append a crash-resilient newline-isolated JSONL record (auto-prepends \n if missing)
+# 7. Append a crash-resilient newline-isolated JSONL record (auto-prepends \n if missing)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh append-jsonl .omagy/ultragoal/ledger.jsonl '{"ts":"2026-10-24T00:00:00Z","goal_id":"G1","event":"start"}'
 
-# 7. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
+# 8. Read a JSONL file tolerantly (skips partial/corrupted lines after a crash)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl
 
-# 8. Generate a lens-specific Boolean query matrix for /deep-research
+# 9. Generate a lens-specific Boolean query matrix for /deep-research
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh research-matrix "Distributed Consensus" technical --json
 
-# 9. Audit a /deep-research report against the 8-section & 5-dimension (>=85) rubric
+# 10. Audit a /deep-research report against the 8-section & 5-dimension (>=85) rubric (including conversion_altered_number check)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh audit-research .omagy/artifacts/research/report.md --json
 
-# 10. Scan test files for 7 AI-slop junk-test patterns (suppress with // check-test-junk: ignore)
+# 11. Scan test files for 7 AI-slop junk-test patterns (suppress with // check-test-junk: ignore)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh check-test-junk tests/ --json
 
-# 11. Build a shared-first codebase export map (prioritizes shared/utils/lib folders)
+# 12. Build a shared-first codebase export map (prioritizes shared/utils/lib folders)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh codebase-map . 1800
 
-# 12. Harvest shortcut: / ceiling: technical debt markers and upgrade conditions
+# 13. Harvest shortcut: / ceiling: technical debt markers and upgrade conditions
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh scan-debt . --json
+
+# 14. Classify PR / CI / review readiness with 60s zero-checks confirmation window (/pr --watch)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh watch-pr '{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","checks":{"passed":3}}'
+
+# 15. Normalize test failure output for repeated-failure deduplication (/ultraqa)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh failure-sig "=== 4 passed in 1.20s (0:00:01) ==="
+
+# 16. Compare two JSONL session transcripts without leaking prompt/path text (/doctor --session-compare)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh session-compare baseline.jsonl candidate.jsonl --fail-on-regression
+
+# 17. Repair [[wiki-links]] and [label](slug.md) links outside code spans on move/archive/delete (/wiki)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh wiki-repair omagy_wiki '{"moved":{"old-slug":"new-slug"},"archived":["old-arch"],"deleted":["gone"]}'
 ```
 
 ---

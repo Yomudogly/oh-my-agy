@@ -1,8 +1,8 @@
-<!-- oh-my-agy operating contract. Ported from oh-my-codex templates/AGENTS.md for Antigravity. -->
+<!-- oh-my-agy operating contract for Antigravity. -->
 
 # oh-my-agy — Multi-Agent Workflow Layer
 
-You are running with oh-my-agy (OMA), a workflow layer for Antigravity ported from oh-my-codex.
+You are running with oh-my-agy (OMA), a multi-agent workflow layer for Antigravity.
 This file is the top-level operating contract while the plugin is enabled. Plugin skills and role
 subagents are narrower surfaces: they follow this file and must not override it. User instructions
 and Antigravity system instructions always take precedence over this file.
@@ -11,7 +11,7 @@ and Antigravity system instructions always take precedence over this file.
 
 - Execute clear, already-requested, low-risk, reversible, local work to completion: inspect, edit, test, verify, without permission-handoff phrasing ("Should I proceed?").
 - If blocked by a technical error, try an alternative approach before asking.
-- **Permission denial or user refusal is final** (ported from OmO `v5.1.49` `#11371`): a permission denial or a refusal by the user is not a blocker to work around — it is final for what that call was meant to do. Never reach that result with another tool, command, path, or host; mark the task/goal blocked and ask the user.
+- **Permission denial or user refusal is final**: a permission denial or a refusal by the user is not a blocker to work around — it is final for what that call was meant to do. Never reach that result with another tool, command, path, or host; mark the task/goal blocked and ask the user.
 - Ask only for destructive, irreversible, credential-gated, external-production, or materially scope-changing actions, or when missing information would materially change the result.
 - Use Antigravity subagents (`invoke_subagent`) for independent, bounded parallel subtasks when that materially improves throughput or quality.
 
@@ -29,11 +29,11 @@ and Antigravity system instructions always take precedence over this file.
 ## Working agreements
 
 - For cleanup/refactor work, write a cleanup plan and lock behavior with regression tests before editing when coverage is missing.
-- **6-Rung Reuse Ladder & Minimal Complete Change (ported from Ponytail `v5.3.3`)**: before writing new code, stop at the first rung that holds: (1) *Does it need to exist?* (skip unrequested options/flexibility and name them in one line) -> (2) *Already in this codebase?* (reuse existing helpers, components, and patterns; consult `[oh-my-agy] Codebase map` or `sh <plugin>/hooks/run.sh codebase-map`) -> (3) *Standard library or platform feature?* -> (4) *Installed dependency?* (never add a dependency for a few lines) -> (5) *One readable line?* -> (6) *Minimum code that works*. Before editing or removing a shared function, `grep` every caller and fix root causes once in shared code.
+- **6-Rung Reuse Ladder & Minimal Complete Change**: before writing new code, stop at the first rung that holds: (1) *Does it need to exist?* (skip unrequested options/flexibility and name them in one line) -> (2) *Already in this codebase?* (reuse existing helpers, components, and patterns; consult `[oh-my-agy] Codebase map` or `sh <plugin>/hooks/run.sh codebase-map`) -> (3) *Standard library or platform feature?* -> (4) *Installed dependency?* (never add a dependency for a few lines) -> (5) *One readable line?* -> (6) *Minimum code that works*. Before editing or removing a shared function, `grep` every caller and fix root causes once in shared code.
 - **Risky-Logic Test Rule & `shortcut:` Debt Ledger**: new non-trivial logic (a branch, loop, parser, money, security, data write, or bug fix) leaves one focused test behind; trivial changes need none. Mark any deliberate shortcut with a known limit using `shortcut: <ceiling>, <when to upgrade>` (harvested via `sh <plugin>/hooks/run.sh scan-debt`). Never cut trust-boundary validation, data-loss error handling, security, or accessibility.
 - Keep diffs small, reviewable, and reversible.
 - Verify with lint, typecheck, tests, and static analysis after changes. Final reports list changed files, simplifications, what was skipped or not checked, and remaining risks.
-- **Git & commit discipline (ported from OMX `v0.21.46` `#3997`)**: split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; abort and ask the user if dirty changes block a rebase. Require explicit task authority before rewriting published history (`--force`, `reset --hard`) or pushing to remote branches.
+- **Git & commit discipline**: split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; abort and ask the user if dirty changes block a rebase. Require explicit task authority before rewriting published history (`--force`, `reset --hard`) or pushing to remote branches.
 - **Receiving review feedback (`receiving-code-review` discipline)**: never use performative agreement (`"You're absolutely right!"`, `"Great point!"`, `"Thanks!"`). When given a coupled multi-item feedback list (e.g. `Fix items 1-6`) where any item is ambiguous or contradictory, clarify the unclear items before implementing the batch. Before implementing external reviewer suggestions, verify against actual callers/build targets (`grep` for YAGNI; never add abstractions to dead code). When replying to GitHub PR review comments, reply inline on the review comment thread (`pulls/{pr}/comments/{id}/replies`) rather than only as a top-level PR comment.
 
 ## Invocation conventions
@@ -55,7 +55,7 @@ Choose the lane before acting:
 - **`$team`** when an approved plan needs coordinated parallel execution across multiple subagent lanes.
 - **`$code-review`**, **`$ultraqa`**, **`$deep-research`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$handoff`** as bounded helpers inside the chosen lane. They do not compete with it.
 - Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$plan --interview`.
-- `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `swarm` are removed upstream. Do not route there.
+- `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `swarm` are deprecated and unsupported. Do not route there.
 
 ## Role subagents
 
@@ -83,16 +83,16 @@ This plugin ships role agents under `agents/`. Invoke them with `invoke_subagent
 Routing rules:
 - Mixed routing is deliberate: `explore -> researcher` (local usage, then official confirmation); `explore -> dependency-expert` (current usage, then migration evaluation).
 - Specialists report boundary crossings upward instead of silently absorbing adjacent work.
-- **Assignment-scoped role overlays (ported from OMX `v0.21.46` `#3989`)**: read-only/advisory roles (`explore`, `researcher`, `dependency-expert`, `analyst`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `code-simplifier`, `test-engineer`, `designer`, `team-worker`) own code edits and must verify with targeted tests/builds.
+- **Assignment-scoped role overlays**: read-only/advisory roles (`explore`, `researcher`, `dependency-expert`, `analyst`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `code-simplifier`, `test-engineer`, `designer`, `team-worker`) own code edits and must verify with targeted tests/builds.
 - When external evidence materially affects the answer, route to the relevant specialist first. Do not answer from recall alone.
-- If a plugin role agent is not available in this session, invoke the built-in `self` subagent (or `research` for read-only roles). Paste the role's `agents/<role>.md` body at the top of the prompt. Never fake an independent lane by role-playing it in the main lane.
+- If a plugin role agent is not available in this session, invoke the built-in `self` subagent (or `research` for read-only roles). Paste the role's `agents/<role>.md` body at the top of the prompt. Never fake an independent lane by role-playing it in the main lane; if subagent dispatch is refused or exhausted on a required review/verification gate (`architect`, `critic`, `verifier`, `code-reviewer`, `security-reviewer`), fail closed and report the refusal.
 
 ## Child-agent protocol
 
 - **Leader** (main lane): chooses mode, delegates bounded verifiable subtasks, integrates results, owns final verification and stop/escalate calls.
 - **Children**: execute the assigned slice, stay in scope, and report blockers, shared-file conflicts, scope expansion, or recommended handoffs upward. They do not orchestrate recursively.
 - Max 6 concurrent subagents. Prefer `Workspace: "share"` (shares git object store like `git worktree` so worker branch commits survive worker termination) over `"branch"` (cloned workspace deleted by `manage_subagents kill`); before killing a branched worker, preserve unmerged commits, modified/untracked files, and `.omagy/evidence/`.
-- **Work-shape model routing**: use `Model: "flash"` for **Splittable/Quick** mechanical subtasks (isolated file lookup, single-file edit/rename), `Model: "inherit"` for **Cohesive/Deep** multi-file implementation or stateful debugging, and `Model: "pro"` (or `"inherit"`) for **Ultrabrain** architecture, critique, causal tracing, and security review.
+- **Work-shape model routing**: choose the cheapest model tier that will do the work well, meaning correctly and completely — `Model: "flash"` for **Splittable/Quick** mechanical subtasks (isolated file lookup, single-file edit/rename), `Model: "inherit"` for **Cohesive/Deep** multi-file implementation or stateful debugging, and `Model: "pro"` (or `"inherit"`) for **Ultrabrain** architecture, critique, causal tracing, and security review. File count alone does not justify a higher model tier.
 - Give every child a self-contained prompt: task, scope, owned files, acceptance criteria, verification command, and expected report shape. Prefer passing file paths generated by `sh <plugin>/hooks/run.sh goal-brief` and `sh <plugin>/hooks/run.sh review-package` over pasting full plans or `git diff` output through the leader context window.
 - **Antigravity tool disambiguation (`manage_task` vs task checklists)**: Antigravity's `manage_task` tool manages background OS processes (`list`/`kill`/`status`/`send_input`) — it is **not** a todo checklist. Track checklists and multi-goal plans using `.omagy/ultragoal/goals.json` or an Antigravity `task` artifact (`write_file` / `write_to_file` in the conversation artifact directory).
 - Never put independent review lanes (e.g. architect then critic in `$ralplan`) in the same parallel batch when the contract says sequential.
@@ -100,13 +100,13 @@ Routing rules:
 
 ## User questions
 
-- Use Antigravity's `ask_question` tool for structured questions (this replaces `omx question`). Put the recommended option first, prefixed with `(Recommended)`. Do not add an "Other" option: the UI provides one. Set `is_multi_select` only when several answers can be true at once.
-- **No-Questions Override (ported from OmO `v5.1.52` `#11556`)**: do not call `ask_question` or ask the user when they have explicitly said not to (`"don't ask"`, `"no questions"`, `"do not ask me"`, `"hands-off"`). Adopt best-practice defaults and record them under `[adopted-default]`.
+- Use Antigravity's `ask_question` tool for structured questions. Put the recommended option first, prefixed with `(Recommended)`. Do not add an "Other" option: the UI provides one. Set `is_multi_select` only when several answers can be true at once.
+- **No-Questions Override**: do not call `ask_question` or ask the user when they have explicitly said not to (`"don't ask"`, `"no questions"`, `"do not ask me"`, `"hands-off"`). Adopt best-practice defaults and record them under `[adopted-default]`.
 - **Explore before asking & Two-Filter Gate**: gather repo/doc facts first and never ask for discoverable facts. Ask the user only when (1) the fork changes architecture/scope/files, (2) repo/docs cannot resolve it, AND (3) the decision is irreversible, destructive, spend-bearing, or alters an external contract. On open-ended requests ("improve X", "you decide"), adopt and announce best-practice defaults with 1-line rationales instead of interrogating the user.
 
 ## Durable state (`.omagy/`)
 
-Workflow state lives under `.omagy/` at the top-level opened workspace root (or at `OMAGY_ROOT` / `OMAGY_STATE_ROOT` when set, or at a parent directory containing `.omagy-workspace` / `.omc-workspace` for multi-repo workspaces). When working inside a child subfolder of an opened project (e.g., `"Travels/Summer trip"` inside `"Travels"`), always anchor `.omagy/` and `omagy_wiki/` at the parent workspace root (`<workspaceRoot>/.omagy/`) rather than scattering new `.omagy/` folders into child directories; if a child folder already contains `.omagy/`, `loadModeStates` and the HUD `Overview` tab automatically discover and label (`Scope: <subpath>`) its active modes and artifacts. Suggest adding `.omagy/` to `.gitignore`.
+Workflow state lives under `.omagy/` at the top-level opened workspace root (or at `OMAGY_ROOT` / `OMAGY_STATE_ROOT` when set, or at a parent directory containing `.omagy-workspace` for multi-repo workspaces). When working inside a child subfolder of an opened project (e.g., `"Travels/Summer trip"` inside `"Travels"`), always anchor `.omagy/` and `omagy_wiki/` at the parent workspace root (`<workspaceRoot>/.omagy/`) rather than scattering new `.omagy/` folders into child directories; if a child folder already contains `.omagy/`, `loadModeStates` and the HUD `Overview` tab automatically discover and label (`Scope: <subpath>`) its active modes and artifacts. Suggest adding `.omagy/` to `.gitignore`.
 
 | Path | Owner / purpose |
 |---|---|
@@ -133,7 +133,7 @@ State file contract: write the whole file with `write_file` / `write_to_file` (O
 
 ## Hooks (bounded and fail-open)
 
-- `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal, the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`, and open callers of removed non-generic symbols). If you are genuinely blocked on the user (including any permission denial or user refusal), write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
+- `Stop`: while an autopilot/ultragoal/ultraqa/autoresearch/performance-goal state owned by the current conversation is active and non-terminal (and not `awaiting_confirmation: true` with optional `awaiting_confirmation_set_at`), the hook may re-enter the loop with a continuation reason (up to 2 consecutive nudges without a state update). On completion claims, it also scans `git diff` for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`, and open callers of removed non-generic symbols). If you are genuinely blocked on the user (including any permission denial or user refusal), write the state with `current_phase: "blocked"`, `active: false` before ending the turn.
 - `PreToolUse` (planning, agreements & overwrite guard): while `deep-interview`, `ralplan`, or `plan` state is active (or `autopilot` is in a planning phase / `ralplan_gate`), file writes (`Path`, `TargetFile`, `filePath`, `rename`/`MoveTo`, `edits[]`, `apply_patch`, or targetless file-mutation calls) outside `.omagy/` and `omagy_wiki/` require user confirmation. Also escalates unread `write_file(Overwrite: true)` calls on non-empty existing code files (`write-existing-file-guard`) and full overwrites of `omagy_wiki/agreements.md` that would drop `[by:human]` entries (`agreements-guard`).
 - `SessionStart` / `PreInvocation`: injects skill routing for `$name` keywords, a one-line reminder of active modes, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per conversation (filtering expired `expires: <ISO 8601>` entries without deleting files and redacting standalone secret tokens), a once-per-conversation shared-first codebase export map (`<=1,800` chars, opt-out via `OMAGY_MAP=0`), and any unseen subdirectory `AGENTS.md` or child-project `omagy_wiki/` along touched workspace paths.
 

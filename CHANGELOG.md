@@ -1,16 +1,28 @@
 # Changelog
 
-Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`) and records the upstream reference versions of **oh-my-codex (OMX)**, **oh-my-claudecode (OMC)**, and **oh-my-openagent (OMO)** tracked in each release. (Earlier releases used `<omx-version>-agy.<revision>`.)
+## 0.4.5 — 2026-11-09
+
+- **Hook Runtime, State, Evidence, PR Watch, Failure-Sig, Session-Compare & Wiki Helpers (`hooks/omagy-hook.mjs`, `sidecars/hud/main.mjs`)**:
+  - **`awaiting_confirmation` Non-Stale Hold**: Added `isAwaitingConfirmation(s)` (`CONFIRMATION_MTIME_TOLERANCE_MS = 5000`) and wired it into `isActive()`, `buildActiveModeMessage()`, `stop()`, and HUD `Overview` (`WAITING CONFIRMATION`) so workflows paused on user confirmation never time out as `stale (>6h)` and never trigger automatic `Stop` hook nudges.
+  - **Team Task-Board Integrity, `VERIFICATION_VERDICTS` & Ledger Cell Sanitization**: Added `validateTeamTasks(cwd, teamName)` (`sh ./hooks/run.sh validate-team-tasks <workspace> <team>`) failing closed with `team_task_read_failed` on corrupt, empty, symlinked, or ID-mismatched task files; added `VERIFICATION_VERDICTS` (`live-ui-verified`, `unit-test-verified`, `type-check-only`, `enforcement-verified`, `formally-verified`, `verifier-blocked`, `verifier-failed`) and `verified_head`/`sha` commit validation to `validateCompletionEvidence`; and added `renderLedgerCell(val)` to neutralize spreadsheet formula-injection prefixes (`=`, `+`, `-`, `@`).
+  - **PR Watch Classifier, Failure-Signature Normalizer & Session A/B Comparison**: Added `decideWatchVerdict(rawFacts, options)` (`sh ./hooks/run.sh watch-pr '<factsJson>'`) with a 60-second `no_checks_confirm_window` (`DEFAULT_NO_CHECKS_CONFIRM_MS = 60000`) for newly pushed commits; added `normalizeFailureSignature(text)` (`sh ./hooks/run.sh failure-sig`) stripping pytest/vitest progress lines, durations, `Start at` timestamps, and Node warning PIDs while preserving assertion literals; and added `compareSessions(baselinePath, candidatePath, opts)` (`sh ./hooks/run.sh session-compare`) computing privacy-safe JSONL transcript deltas (`regression | no_regression | inconclusive`).
+  - **Wiki Link Repair, Slug Non-Resurrection, Research Number Guard & Inline Secret Redaction**: Added `repairWikiLinks(wikiDir, changes)` (`sh ./hooks/run.sh wiki-repair`) rewriting `[[slug]]` and `[label](slug.md)` links outside fenced/inline code spans on move/archive/delete; added `nextAvailableWikiSlug(wikiDir, rawSlug)` to prevent resurrecting archived/deleted periodic slugs; extended `auditResearchReport` to catch glued footnote digits (`conversion_altered_number`, e.g., `42¹`); and expanded `redactSecrets(text)` to mask inline CLI flags (`--api-key=...`), `Authorization: Bearer ...`, and inline secret assignments while preserving `$VAR`/`process.env` references.
+- **Role Subagents & Operating Contract Sync (`rules/AGENTS.md`, `agents/*.md`)**:
+  - Removed static `Default effort:` lines from `agents/vision.md`, `agents/debugger.md`, and `agents/team-worker.md` and removed legacy `(Oracle)` / `(Metis)` aliases from `agents/architect.md` and `agents/analyst.md`.
+  - Added **Attack the Premise** and existing-owner-test reuse to `agents/debugger.md` and `agents/critic.md`, **Data Came First** (`OBSERVED:`) and `## EXPAND` (`LEAD:` / `DEAD END: ... — PROBED:`) to `agents/researcher.md`, and fail-closed review/verification subagent dispatch plus `awaiting_confirmation` state handling to `rules/AGENTS.md` (`20,192` bytes `< 24 KB`).
+- **Workflow Skills Sync (`skills/*/SKILL.md`)**:
+  - Updated `plan`, `team`, `pr` (`--watch`), `deep-research`, `wiki`, `loft`, `deep-interview`, `performance-goal`, `code-review`, `analyze`, `ultraqa`, `ultragoal`, and `doctor` (`--session-compare`) while keeping all 27 `SKILL.md` files `< 20 KB`.
+  - Expanded the offline hook selftest from `62` to `69` checks (`T28`–`T34`) and HUD `--selftest` (`T-HUD-1`).
+- **Standalone Provenance & Legacy Alias Cleanup (`rules/AGENTS.md`, `agents/*`, `skills/*`, `hooks/*`, `sidecars/hud/*`, docs)**:
+  - Removed external upstream provenance citations and legacy workspace, config, and wiki directory aliases across all rules, agents, skills, hooks, HUD sidecar, and public docs (standardizing exclusively on `.omagy-workspace`, `.omagy/config.json`, `omagy_wiki/`, and `shortcut:`/`ceiling:`, enforced by `T34` in `selftest`).
 
 ## 0.4.4
-
-*Upstream references: **Ponytail** `v5.3.3` · **OMX** `v0.21.46` · **OMC** `v5.7.31` · **OMO** `v5.1.61` · **obra/superpowers** `v7.0.2` · **Antigravity 2.0 Plugin & Sidecar Spec***
 
 - **Shared-First Codebase Export Map & Subagent Brief Injection (`hooks/omagy-hook.mjs`, `rules/AGENTS.md`)**:
   - Added `buildCodebaseMap(roots, budget = 1800)` (`sh ./hooks/run.sh codebase-map [root] [budget] [--json]`) scanning repository source directories (`JS/TS/Py/Go/Rust/Ruby/PHP/Java/Kotlin`) with shared-folder priority (`shared/`, `common/`, `lib/`, `utils/`, `helpers/`, `core/`, `hooks/`, `components/`, `ui/`, `types/`, `models/`, `services/`, `api/`, `db/`, `store/`) and adaptive per-file symbol sampling (`<= 2` files -> up to 8 symbols/file; `<= 8` -> 3; `> 8` -> 1) so single-file directories like `hooks/` and `sidecars/hud/` remain well-represented.
   - Wired once-per-conversation `[oh-my-agy] Codebase map` injection into `SessionStart` and `PreInvocation` (`!isSubagent`, tracked via `record.mapInjected`, opt-out via `OMAGY_MAP=0`, configurable budget via `OMAGY_MAP_CHARS`) and appended a `## Codebase Reuse Map` section to `extractGoalBrief` (`goal-brief`) so delegated worker subagents know existing helpers before writing code.
 - **Shortcut Debt Ledger, Diff Code-Health Analyzer, & Open-Caller Drift Guard (`hooks/omagy-hook.mjs`)**:
-  - Added `scanShortcutDebt(root)` (`sh ./hooks/run.sh scan-debt [root] [--json]`) harvesting `shortcut: <ceiling>, <when to upgrade>` (plus `ceiling:` and `ponytail:`) comments across source files, splitting ceiling vs upgrade trigger, tagging `noTrigger` and `rotRisk` (`!upgrade`), and ignoring `<...>` documentation template placeholders.
+  - Added `scanShortcutDebt(root)` (`sh ./hooks/run.sh scan-debt [root] [--json]`) harvesting `shortcut: <ceiling>, <when to upgrade>` (plus `ceiling:`) comments across source files, splitting ceiling vs upgrade trigger, tagging `noTrigger` and `rotRisk` (`!upgrade`), and ignoring `<...>` documentation template placeholders.
   - Added `analyzeDiffCodeHealth(root)` computing git-diff reuse ratios (`reused`, `created`, `reusePct`) and detecting open callers (`openCallers`) when a removed non-generic symbol (`!GENERIC_SYMBOL_NAMES`) has `0` remaining definitions repo-wide and `>= 1` live source call sites (excluding `.method()` member calls and safely escaping `$` in identifier regexes).
   - Extended `scanDiffBlockers` (`Stop` hook completion-claim guard) to surface `open-caller:<symbol>` findings so deleted/renamed functions with un-updated callers trigger a single continuation nudge before completion.
 - **6-Rung Reuse Ladder, Risky-Logic Test Rule, & `--audit` Whole-Repo Mode (`rules/AGENTS.md`, `agents/executor.md`, `agents/code-reviewer.md`, `skills/code-review/SKILL.md`, `skills/analyze/SKILL.md`, `skills/hud/SKILL.md`)**:
@@ -23,27 +35,23 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 
 ## 0.4.3
 
-*Upstream references: **OMX** `v0.21.46` · **OMC** `v5.7.31` (+ `origin/dev`) · **OMO** `v5.1.61` · **obra/superpowers** `v7.0.2` · **Antigravity 2.0 Plugin & Sidecar Spec***
-
 - **Parent-Workspace `.omagy` Anchoring & Inner-Folder `.omagy` Discovery (`hooks/omagy-hook.mjs`, `sidecars/hud/main.mjs`, `rules/AGENTS.md`)**:
   - Upgraded `stateRoot(root)` so working inside a child subfolder of an opened project (e.g., `"Travels/Summer trip"` inside `"Travels"`) walks upward and anchors `.omagy/` and `omagy_wiki/` at the parent workspace root rather than scattering `.omagy/` folders into child directories, while preserving isolated sub-projects that already own `.omagy` or `.git`.
   - Added bounded, symlink-safe `discoverOmagyScopes(root, maxDepth = 3, maxDirs = 150)` and wired it into both `loadModeStates()` and the HUD sidecar's `buildHudSnapshot()` + `renderOverview()` so any inner folder that already has `.omagy/` (e.g., `"Travels/Summer trip/.omagy"` when `"Travels"` has no `.omagy/`) is automatically discovered, labeled (`Scope: Summer trip`), and aggregated across active modes, `ultragoal`, `team` boards, `deep-interview`, `reviews`, `deep-research`, `benchmarks`, `visual-ralph`, and `loft` prototypes.
   - Updated `isPathInsideAllowedOmagy()` (`PreToolUse` planning guard) and `resolveSafeArtifactFile()` (HUD artifact server) to safely allow `<workspaceRoot>/<subpath>/.omagy/...` while rejecting symlinks and `..` traversal.
   - Updated HUD `Overview` tables (`Ultragoal`, `Team Board`, `Workflow Modes`, `Hook Errors`) in `sidecars/hud/main.mjs` to use `table-layout: fixed; width: 100%;` with 3 balanced columns (`ID` | `Goal` / `Task` + compact subline | `Status`) and `.card { overflow: hidden; min-width: 0; overflow-wrap: anywhere; }` so tables never overflow card borders on resize, and updated `sidecars/hud/sidecar.json` display name to `"Oh My Agy"`.
 - **Hook Runtime Hardening & `check-test-junk` CLI (`hooks/omagy-hook.mjs`)**:
-  - Added `hardenWindowsExeSearch()` (`process.env.NoDefaultCurrentDirectoryInExePath = '1'` on `win32`) in `hooks/omagy-hook.mjs` and `sidecars/hud/main.mjs` (ported from OMX `v0.21.46` `#4002` / `#4003`).
-  - Upgraded `extractGoalBrief` (`goal-brief`) to match `#{2,4}` headings, include child subtasks (`7a`, `7.1` under task `7`), exit with code `4` (`unclosed_code_fence`) when an unclosed fence swallows subsequent task headings, and list up to 5 non-English task-shaped headings when no English `Task`/`Goal` matches; added `-C <dir>` flag support to `review-package` and `goal-brief` (ported from `obra/superpowers` `v7.0.2`).
-  - Added **`check-test-junk <path...> [--json]`** (`checkTestJunk`) scanning JS/TS/Py/Rust/Go test files for 7 AI-slop test smells (`source-grep`, `prose-pin`, `fixed-sleep`, `focused`, `skipped`, `self-compare`, `lower-bound`, suppressible via `check-test-junk: ignore`; ported from OMO `v5.1.54`–`v5.1.55` `#11967`, `#11968`, `#11972`, `#12017`).
-  - Expanded the offline hook selftest from `54` to `57` checks (`T6` skill directory dev-file hygiene from OMC `#4824`, plus `T20`–`T22`) and HUD selftest with `H9` inner-folder `.omagy` discovery verification.
+  - Added `hardenWindowsExeSearch()` (`process.env.NoDefaultCurrentDirectoryInExePath = '1'` on `win32`) in `hooks/omagy-hook.mjs` and `sidecars/hud/main.mjs`.
+  - Upgraded `extractGoalBrief` (`goal-brief`) to match `#{2,4}` headings, include child subtasks (`7a`, `7.1` under task `7`), exit with code `4` (`unclosed_code_fence`) when an unclosed fence swallows subsequent task headings, and list up to 5 non-English task-shaped headings when no English `Task`/`Goal` matches; added `-C <dir>` flag support to `review-package` and `goal-brief`.
+  - Added **`check-test-junk <path...> [--json]`** (`checkTestJunk`) scanning JS/TS/Py/Rust/Go test files for 7 AI-slop test smells (`source-grep`, `prose-pin`, `fixed-sleep`, `focused`, `skipped`, `self-compare`, `lower-bound`, suppressible via `check-test-junk: ignore`).
+  - Expanded the offline hook selftest from `54` to `57` checks (`T6` skill directory dev-file hygiene, plus `T20`–`T22`) and HUD selftest with `H9` inner-folder `.omagy` discovery verification.
 - **Rules, Skills & Specialist Agents Sync (`rules/AGENTS.md`, `skills/*`, `agents/*`)**:
-  - Added OMX `v0.21.46` (`#3989`, `#3997`) assignment-scoped role overlays (read-only/advisory roles never edit production code or require build/test runs) and atomic revertible-behavior commit + dirty-worktree rebase safety rules (`AGENTS.md`, `architect.md`, `executor.md`, `pr/SKILL.md`).
-  - Added OMO `v5.1.54`–`v5.1.55` (`#11967`, `#11968`, `#12017`) 4-Question Authoring Gate, `R / F / C / D` test classification, and 2×2 Candidate-vs-Keeper Mutation Proof to `ai-slop-cleaner/SKILL.md` and `agents/test-engineer.md`.
-  - Added OMO `v5.1.59` (`#12040`) **Evaluation Integrity Audit (`eval-integrity`)** (7 evaluation roles, independent ground-truth check, 8 independence failure probes, and `**Verdict: PASS | FAIL | INCONCLUSIVE**` badge surfaced in HUD `Overview`) to `performance-goal/SKILL.md`, `autoresearch/SKILL.md`, and `deep-research/SKILL.md`.
-  - Added `obra/superpowers` `v7.0.2` (`#2644`) open-"why"-first Socratic interview tuning and process-proposal rules to `deep-interview/SKILL.md` and `plan/SKILL.md`, plus OMC `v5.7.28` (`#4768`) `worktree_unmerged` worker branch preservation to `team/SKILL.md` and `pr/SKILL.md`.
+  - Added assignment-scoped role overlays (read-only/advisory roles never edit production code or require build/test runs) and atomic revertible-behavior commit + dirty-worktree rebase safety rules (`AGENTS.md`, `architect.md`, `executor.md`, `pr/SKILL.md`).
+  - Added 4-Question Authoring Gate, `R / F / C / D` test classification, and 2×2 Candidate-vs-Keeper Mutation Proof to `ai-slop-cleaner/SKILL.md` and `agents/test-engineer.md`.
+  - Added **Evaluation Integrity Audit (`eval-integrity`)** (7 evaluation roles, independent ground-truth check, 8 independence failure probes, and `**Verdict: PASS | FAIL | INCONCLUSIVE**` badge surfaced in HUD `Overview`) to `performance-goal/SKILL.md`, `autoresearch/SKILL.md`, and `deep-research/SKILL.md`.
+  - Added open-"why"-first Socratic interview tuning and process-proposal rules to `deep-interview/SKILL.md` and `plan/SKILL.md`, plus `worktree_unmerged` worker branch preservation to `team/SKILL.md` and `pr/SKILL.md`.
 
 ## 0.4.2
-
-*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
 
 - **5-Tab HUD Consolidation with Doctor Diagnostics in Overview (`sidecars/hud/main.mjs`, `skills/hud/SKILL.md`, `rules/AGENTS.md`)**:
   - Consolidated `ALLOWED_VIEWS` from 6 tabs down to **5 high-signal tabs**: `Overview`, `Workflows`, `Skills`, `Subagents`, and `Wiki` (normalizing `?view=doctor` and legacy `?view=` parameters to `overview`).
@@ -61,8 +69,6 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 
 ## 0.4.1
 
-*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
-
 - **Streamlined 6-Tab HUD Sidecar with Auto-Discovered Catalogs (`sidecars/hud/main.mjs`, `skills/hud/SKILL.md`, `omagy_wiki/hud-sidecar-architecture.md`)**:
   - Consolidated `ALLOWED_VIEWS` from 10 tabs down to **6 high-signal tabs**: `Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`, and `Doctor` (normalizing legacy `?view=` parameters to `overview`).
   - Folded active/recent **Ultragoal**, **Deep Interview**, **Team Board**, and **Reviews & Deep Research** status cards directly into `Overview` while preserving all snapshot keys in `buildHudSnapshot()` for backward compatibility.
@@ -77,14 +83,12 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 
 ## 0.4.0
 
-*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **obra/superpowers** `v7.0.1` · **Antigravity 2.0 Plugin & Sidecar Spec***
-
 - **Hook Runtime CLI Helpers, `transcriptPath` Routing & Shell Wrapper Hardening (`hooks/omagy-hook.mjs`, `hooks/run.sh`, `sidecars/hud/run.sh`, `sidecars/hud/main.mjs`)**:
   - Added **`review-package <cwd> <baseRef> [headRef] [outPath]`** (`buildReviewPackage`): validates `git merge-base --is-ancestor <baseRef> <headRef>` and `git rev-list --count <baseRef>..<headRef> > 0` (exiting with code `3` on an empty or non-ancestor commit range so callers never review a 0-commit diff) and writes a single self-contained review artifact (`.omagy/artifacts/reviews/review-pkg-<base>-<head>.md`) with commit log, diffstat, and `-U10` unified diff.
   - Added **`goal-brief <sourcePath> <goalId|taskNumber> [outPath]`** (`extractGoalBrief`): extracts a single goal from `.omagy/ultragoal/goals.json` or a fence-aware `### Task <N>` / `### Goal <ID>` section from a `.omagy/plans/*.md` file into `.omagy/ultragoal/briefs/goal-<id>.md` so worker subagents receive lean task context without loading the full plan.
   - Persisted `transcriptPath` and `artifactDirectoryPath` in `$TMPDIR/oh-my-agy/<conversationId>.routing.json` across `SessionStart` and `PreInvocation`, and added `lastUserInput` hook payload fallback in `lastUserMessage()` per the Antigravity Hooks Spec.
   - Replaced external `dirname`, `ls | sort -V | tail`, and `cat` calls in `hooks/run.sh` and `sidecars/hud/run.sh` with pure POSIX parameter expansion (`${0%/*}`), portable glob comparison, and Windows Node path fallbacks, and updated `sidecars/hud/main.mjs` to accept both `selftest` and `--selftest`.
-- **Tactical Discipline Gates Across 8 Role Subagents (`agents/*.md`, adapted from `obra/superpowers` `v7.0.1`)**:
+- **Tactical Discipline Gates Across 8 Role Subagents (`agents/*.md`)**:
   - `test-engineer.md`: added **Pre-Test Gate (`Name the Break`)**, **Pre-Mock Gate (`Exercise the Real Thing`)**, **Mutation Check**, **Full-Suite Rule**, and condition-based `waitFor` polling over arbitrary `setTimeout`/`sleep`.
   - `debugger.md`: added **Multi-Component Boundary Instrumentation**, **Backward Call-Stack Tracing (`console.error(new Error().stack)`)**, **`find-polluter` Bisection** for state-polluting tests, **4-Layer Defense-in-Depth Validation** (Entry Point -> Business Logic -> Environment Guard -> Debug Instrumentation), and **Condition-Based Waiting**.
   - `verifier.md`: added **Anti-Hedging & Anti-Rationalization Gate** (rejecting `should`, `probably`, `seems to`) and the **Red-Green Regression Verification Rule** (`Write test -> Run (PASS) -> Revert fix -> Run (MUST FAIL) -> Restore fix -> Run (PASS)`).
@@ -106,8 +110,6 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 
 ## 0.3.4
 
-*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52` · **Antigravity 2.0 Plugin & Sidecar Spec***
-
 - **Auxiliary Pane UI Extension (`sidecars/hud/` & `sidecar://oh-my-agy/hud/`)**:
   - Added `sidecars/hud/sidecar.json`, `sidecars/hud/run.sh`, and `sidecars/hud/main.mjs` (`buildHudSnapshot`, `createHudServer`, `resolveSafeArtifactFile`) exposing a single, zero-dependency, strictly read-only Auxiliary Pane status & artifact board (`SIDECAR_UI_ENTRYPOINT_AUX_PANE`, `sidecar-id: oh-my-agy/hud`) with 10 internal tabs (`Overview`, `Ultragoal`, `Team DAG`, `Interview` ambiguity/readiness radar, `Reviews` Ralplan/Hyperplan/Code-Review gates, `Benchmarks` performance checkpoints & Autoresearch claim tags, `Visual Ralph` Reference vs. Current opacity overlay comparator, `Loft` full-height prototype viewer, `Wiki` page reader & lint explorer, and `Doctor` hook/routing diagnostics), live host `theme-change` CSS variable and `workspace-change` URI syncing, `X-Sidecar-Token` / `?token=` authentication, path-traversal-safe `/api/artifact` serving, standalone secret redaction, and an offline `selftest`.
   - Wired `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` chat pills (per Antigravity's `ui-plugin-navigation` skill) and `[oh-my-agy](customization://oh-my-agy)` settings links across `rules/AGENTS.md`, `$hud`, `$autopilot`, `$ultragoal`, `$team`, `$deep-interview`, `$ralplan`, `$code-review`, `$performance-goal`, `$autoresearch`, `$visual-ralph`, `$loft`, `$wiki`, `$doctor`, and `$omagy-setup`, plus `generative_ui` `<agent-embed>` guidance in `$loft`.
@@ -121,85 +123,77 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 
 ## 0.3.3
 
-*Upstream references: **OMX** `v0.21.43` · **OMC** `v5.7.22` · **OMO** `v5.1.52`*
-
-- **Hooks (`hooks/omagy-hook.mjs`, adapted from OMX `v0.21.38`–`v0.21.43`, OMC `v5.7.20`–`v5.7.22`, & OMO `v5.1.50`–`v5.1.52`)**:
-  - **Time-Boxed Expiry & Standalone Secret Redaction in Wiki / Agreements / Subdir Injection** (`redactSecrets`, `filterAndRedactWikiLines`, `loadWikiSummary`, `discoverSubdirAgents`, from OMO `v5.1.52` `#11458` & `#11556`): skips wiki pages/files whose YAML frontmatter has an expired `expires: <ISO 8601>` and skips individual lines carrying an expired `[expires: YYYY-MM-DD...]` or `(expires: ...)` without deleting files on disk; masks standalone secret tokens (`sk-...`, `gh[pousr]_...`, `github_pat_...`, `glpat-...`, `xox[baprs]-...`, `AKIA...`, and 3-part JWTs `eyJ...`) before injecting into `SessionStart` or `PreInvocation` context.
-  - **Verification Receipt Guard Against No-Op Output Commands** (`isRealVerificationCommand` in `validateCompletionEvidence`, from OMO `v5.1.52` `#11542`): strips leading `KEY=VAL` assignments and passthrough wrappers (`env`, `time`, `nice`, `nohup`, `command`) and rejects no-op output binaries (`echo`, `printf`, `true`, `:`, `rem`, `noop`) from earning verification receipts in `verify-evidence`.
-  - **Configurable Custom Quality Gates Validator** (`validateQualityGates` & CLI subcommand `quality-gates [cwd] [stage]`, from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`): validates `.omagy/config.json` (or `.omx-config.json`) `qualityGates` for `deep-interview`, `ralplan`, and `code-review`; returns a strict no-op (`gates: []`) when unconfigured; normalizes string entries to `{ skill, mode: "blocking", model: "inherit" }`; and rejects reserved workflow-controller skills (`deep-interview`, `ralplan`, `code-review`, `ai-slop-cleaner`, `autopilot`, `ultragoal`, `team`, `plan`, `ultraqa`, `cancel`, `verification`) to prevent self-recursion as well as sunset skills (`ralph`, `ultrawork`, `pipeline`, `ecomode`, `swarm`).
+- **Hooks (`hooks/omagy-hook.mjs`)**:
+  - **Time-Boxed Expiry & Standalone Secret Redaction in Wiki / Agreements / Subdir Injection** (`redactSecrets`, `filterAndRedactWikiLines`, `loadWikiSummary`, `discoverSubdirAgents`): skips wiki pages/files whose YAML frontmatter has an expired `expires: <ISO 8601>` and skips individual lines carrying an expired `[expires: YYYY-MM-DD...]` or `(expires: ...)` without deleting files on disk; masks standalone secret tokens (`sk-...`, `gh[pousr]_...`, `github_pat_...`, `glpat-...`, `xox[baprs]-...`, `AKIA...`, and 3-part JWTs `eyJ...`) before injecting into `SessionStart` or `PreInvocation` context.
+  - **Verification Receipt Guard Against No-Op Output Commands** (`isRealVerificationCommand` in `validateCompletionEvidence`): strips leading `KEY=VAL` assignments and passthrough wrappers (`env`, `time`, `nice`, `nohup`, `command`) and rejects no-op output binaries (`echo`, `printf`, `true`, `:`, `rem`, `noop`) from earning verification receipts in `verify-evidence`.
+  - **Configurable Custom Quality Gates Validator** (`validateQualityGates` & CLI subcommand `quality-gates [cwd] [stage]`): validates `.omagy/config.json` `qualityGates` for `deep-interview`, `ralplan`, and `code-review`; returns a strict no-op (`gates: []`) when unconfigured; normalizes string entries to `{ skill, mode: "blocking", model: "inherit" }`; and rejects reserved workflow-controller skills (`deep-interview`, `ralplan`, `code-review`, `ai-slop-cleaner`, `autopilot`, `ultragoal`, `team`, `plan`, `ultraqa`, `cancel`, `verification`) to prevent self-recursion as well as sunset skills (`ralph`, `ultrawork`, `pipeline`, `ecomode`, `swarm`).
   - Expanded offline hook selftest suite from `37` to `42` checks (`hooks/omagy-hook.mjs selftest`).
 - **Configurable Quality Gates & No-Questions Override (`rules/AGENTS.md`, `skills/deep-interview/`, `skills/ralplan/`, `skills/code-review/`)**:
-  - Added **Configurable Custom Quality Gates** across `$deep-interview`, `$ralplan`, and `$code-review` (`qualityGates["deep-interview"]`, `qualityGates.ralplan`, `qualityGates["code-review"]`, from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`): executes user-configured blocking or advisory skill gates before stage exit and persists structured results in `.omagy/state/`.
-  - Added **No-Questions Override** (`rules/AGENTS.md`, `skills/deep-interview/SKILL.md`, from OMO `v5.1.52` `#11556`): when the user says `"don't ask"`, `"no questions"`, `"do not ask me"`, or `"hands-off"`, skips `ask_question` even on `UNCLEAR` forks, adopts best-practice defaults, and records them under `## Adopted Defaults`.
-- **Impeccable Craft Floor & `320px` Reflow (`skills/design/`, `skills/visual-ralph/`, `agents/designer.md`, `agents/vision.md`, adapted from OMO `v5.1.52` `#11811` & `#11820`)**:
+  - Added **Configurable Custom Quality Gates** across `$deep-interview`, `$ralplan`, and `$code-review` (`qualityGates["deep-interview"]`, `qualityGates.ralplan`, `qualityGates["code-review"]`): executes user-configured blocking or advisory skill gates before stage exit and persists structured results in `.omagy/state/`.
+  - Added **No-Questions Override** (`rules/AGENTS.md`, `skills/deep-interview/SKILL.md`): when the user says `"don't ask"`, `"no questions"`, `"do not ask me"`, or `"hands-off"`, skips `ask_question` even on `UNCLEAR` forks, adopts best-practice defaults, and records them under `## Adopted Defaults`.
+- **Impeccable Craft Floor & `320px` Reflow (`skills/design/`, `skills/visual-ralph/`, `agents/designer.md`, `agents/vision.md`)**:
   - Added the **Craft Floor** (`A13` spacing rhythm `>=1.5x` heading top/bottom and `>=2x` group gap; `B8` heading scale `>=1.25x`, display `<=6rem`, tracking `>=-0.04em`; `E7` tinted secondary text on coloured surfaces and y-offset shadows; `F8` themed `::selection`, `caret-color`, scrollbars, `:focus-visible`, `text-underline-offset`, `tabular-nums`; `F9` generated-scaffold bans) and the **`320px` `WCAG 1.4.10/1.4.12` reflow check** across `$design`, `$visual-ralph`, `designer`, and `vision`.
 - **Execution, Wiki, HUD, Team, Cancel & Doctor Hardening (`skills/ultragoal/`, `skills/wiki/`, `skills/hud/`, `skills/team/`, `skills/cancel/`, `skills/doctor/`)**:
-  - `$ultragoal`: preserved non-terminal `"blocked"` (`[~]`) checkpoints when verification is genuinely unavailable in the environment without falsely marking the overall run `complete` (from OMX `v0.21.43` `#3964`), and bounded final review/closeout checks on resumed runs to changes since the latest `started` ledger edge (from OMC `v5.7.20` `#4650`).
-  - `$wiki`: documented `expires: <ISO 8601>` time-boxed expiry tags (`[expires: YYYY-MM-DD]` and frontmatter `expires:`) and standalone secret redaction during prompt injection and `$wiki lint` (from OMO `v5.1.52` `#11458` & `#11556`).
-  - `$hud` & `$team`: enforced strict read-only status inspection in `$hud` (never mutates `.omagy/`, from OMX `v0.21.42` `#3963`), added fallback to `.omagy/state/team/<team-slug>/manifest.json` when `team-state.json` is absent or inactive, and added a 20-minute completed-team HUD display window (from OMC `v5.7.21` `#4661`/`#4662`).
-  - `$cancel`: scoped missing-state reporting to the current session's active modes (`owner_conversation_id` / `.omagy/state/sessions/<conversationId>/`) and capped absent-file summaries with `... and N more` (from OMC `v5.7.20` `#4654`).
-  - `$doctor`: updated selftest expectation to `42/42`, added `.omagy/config.json` `qualityGates` check, and added agent frontmatter key validation against unsupported `skills:` arrays in `agents/*.md` (from OMC `v5.7.20` `#4657`).
+  - `$ultragoal`: preserved non-terminal `"blocked"` (`[~]`) checkpoints when verification is genuinely unavailable in the environment without falsely marking the overall run `complete`, and bounded final review/closeout checks on resumed runs to changes since the latest `started` ledger edge.
+  - `$wiki`: documented `expires: <ISO 8601>` time-boxed expiry tags (`[expires: YYYY-MM-DD]` and frontmatter `expires:`) and standalone secret redaction during prompt injection and `$wiki lint`.
+  - `$hud` & `$team`: enforced strict read-only status inspection in `$hud` (never mutates `.omagy/`), added fallback to `.omagy/state/team/<team-slug>/manifest.json` when `team-state.json` is absent or inactive, and added a 20-minute completed-team HUD display window.
+  - `$cancel`: scoped missing-state reporting to the current session's active modes (`owner_conversation_id` / `.omagy/state/sessions/<conversationId>/`) and capped absent-file summaries with `... and N more`.
+  - `$doctor`: updated selftest expectation to `42/42`, added `.omagy/config.json` `qualityGates` check, and added agent frontmatter key validation against unsupported `skills:` arrays in `agents/*.md`.
 
 ## 0.3.2
 
-*Upstream references: **OMX** `v0.21.37` · **OMC** `v5.7.19` · **OMO** `v5.1.49`*
-
-- **Hooks (`hooks/omagy-hook.mjs`, adapted from OMX `v0.21.35`–`v0.21.37`, OMC `v5.7.12`–`v5.7.19`, & OMO `v5.1.45`–`v5.1.49`)**:
-  - **Skill Detection Sanitization & Leading-Invocation Priority** (`stripQuotedAndNegatedRegions`, `isInformationalHelpPrompt`, `detectSkills`, from OMC `v5.7.13` `#4551`/`#4553`/`#4564` & OMO `v5.1.45` `#10822`): strips fenced code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), while preserving direct leading `$skill` invocations on reference-heavy prompts.
-  - **Multi-Target, Rename/Move, `apply_patch` & Fail-Closed Planning Write Guard** (`extractToolTargets`, `isPathInsideAllowedOmagy`, `FILE_MUTATION_TOOLS_RE` in `preToolUse`, from OMO `v5.1.49` `#11369`): inspects all target paths across `Path`, `TargetFile`, `filePath`, rename/move destinations, `edits[]`, and `apply_patch` (`*** Add/Update/Delete File:` and `*** Move to:`) headers; blocks any target outside `.omagy/` or `omagy_wiki/`; and fails closed (`force_ask`) when an explicit file-mutation tool omits its path argument while planning is active.
-  - **Human Working-Agreement Overwrite Guard** (`agreements-guard` in `preToolUse`, from OMO `v5.1.47` `#11112`): escalates full overwrites of `omagy_wiki/agreements.md` that would delete existing `[by:human]` entries.
-  - **Child-Project `omagy_wiki/` Discovery** (`discoverSubdirAgents`, from OMO `v5.1.45`–`v5.1.47` `#10921`/`#11165`): when touched file paths cross into a nested subpackage with its own `omagy_wiki/agreements.md` or `omagy_wiki/index.md`, injects a bounded child-wiki digest once per conversation alongside nested `AGENTS.md` files.
-  - **Environment Root Overrides & Structured Hook Error Logging** (`OMAGY_ROOT`, `OMAGY_STATE_ROOT`, `omagyLogsDir`, from OMX `v0.21.36` `#3909`): honors `OMAGY_ROOT` (precedence 1) and `OMAGY_STATE_ROOT` (precedence 2) for `.omagy/` state resolution and appends uncaught hook error records to `.omagy/logs/hook-errors.jsonl` when opted in, while keeping hook execution fail-open (`exit 0`).
-  - **Strict Whole-Integer Numeric Validation** (`intOr`, from OMC `v5.7.12`–`v5.7.15` `#4543`/`#4599`/`#4600`): validates `OMAGY_STALE_MS`, `OMAGY_MAX_STOP_NUDGES`, and notification `cooldownSeconds` with `/^\d+$/` + `Number.isSafeInteger` so partial strings (`15abc`) or floats (`1.5`) fall back cleanly.
-  - **Permission-Denial / User-Refusal Finality in `Stop` Continuation** (from OMO `v5.1.49` `#11371`): continuation prompts now explicitly instruct the agent that a permission denial or user refusal is final for that operation and must be marked `blocked` rather than retried via an alternative tool, command, path, or host.
+- **Hooks (`hooks/omagy-hook.mjs`)**:
+  - **Skill Detection Sanitization & Leading-Invocation Priority** (`stripQuotedAndNegatedRegions`, `isInformationalHelpPrompt`, `detectSkills`): strips fenced code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), while preserving direct leading `$skill` invocations on reference-heavy prompts.
+  - **Multi-Target, Rename/Move, `apply_patch` & Fail-Closed Planning Write Guard** (`extractToolTargets`, `isPathInsideAllowedOmagy`, `FILE_MUTATION_TOOLS_RE` in `preToolUse`): inspects all target paths across `Path`, `TargetFile`, `filePath`, rename/move destinations, `edits[]`, and `apply_patch` (`*** Add/Update/Delete File:` and `*** Move to:`) headers; blocks any target outside `.omagy/` or `omagy_wiki/`; and fails closed (`force_ask`) when an explicit file-mutation tool omits its path argument while planning is active.
+  - **Human Working-Agreement Overwrite Guard** (`agreements-guard` in `preToolUse`): escalates full overwrites of `omagy_wiki/agreements.md` that would delete existing `[by:human]` entries.
+  - **Child-Project `omagy_wiki/` Discovery** (`discoverSubdirAgents`): when touched file paths cross into a nested subpackage with its own `omagy_wiki/agreements.md` or `omagy_wiki/index.md`, injects a bounded child-wiki digest once per conversation alongside nested `AGENTS.md` files.
+  - **Environment Root Overrides & Structured Hook Error Logging** (`OMAGY_ROOT`, `OMAGY_STATE_ROOT`, `omagyLogsDir`): honors `OMAGY_ROOT` (precedence 1) and `OMAGY_STATE_ROOT` (precedence 2) for `.omagy/` state resolution and appends uncaught hook error records to `.omagy/logs/hook-errors.jsonl` when opted in, while keeping hook execution fail-open (`exit 0`).
+  - **Strict Whole-Integer Numeric Validation** (`intOr`): validates `OMAGY_STALE_MS`, `OMAGY_MAX_STOP_NUDGES`, and notification `cooldownSeconds` with `/^\d+$/` + `Number.isSafeInteger` so partial strings (`15abc`) or floats (`1.5`) fall back cleanly.
+  - **Permission-Denial / User-Refusal Finality in `Stop` Continuation**: continuation prompts now explicitly instruct the agent that a permission denial or user refusal is final for that operation and must be marked `blocked` rather than retried via an alternative tool, command, path, or host.
   - Expanded offline hook selftest suite from `30` to `37` checks (`hooks/omagy-hook.mjs selftest`).
-- **Design & Visual QA (`skills/design/`, `skills/visual-ralph/`, `agents/designer.md`, `agents/vision.md`, adapted from OMO `v5.1.45`–`v5.1.49`)**:
-  - Added **Per-Screen Brief & Subtraction Contract** (`Primary action`, `Information priorities 1-3`, `Left out on purpose`, `Required content`, `Data shape -> component`), mandatory `Layout:` line with explicit `scroll owner` (`window` or one named container; never nested vertical scrollbars), and **Draft Guard** anti-slop rules (from OMO `#10889`, `#11044`, `#11056`, `#11160`, `#11284`, `#11375`).
-  - Added same-origin `llms.txt` discovery (`robots.txt` disallow wins; `<= 16 KiB` cap) for live URL references in `$design` and `$visual-ralph` (from OMO `#11197`).
-  - Added **Pre-edit Baseline Mode** (Before/After comparison without requiring an external mockup), `A12` scroll-owner DOM probe, `B7` required-content check, and a bounded 2–3 round visual QA fix loop in `$visual-ralph` and `vision` (from OMO `#10913`, `#10970`, `#11056`, `#11284`).
-- **Research, Deep-Interview & Wiki Guardrails (`skills/deep-interview/`, `skills/autoresearch/`, `skills/best-practice-research/`, `skills/wiki/`, adapted from OMO `v5.1.47`–`v5.1.48`)**:
-  - Added locked `## Fidelity` contract (`as of`, `meaning check`, `source floor`, `derived numbers`) in `$deep-interview --autoresearch`, plus `[VERIFIED]` / `[DERIVED]` / `[ASSUMED]` claim-kind tags, meaning-drift check, and text-only polish-pass guard in `$autoresearch` and `$best-practice-research` (from OMO `#11108`, `#11196`).
-  - Updated `$wiki` with `[by:human]` vs `[by:agent]` working-agreement preservation, child-project `omagy_wiki/` discovery, and secret-reference exclusion rules (`process.env.X`, `$VAR`, `{{slot}}`, `[FILTERED]`, bare `Bearer`, `null`/`example` placeholders) during `$wiki lint` (from OMO `#10921`, `#11112`, `#11165`).
+- **Design & Visual QA (`skills/design/`, `skills/visual-ralph/`, `agents/designer.md`, `agents/vision.md`)**:
+  - Added **Per-Screen Brief & Subtraction Contract** (`Primary action`, `Information priorities 1-3`, `Left out on purpose`, `Required content`, `Data shape -> component`), mandatory `Layout:` line with explicit `scroll owner` (`window` or one named container; never nested vertical scrollbars), and **Draft Guard** anti-slop rules.
+  - Added same-origin `llms.txt` discovery (`robots.txt` disallow wins; `<= 16 KiB` cap) for live URL references in `$design` and `$visual-ralph`.
+  - Added **Pre-edit Baseline Mode** (Before/After comparison without requiring an external mockup), `A12` scroll-owner DOM probe, `B7` required-content check, and a bounded 2–3 round visual QA fix loop in `$visual-ralph` and `vision`.
+- **Research, Deep-Interview & Wiki Guardrails (`skills/deep-interview/`, `skills/autoresearch/`, `skills/best-practice-research/`, `skills/wiki/`)**:
+  - Added locked `## Fidelity` contract (`as of`, `meaning check`, `source floor`, `derived numbers`) in `$deep-interview --autoresearch`, plus `[VERIFIED]` / `[DERIVED]` / `[ASSUMED]` claim-kind tags, meaning-drift check, and text-only polish-pass guard in `$autoresearch` and `$best-practice-research`.
+  - Updated `$wiki` with `[by:human]` vs `[by:agent]` working-agreement preservation, child-project `omagy_wiki/` discovery, and secret-reference exclusion rules (`process.env.X`, `$VAR`, `{{slot}}`, `[FILTERED]`, bare `Bearer`, `null`/`example` placeholders) during `$wiki lint`.
 - **Team, Setup, Doctor & Skill Management (`skills/team/`, `skills/omagy-setup/`, `skills/doctor/`, `skills/skill/`, `agents/executor.md`, `agents/team-worker.md`)**:
-  - `$team`, `executor`, `team-worker`, and `rules/AGENTS.md`: enforced permission-denial / user-refusal finality rule (from OMO `v5.1.49` `#11371`).
-  - `$team`: hardened `git status --porcelain` parsing (`.trimEnd()` instead of `.trim()`) and unmerged conflict detection across all 7 git unmerged porcelain prefixes (`DD|AU|UD|UA|DU|AA|UU`, from OMC `v5.7.16` `#4607`/`#4608`).
-  - `$omagy-setup` & `$doctor`: added symlink-safe copy (`rm -f` on existing/dangling symlinks before `cp -R`, from OMC `v5.7.19` `#4631`) and manifest version consistency check against `CHANGELOG.md` (from OMX `v0.21.37` `#3923`).
-  - `$skill`: added project skill symlink boundary check (`realpath` within canonical project root, from OMO `v5.1.45` `#10716`) and bytecode/test-cache exclusion (`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `*.pyc`, from OMO `v5.1.49` `#11376`/`#11377`).
+  - `$team`, `executor`, `team-worker`, and `rules/AGENTS.md`: enforced permission-denial / user-refusal finality rule.
+  - `$team`: hardened `git status --porcelain` parsing (`.trimEnd()` instead of `.trim()`) and unmerged conflict detection across all 7 git unmerged porcelain prefixes (`DD|AU|UD|UA|DU|AA|UU`).
+  - `$omagy-setup` & `$doctor`: added symlink-safe copy (`rm -f` on existing/dangling symlinks before `cp -R`) and manifest version consistency check against `CHANGELOG.md`.
+  - `$skill`: added project skill symlink boundary check (`realpath` within canonical project root) and bytecode/test-cache exclusion (`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`, `*.pyc`).
 
 ## 0.3.1
 
-*Upstream references: **OMX** `v0.21.34` · **OMC** `v5.7.11` · **OMO** `v5.1.44`*
-
-- **Hooks (`omagy-hook.mjs`, adapted from OMX `v0.21.31`–`v0.21.34` & OMO `v5.1.44`)**:
-  - Added **Working-Agreement Ledger** auto-injection (`omagy_wiki/agreements.md` / `omx_wiki/agreements.md`) ahead of `index.md` on `SessionStart` and `PreInvocation`.
+- **Hooks (`omagy-hook.mjs`)**:
+  - Added **Working-Agreement Ledger** auto-injection (`omagy_wiki/agreements.md`) ahead of `index.md` on `SessionStart` and `PreInvocation`.
   - Added **Hierarchical Subdirectory `AGENTS.md` Discovery** (`discoverSubdirAgents`) on `PreInvocation`, injecting unseen nested `AGENTS.md` files along touched workspace paths once per conversation.
   - Added **`write-existing-file-guard`** in `PreToolUse`, escalating full-file `Overwrite: true` calls on non-empty existing source files that have not been read in the current session.
-  - Added **Subagent Prompt & Hook Isolation** (`isSubagentPayload`, from OMX `codex-native-hook.ts`) so delegated subagent prompts do not trigger leader `$skill` routing on quoted skill tokens and are not hijacked by unowned parent `.omagy/state/*-state.json` files.
-  - Added **Canonical Scope Root & Symlink Escape Guards** (`canonicalizePath`, `hasSymlinkSegment`, and `fs.lstatSync` checks in `readStateDir` and `preToolUse`, from OMX `v0.21.31`–`v0.21.32`) to block symlinked state files and symlink escapes out of `.omagy/` or `omagy_wiki/` during planning/overwrite guards.
-  - Added **Crash-Resilient JSONL Ledger Helpers** (`append-jsonl` and `read-jsonl` CLI subcommands, from OMX `v0.21.33` PR #3893) that prepend `\n` when existing non-empty `.jsonl` files lack a trailing newline and skip corrupted partial lines on read.
+  - Added **Subagent Prompt & Hook Isolation** (`isSubagentPayload`) so delegated subagent prompts do not trigger leader `$skill` routing on quoted skill tokens and are not hijacked by unowned parent `.omagy/state/*-state.json` files.
+  - Added **Canonical Scope Root & Symlink Escape Guards** (`canonicalizePath`, `hasSymlinkSegment`, and `fs.lstatSync` checks in `readStateDir` and `preToolUse`) to block symlinked state files and symlink escapes out of `.omagy/` or `omagy_wiki/` during planning/overwrite guards.
+  - Added **Crash-Resilient JSONL Ledger Helpers** (`append-jsonl` and `read-jsonl` CLI subcommands) that prepend `\n` when existing non-empty `.jsonl` files lack a trailing newline and skip corrupted partial lines on read.
   - Added `$handoff` skill routing (`30` selftests passing).
-- **New Skill (`skills/handoff/`, adapted from OMO `v5.1.44`)**:
+- **New Skill (`skills/handoff/`)**:
   - `$handoff`: generates a self-contained session continuation artifact (`.omagy/artifacts/handoff-<slug>-<UTC>.md` and `handoff-latest.md`) with objective, verified work, active `.omagy/state/` pointers, adopted defaults, and a copy-paste resume prompt before `/compact` or a fresh session.
-- **Planning, Execution & QA Upgrades (adapted from OMX `v0.21.34` & OMO `v5.1.44`)**:
-  - `$team`, `$cancel` & `rules/AGENTS.md`: added **Worktree / Branch Preservation on Shutdown, Kill, or Cancel** (from OMX `v0.21.34` PR #3896) — prefers `Workspace: "share"` over `"branch"`, preserves unmerged commits (`git merge-base --is-ancestor`), modified/untracked/ignored files, and tracked/staged `.omagy/evidence/` before `manage_subagents kill` or `git worktree remove`.
+- **Planning, Execution & QA Upgrades**:
+  - `$team`, `$cancel` & `rules/AGENTS.md`: added **Worktree / Branch Preservation on Shutdown, Kill, or Cancel** — prefers `Workspace: "share"` over `"branch"`, preserves unmerged commits (`git merge-base --is-ancestor`), modified/untracked/ignored files, and tracked/staged `.omagy/evidence/` before `manage_subagents kill` or `git worktree remove`.
   - `$plan` & `$deep-interview`: added **Explore-First Mandate**, **`CLEAR` vs `UNCLEAR` Intent Routing** (autonomous best-practice defaults on open-ended requests), **Two-Filter + Owner-Decision Survival Gate**, and **Affected User Ideal State & Gap Table**.
   - `$ralplan`: added `--hyperplan` 2-round, 5-persona hostile cross-critique tournament (`skeptic`, `validator`, `researcher`, `architect`, `creative` -> `SURVIVES | WEAKENED | KILLED` distillation).
   - `$ultragoal`, `$performance-goal` & `verifier`: added `"rigor": "light|heavy"` goal tiering, structured `DoneClaim` / `AdversarialVerify` (`failure_class: "none" | "product" | "harness"` so harness repairs do not burn the 3-attempt product circuit breaker), automatic `"blocked"` (`[~]`) dependency cascade, and crash-resilient `append-jsonl` / `read-jsonl` ledger appends.
   - `$ultraqa`: mapped all 9 adversarial classes to explicit trigger conditions (`triggered` vs 1-line `not-applicable` logging).
   - `$analyze` & `$best-practice-research`: added **Intent-vs-Reality Diff** table (`Match | Undocumented | Broken | Stale`).
-  - `$omagy-setup`: added canonical scope root (`realpath`) and symlink/dangling-symlink target checks before modifying `AGENTS.md` or plugin paths (from OMX `v0.21.31`–`v0.21.32`).
+  - `$omagy-setup`: added canonical scope root (`realpath`) and symlink/dangling-symlink target checks before modifying `AGENTS.md` or plugin paths.
   - `$team` & `rules/AGENTS.md`: added **Work-Shape Model Routing** (`Splittable/Quick -> flash`, `Cohesive/Deep -> inherit`, `Ultrabrain -> pro|inherit`) and **DAG Wave Scheduling with Fingerprint-Cached Amendment**.
 - **Documentation**:
   - Added [`HOW_TO_USE.md`](HOW_TO_USE.md) covering all 26 skills (flags, inputs, outputs, examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/`, hooks, and end-to-end recipes.
 
 ## 0.21.33-agy.2
 
-*Upstream references: **OMX** `v0.21.33` · **OMC** `v5.7.11`*
-
 - **Hooks (`omagy-hook.mjs`)**:
   - `PreToolUse` planning guard now inspects `args.Path`/`args.path` (used by `write_file`/`edit_file`) in addition to legacy `TargetFile`, and enforces `autopilot` planning-phase and `ralplan_gate` (`prd-*.md` + `test-spec-*.md`) write guards.
   - Added conversation-scoped state isolation (`owner_conversation_id` and `.omagy/state/sessions/<conversationId>/`) so parallel conversations in the same workspace do not hijack each other's `Stop` or `PreToolUse` hooks.
-  - Added multi-repo parent root anchoring via `.omagy-workspace` / `.omc-workspace` markers (ported from `oh-my-claudecode`).
+  - Added multi-repo parent root anchoring via `.omagy-workspace` markers.
   - Added deterministic `Stop`-hook completion drift guard scanning `git diff` added lines for unconditional `test.skip`, `test.only`, and placeholder `TODO: implement` / `throw new Error("Not implemented")` stubs when claiming completion.
 - **New Skills (`skills/loft/`, `skills/pr/`)**:
   - `$loft`: shape-before-steel throwaway prototyping (pure zero-I/O logic module in an HTML harness or 3 structural UI variants behind a switcher) for settling design forks.
@@ -216,9 +210,9 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 
 ## 0.21.33-agy.1
 
-- `$team`: the leader sets `requires_code_change` from the task wording and the worker role (analysis-only tasks and read-only roles: `false`). Ported from OMX 0.21.33 task-evidence intent.
+- `$team`: the leader sets `requires_code_change` from the task wording and the worker role (analysis-only tasks and read-only roles: `false`).
 - `$team`: the leader validates `.omagy/evidence/task-<id>.json` with file reads; the `verify-evidence` script is now optional.
-- After a server restart, stopped subagents are revived with `send_message` before any replacement is spawned (rules and `$team` recovery). Ported from the OMX 0.21.33 leader contract.
+- After a server restart, stopped subagents are revived with `send_message` before any replacement is spawned (rules and `$team` recovery).
 - `$doctor`: live-hook check via `$TMPDIR/oh-my-agy/<conversationId>.routing.json`; documents that Antigravity's terminal sandbox may deny reading plugin files.
 
 ## 0.21.21-agy.1
@@ -229,11 +223,11 @@ Starting with `0.3.1`, `oh-my-agy` uses standalone semantic versioning (`0.x.y`)
 ## 0.21.18-agy.1
 
 - Stop hook: continuation now triggers on Antigravity's real normal-stop reason `NO_TOOL_CALL` (previously only `model_stop`, so auto-continuation never fired in live sessions).
-- `SessionStart` hook plus a bounded (≤3,500 chars) `omagy_wiki/index.md` summary injected once per conversation. Ported from OMX 0.21.18.
-- Team completion evidence: `.omagy/evidence/task-<id>.json` plus the `verify-evidence` validator. Ported from OMX 0.21.18.
+- `SessionStart` hook plus a bounded (≤3,500 chars) `omagy_wiki/index.md` summary injected once per conversation.
+- Team completion evidence: `.omagy/evidence/task-<id>.json` plus the `verify-evidence` validator.
 - Selftest no longer leaks runtime files into `$TMPDIR/oh-my-agy`; `run.sh` picks the newest nvm Node.
 - Single rules file `rules/AGENTS.md`.
 
 ## 0.21.8-agy.1
 
-- Initial Antigravity port of oh-my-codex 0.21.8: 23 skills, 16 role subagents, the operating contract as `rules/AGENTS.md`, and `PreInvocation` routing, `Stop` continuation and an opt-in `PreToolUse` planning-guard hook.
+- Initial release: 23 skills, 16 role subagents, the operating contract as `rules/AGENTS.md`, and `PreInvocation` routing, `Stop` continuation and an opt-in `PreToolUse` planning-guard hook.

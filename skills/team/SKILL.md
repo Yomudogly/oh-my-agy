@@ -1,6 +1,6 @@
 ---
 name: team
-description: "[oh-my-agy] N coordinated subagent workers on a shared, leader-owned task board, built on Antigravity invoke_subagent/send_message (replaces OMX's tmux team runtime). Use only for an explicit $team request when an approved plan benefits from parallel lanes, task-state tracking, or workspace isolation."
+description: "[oh-my-agy] N coordinated subagent workers on a shared, leader-owned task board, built on Antigravity invoke_subagent/send_message. Use only for an explicit $team request when an approved plan benefits from parallel lanes, task-state tracking, or workspace isolation."
 ---
 
 # Team Skill
@@ -9,7 +9,7 @@ description: "[oh-my-agy] N coordinated subagent workers on a shared, leader-own
 
 Use only for an explicit `$team` request (for example `$team 3:executor "implement X"`), or when an active `$ultragoal`/`$autopilot` plan calls for coordinated parallel lanes. Team is explicit and outside the default workflow. Ordinary work never silently becomes a team run.
 
-OMX launched tmux panes of headless Codex processes with mailbox files. In Antigravity, workers are **subagents**:
+In Antigravity, workers are **subagents**:
 - launch: `invoke_subagent` (several entries in one call run concurrently)
 - coordinate: `send_message` to a worker's conversation ID
 - monitor/stop: `manage_subagents` (`list`, `kill`)
@@ -20,7 +20,7 @@ OMX launched tmux panes of headless Codex processes with mailbox files. In Antig
 - Launch shape: `$team [N:role] "<task>"`. Default role is `team-worker`. Use `executor`, `test-engineer`, `designer`, etc. for specialized lanes. Max **6** concurrent workers.
 - Ground the task first: reuse or create `.omagy/context/{slug}-*.md` (target, evidence, constraints, unknowns, touchpoints). Prefer an approved spec or plan (`.omagy/specs/`, `.omagy/plans/`).
 - Do not launch nested teams. Workers never spawn subagents.
-- **Work-Shape Model Routing (`Splittable` vs `Cohesive`, ported from OmO `ulw-execute` / categories)**:
+- **Work-Shape Model Routing (`Splittable` vs `Cohesive`)**:
   - **Splittable / Quick** (isolated single-file edits, mechanical renames, doc/config updates, targeted lookups): fan out across parallel workers with `Model: "flash"`.
   - **Cohesive / Deep** (multi-file feature slices, shared state/types, stateful debugging): keep together in a single worker with `Model: "inherit"` rather than splitting across workers that would fight over interfaces.
   - **Ultrabrain / Review & Architecture** (`architect`, `critic`, `tracer`, `security-reviewer`): use `Model: "pro"` (or `"inherit"` when the session already runs a frontier reasoning model).
@@ -43,14 +43,16 @@ OMX launched tmux panes of headless Codex processes with mailbox files. In Antig
 ```
 Also write `.omagy/state/team-state.json` (`mode:"team"`, `active:true`, `current_phase:"executing"`, `state.team:"<team>"`).
 
-**DAG Wave Scheduling & Fingerprint-Cached Amendment (ported from OmO `mass-ulw`)**:
-- Tasks form an explicit DAG via `depends_on`. Launch ready waves (`status:"pending"` whose `depends_on` tasks are all `"completed"`), up to 6 concurrent workers per wave.
-- If a task fails or blocks After retries, mark it `"blocked"` and cascade `"blocked"` (`result:"blocked-by:<id>"`) to downstream tasks whose `depends_on` transitively includes `<id>`, while continuing independent branches.
-- When amending a team plan mid-run, recompute each task's `fingerprint` (`title + owned_paths + acceptance + upstream fingerprints`). Any `"completed"` task whose `fingerprint` is unchanged stays `"completed"` and its verified output is reused without re-running.
+- **DAG Wave Scheduling, Capacity Reservation & Fail-Closed Task Validation**:
+  - Tasks form an explicit DAG via `depends_on`. Launch ready waves (`status:"pending"` whose `depends_on` tasks are all `"completed"`), up to 6 concurrent workers per wave.
+  - **One-task-per-worker capacity reservation & rollback**: reserve at most 1 active (`in_progress`) task per worker at a time. If `invoke_subagent` or `send_message` dispatch fails, immediately roll the task's claim back to `status: "pending"` (`worker: null`, `conversation_id: null`) so it is not stranded as a phantom `in_progress` claim.
+  - **Fail-closed task-board integrity**: before scheduling a new wave or declaring completion, validate `.omagy/state/team/<team>/tasks.json` (or run `sh <plugin>/hooks/run.sh validate-team-tasks <workspace> <team>`). Any missing, unreadable, symlinked, or malformed task board is a hard blocker (`team_task_read_failed`) — never treat an unreadable board as "0 pending tasks".
+  - If a task fails or blocks after retries, mark it `"blocked"` and cascade `"blocked"` (`result:"blocked-by:<id>"`) to downstream tasks whose `depends_on` transitively includes `<id>`, while continuing independent branches.
+  - When amending a team plan mid-run, recompute each task's `fingerprint` (`title + owned_paths + acceptance + upstream fingerprints`). Any `"completed"` task whose `fingerprint` is unchanged stays `"completed"` and its verified output is reused without re-running.
 
 Only the leader edits the board. Workers report results in their final message, and the leader transitions status.
 
-**`requires_code_change` default** (ported from OMX 0.21.33 task-evidence intent). Set it explicitly on every task:
+**`requires_code_change` default**. Set it explicitly on every task:
 - `false` when the task is analysis-only: its wording asks to analyze, audit, review, research, explain, compare, or summarize, or it explicitly says not to change code. A report or summary without a named output file also counts as analysis-only.
 - `false` for read-only roles: `explore`, `researcher`, `analyst`, `architect`, `critic`, `code-reviewer`, `security-reviewer`, `verifier`, `vision`.
 - `true` otherwise, for execution roles (`team-worker`, `executor`, `debugger`, `test-engineer`, `designer`) and any task that adds, fixes, changes, or writes a file.
@@ -67,7 +69,7 @@ Only the leader edits the board. Workers report results in their final message, 
    Context: <spec/plan/context paths>
    Verification: <exact commands>
    Constraints: do not edit .omagy/state/**, do not spawn subagents, report conflicts instead of editing outside scope. A permission denial or a refusal by the user is final for what that call was meant to do: never reach that result with another tool, command, path, or host — report TASK <id>: BLOCKED upward immediately.
-   Evidence (when requires_code_change is true): write .omagy/evidence/task-<id>.json with {"team":"<team>","taskId":"<id>","summary":"...","verification":[{"command":"...","result":"passed","output":"..."}],"unverified":[]} (and optional verbose logs to .omagy/evidence/task-<id>-report.md so your reply stays <15 lines) and include EVIDENCE_RECORDED: .omagy/evidence/task-<id>.json on its own line.
+   Evidence (when requires_code_change is true): write .omagy/evidence/task-<id>.json with {"team":"<team>","taskId":"<id>","verdict":"unit-test-verified","verified_head":"<40-char-git-sha>","summary":"...","verification":[{"command":"...","result":"passed","output":"..."}],"unverified":[]} (and optional verbose logs to .omagy/evidence/task-<id>-report.md so your reply stays <15 lines) and include EVIDENCE_RECORDED: .omagy/evidence/task-<id>.json on its own line.
    Report format: TASK <id>: COMPLETED|COMPLETED_WITH_CONCERNS|NEEDS_CONTEXT|FAILED|BLOCKED / Changed files / Verification / EVIDENCE_RECORDED / Concerns or Blockers
    ```
    Record each `conversation_id`, then set `status:"in_progress"`. Surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once when launching the first wave so the user can watch the live DAG board in the Auxiliary Pane.
@@ -75,17 +77,18 @@ Only the leader edits the board. Workers report results in their final message, 
 4. **On each report**: if a worker reports `NEEDS_CONTEXT`, answer via `send_message` to its existing `conversation_id` with the missing interface or file detail. If a worker reports `COMPLETED_WITH_CONCERNS`, evaluate the concern in the leader lane before marking `completed`. If a worker fails/stalls twice on `Model: "flash"` or `"inherit"`, escalate the retry to the next model tier (`flash -> inherit -> pro`). For tasks with `requires_code_change: true`, validate `.omagy/evidence/task-<id>.json` with `read_file` (not the shell). Reject the report unless all of these hold:
    - the file is inside `<workspace>/.omagy/evidence/`, is not a symlink, and is valid JSON of at most 1 MiB;
    - `team` and `taskId` match this task;
-   - `summary` is real text (not `TODO`/`TBD`/`placeholder`/`pending`/`not run`);
-   - `verification` is a non-empty array whose every entry has a real non-echo `command` (`echo`, `printf`, `true`, `:`, and `rem` are rejected even when wrapped in `env`/`time`/`nice`, ported from OMO `v5.1.52` `#11542`), `result: "passed"`, and a real `output`;
+   - `summary` is real text (not `TODO`/`TBD`/`placeholder`/`pending`/`not run`), `verdict` (when present) is one of `VERIFICATION_VERDICTS` (`live-ui-verified | unit-test-verified | type-check-only | enforcement-verified | formally-verified | verifier-blocked | verifier-failed`), and `verified_head` (or `sha`, when present on `requires_code_change: true` tasks) is a valid 7–40 hex commit SHA matching the worker's verified commit;
+   - `verification` is a non-empty array whose every entry has a real non-echo `command` (`echo`, `printf`, `true`, `:`, and `rem` are rejected even when wrapped in `env`/`time`/`nice`), `result: "passed"`, and a real `output`;
    - `unverified` is an array (empty, or listing checks that were not run).
 
-   Then re-run the verification command for anything non-trivial, transition the task to `completed`/`failed`/`blocked` with `result`, and refresh `updated_at`. Launch newly unblocked tasks. When merely inspecting team status (`$hud` or status check), stay strictly read-only and never mutate `tasks.json` or reassign tasks (OMX `v0.21.42` `#3963`).
+   Then re-run the verification command for anything non-trivial, transition the task to `completed`/`failed`/`blocked` with `result`, and refresh `updated_at`. Launch newly unblocked tasks. When merely inspecting team status (`$hud` or status check), stay strictly read-only and never mutate `tasks.json` or reassign tasks.
    (Optional scripted check: `sh <plugin>/hooks/run.sh verify-evidence <workspace> .omagy/evidence/task-<id>.json <team> <id>`. Antigravity's terminal sandbox may deny reading plugin files, in which case it needs `BypassSandbox: true`. The `read_file` check above is the default.)
 5. **Blocked worker**: answer via `send_message` to the same conversation ID rather than spawning a replacement. For a stuck or looping worker, **preserve its work before killing** (since `manage_subagents kill` deletes `"branch"` workspaces): if it ran in `"share"` or `"branch"`, ask it once via `send_message` to commit/report its branch or salvage reachable commits in the leader lane before calling `manage_subagents kill` on that worker only, then set the task `pending` and relaunch with a sharper prompt.
-6. **Integrate & Shutdown Worktree Preservation (ported from OMX 0.21.34 PR #3896 & OMC v5.7.16 #4607/#4608)**:
-   - When workers used `share`/`branch` workspaces, merge their changes into the main workspace and resolve conflicts in the leader lane.
-   - **Porcelain status & unmerged conflict parsing (OMC v5.7.16 #4607/#4608)**: when parsing `git status --porcelain` output, always use `.trimEnd()` (never `.trim()`, which strips the leading status character of the first entry when the index slot is a space, e.g. `" M file"`). Treat all 7 git unmerged two-letter porcelain prefixes (`DD`, `AU`, `UD`, `UA`, `DU`, `AA`, `UU` — including modify/delete `UD`/`DU` and add/unmerged `AU`/`UA`, not just `UU`/`AA`/`DD`) as active merge/rebase conflicts before declaring integration clean.
-   - **Submodule-safe worktree detection & unsaved/unmerged worker work protection (OMC `v5.7.28` `#4768`)**: when checking whether a directory is already a linked git worktree (`git rev-parse --git-dir` vs `--git-common-dir`), also check `[ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ]` so git submodules are never misclassified as linked worktrees. Before removing any worker branch/worktree or killing a worker with `Workspace: "branch"`, verify in the leader lane that (a) the worker's `HEAD` is an ancestor of the leader's `HEAD` (`git merge-base --is-ancestor <workerHead> HEAD`) and has no commits unreachable from non-worker branches/tags/remotes (`worktree_unmerged` guard: `git rev-list --count <workerHead> --not <leaderHead> --tags --remotes` must be `0`), and (b) no unpreserved untracked, ignored, or submodule changes remain (`git status --porcelain --untracked-files=all --ignored --ignore-submodules=none`). Never run `git worktree remove --force` when untracked or unmerged commits exist. If checkpointing or merging fails, retain the worker branch/workspace and team state (`status:"blocked"`, reason `"worktree_unmerged"`) for recovery instead of deleting it. Preserve tracked or staged `.omagy/evidence` files during cleanup.
+6. **Integrate & Shutdown Worktree Preservation**:
+   - **Fail-closed Git integration**: when workers used `share`/`branch` workspaces, merge their verified `verified_head` commits into the main workspace in the leader lane. Never auto-resolve merge conflicts with `-X theirs` or `-X ours`, and never automatically abort pre-existing manual Git operations (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_START`, `rebase-merge`, `rebase-apply`) in the leader workspace — surface conflict details and stop or resolve both intents explicitly.
+   - **Evidence archival before cleanup**: before removing any isolated worker branch/worktree, copy validated `.omagy/evidence/task-*.json` (and `*-report.md`) files into the leader workspace's `.omagy/evidence/` directory so task verification evidence outlives worktree cleanup.
+   - **Porcelain status & unmerged conflict parsing**: when parsing `git status --porcelain` output, always use `.trimEnd()` (never `.trim()`, which strips the leading status character of the first entry when the index slot is a space, e.g. `" M file"`). Treat all 7 git unmerged two-letter porcelain prefixes (`DD`, `AU`, `UD`, `UA`, `DU`, `AA`, `UU` — including modify/delete `UD`/`DU` and add/unmerged `AU`/`UA`, not just `UU`/`AA`/`DD`) as active merge/rebase conflicts before declaring integration clean.
+   - **Submodule-safe worktree detection & `--exclude` unmerged-commit guard**: when checking whether a directory is already a linked git worktree (`git rev-parse --git-dir` vs `--git-common-dir`), also check `[ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ]` so git submodules are never misclassified as linked worktrees. Record `base_commit` when creating a worker worktree; before removing any worker branch/worktree or killing a worker with `Workspace: "branch"`, verify in the leader lane that (a) the worker's `HEAD` is an ancestor of the leader's `HEAD` (`git merge-base --is-ancestor <workerHead> HEAD`) and has no commits unreachable from non-worker branches/tags/remotes (`worktree_unmerged` guard: `git rev-list --max-count=1 <workerHead> <workerBranch> --not <leaderHead> <baseCommit> --exclude=<workerBranchPattern> --branches --tags --remotes` must return empty so the worker branch ref itself does not hide unmerged commits), and (b) no unpreserved untracked, ignored, or submodule changes remain (`git status --porcelain --untracked-files=all --ignored --ignore-submodules=none`). Never run `git worktree remove --force` when untracked or unmerged commits exist. If checkpointing or merging fails, retain the worker branch/workspace and team state (`status:"blocked"`, reason `"worktree_unmerged"`) for recovery instead of deleting it.
 7. **Finish** only when `pending=0`, `in_progress=0`, `failed=0` (or failures are explicitly acknowledged), and all isolated worker branches are verified merged. Run integrated verification (tests/lint/typecheck/build) in the leader lane. Write `team-state.json` terminal (`active:false`, `current_phase:"complete"`, `completed_at`).
 
 ## Team and Ultragoal

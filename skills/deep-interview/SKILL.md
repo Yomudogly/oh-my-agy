@@ -45,11 +45,11 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 - Durable doc/glossary/ADR updates are opt-in and public-safe only. Recommend them in the handoff; never auto-create them from interview transcripts.
 - If initial context is oversized, do not paste it into prompts. Make the first round a request for a prompt-safe summary (goals, constraints, success criteria, non-goals, decision boundaries, references to full sources). This gate blocks scoring, crystallizing, and handoff.
 - Route facts before judgment. Before each round, classify the needed information as a discoverable fact, a fact needing confirmation, or a human decision. The interview with the human is for judgment.
-- **Two-Filter Question Gate + Owner-Decision Survival (ported from OmO `ulw-plan` & `obra/superpowers` `v7.0.2` `#2644`)**:
+- **Two-Filter Question Gate + Owner-Decision Survival**:
   - **Filter 1 (Material Fork)**: Does the answer change architecture, scope, schema, or file boundaries?
   - **Filter 2 (Unresolvable by Repo/Docs)**: Can this be answered by inspecting the repo or official docs? If yes, inspect—do not ask.
   - **Owner-Decision Survival**: Unless the user explicitly asked for a deep Socratic grilling ("interview me", "ask me everything"), ask only decisions that are irreversible, destructive, spend-bearing, scope-defining, or change a public/external contract. For reversible engineering defaults, propose the recommended default and record it under `[adopted-default]` if the user says "you decide" / "use best practices".
-  - **Open "Why" First & Process Proposals (`superpowers` `v7.0.2` `#2644`)**: when the user hasn't stated *why* they want something, ask an open question first without steering option menus (`ask_question` with concrete choices is used once intent/"why" is known and a named fork exists). Process steps (where files go, doing recon, writing docs) are agent calls stated as proposals rather than questions. When nothing material is open on the first turn, present a short design/spec for approval immediately.
+  - **Open "Why" First, Outcome-vs-How Attribution & Anti-Goals**: when the user hasn't stated *why* they want something, ask an open question first without steering option menus (`ask_question` with concrete choices is used once intent/"why" is known and a named fork exists). Process steps (where files go, doing recon, writing docs) are agent calls stated as proposals rather than questions. Separate **outcome-talk** from **how-talk**: if the user only described desired outcomes, any implementation/`how` choices proposed by the agent must be tagged `[adopted-default]` (never `[from-user]`). Capture explicit **anti-goals** (*"what would make this a failure even if it technically works"*) alongside `Non-goals`, and play back multi-part design understanding in incremental 200–300 word chunks. When nothing material is open on the first turn, present a short design/spec for approval immediately.
 - When ambiguity depends on current external best practices or version-aware behavior, use `$best-practice-research` before crystallizing.
 - Transcript/spec labels:
   - `[from-code][auto-confirmed]`: exact, high-confidence codebase facts with no prescription attached. Record them as context, not interview rounds.
@@ -65,9 +65,9 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 </Execution_Policy>
 
 <Asking_Questions>
-Use Antigravity's `ask_question` tool for every interview round. It replaces `omx question`.
+Use Antigravity's `ask_question` tool for every interview round.
 
-- **No-Questions Override (ported from OmO `v5.1.52` `#11556`)**: do not call `ask_question` or ask the user when they have explicitly said not to (`"don't ask"`, `"no questions"`, `"do not ask me"`, `"hands-off"`). Instead, adopt best-practice defaults, record them as `[adopted-default]`, and crystallize the spec directly.
+- **No-Questions Override**: do not call `ask_question` or ask the user when they have explicitly said not to (`"don't ask"`, `"no questions"`, `"do not ask me"`, `"hands-off"`). Instead, adopt best-practice defaults, record them as `[adopted-default]`, and crystallize the spec directly.
 - One question per `ask_question` call. Header line in the question text:
   `Round {n} | Target: {weakest_dimension} | Ambiguity: {score}%`, then the question.
 - `is_multi_select: false` (single-answer) when exactly one answer should drive the next branch or the options are mutually exclusive: lane selection, primary failure mode, competing interpretations.
@@ -151,7 +151,7 @@ Use each mode at most once when triggered (`Contrarian`, `Terminologist`, `Simpl
 
 When threshold is met (or on early exit with a warning, or at the hard cap):
 
-0. **Configurable Custom Quality Gates (`qualityGates["deep-interview"]`, ported from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`)**: after writing the spec in step 2, if `.omagy/config.json` defines `qualityGates["deep-interview"]` (strict no-op when absent/empty; reserved controller skills like `deep-interview`, `ralplan`, `code-review`, `ai-slop-cleaner` are rejected to prevent self-recursion), run each configured gate skill in an independent subagent (`Model: gate.model || "inherit"`). Any `blocking` gate returning `reject`/`iterate` requires revising the spec before step 3; `advisory` or `unavailable` gates are recorded without blocking.
+0. **Configurable Custom Quality Gates (`qualityGates["deep-interview"]`)**: after writing the spec in step 2, if `.omagy/config.json` defines `qualityGates["deep-interview"]` (strict no-op when absent/empty; reserved controller skills like `deep-interview`, `ralplan`, `code-review`, `ai-slop-cleaner` are rejected to prevent self-recursion), run each configured gate skill in an independent subagent (`Model: gate.model || "inherit"`). Any `blocking` gate returning `reject`/`iterate` requires revising the spec before step 3; `advisory` or `unavailable` gates are recorded without blocking.
 1. Write the transcript summary to `.omagy/interviews/{slug}-{timestamp}.md`.
 2. Write the execution-ready spec to `.omagy/specs/deep-interview-{slug}.md` following the 9-section template (including the **Affected User Ideal State & Gap Table**, `[adopted-default]` decision boundaries, and pressure/terminology audits) in [scoring-and-templates.md](./references/scoring-and-templates.md).
    - For **`--autoresearch`**, also generate `.omagy/specs/deep-interview-autoresearch-{slug}.md` (with the locked `## Fidelity` block: `as of`, `meaning check`, `source floor`, `derived numbers`) and the launch bundle under `.omagy/specs/autoresearch-{slug}/` (`mission.md`, `sandbox.md`, `result.json`), marking `launchReady: false` if placeholders or undecided fidelity fields remain, per [scoring-and-templates.md](./references/scoring-and-templates.md).

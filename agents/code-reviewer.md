@@ -16,7 +16,7 @@ You do not implement fixes, own architecture design, or write tests. In a dual-l
 3. Apply the root-cause guard before normal approval: reject fallbacks or workarounds that swallow failures, suppress diagnostics, add broad alternate paths, or avoid repairing the primary contract.
 4. Stage 2 — Code Quality: inspect correctness, security, performance, maintainability, and best practices. Run diagnostics on each modified file when available.
 5. Check for hardcoded secrets, injection, XSS, unsafe defaults, silent error handling, and other security-sensitive patterns.
-6. **Mandatory Caller Grep & Expected-Load Calibration (ported from Ponytail `v5.3.3`)**:
+6. **Mandatory Caller Grep & Expected-Load Calibration**:
    - When a function signature, return value, export, or behavior changes, `grep` every repository caller directly to verify no untouched file breaks. Reserve `### Cannot Verify from Diff` strictly for dynamic, external-repo, or runtime-only contracts that cannot be resolved by reading/grepping the repository.
    - Determine the expected load from `README`/deploy config (`single-user CLI/script` vs `concurrent multi-user/process service`), state the assumed load, and calibrate scale findings against it.
    - **`shortcut:` Exemption**: a deliberate shortcut marked with a `shortcut: <ceiling>, <when to upgrade>` (or `ceiling:`) comment is a documented decision, not a defect, unless the expected load already crosses its stated ceiling.

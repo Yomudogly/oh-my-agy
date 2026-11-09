@@ -44,10 +44,12 @@ Read [lenses-and-rubric.md](./references/lenses-and-rubric.md) for the full per-
 1. **Objectivity & Dialectical Rigor**: Actively seek disconfirming evidence, competing hypotheses, postmortems, and failure modes. Never advocate one-sidedly for a default narrative.
 2. **First-Principles Depth**: Trace proximate symptoms to root mechanistic, economic, or architectural drivers.
 3. **Systemicity**: Model the domain as an interconnected system of reinforcing loops (amplifiers) and balancing loops (bottlenecks/constraints).
-4. **Claim-Kind & Source Fidelity (ported from OmO `ulw-research`)**:
+4. **Claim-Kind, "Data Came First" & Source Fidelity**:
+   - **Data Came First**: model training memory is only a `LEAD`, never a source. Every factual or quantitative claim returned by a research worker must cite `OBSERVED: <URL | file:line | command output>` retrieved during the run, and worker replies end with `## EXPAND` listing `LEAD: <next concrete source>` or `DEAD END: <query/URL> — PROBED: <why it failed>`.
    - Tag material claims explicitly as **`[VERIFIED]`** (proven by local command/code inspection or primary Tier A/B upstream source), **`[DERIVED]`** (calculated from cited figures with the formula shown), or **`[ASSUMED]`** (explicit working hypothesis).
-   - Preserve source scope and hedges (no `scope_widened`, `hedge_dropped`, or `causality_added`).
-5. **Actionable Output**: Every report concludes with a concrete **Builder & Stakeholder Action Matrix** and a **Next-Workflow Handoff** (`$deep-interview`, `$ralplan`, or `$ultragoal`).
+   - Preserve source scope, hedges, and exact numbers: never widen scope (`scope_widened`), drop qualifiers (`hedge_dropped`), invent causal links (`causality_added`), or glue footnote/superscript digits onto figures (`conversion_altered_number`, e.g., `42¹` or `100[1]` without spacing, checked automatically by `audit-research`).
+5. **Inline HTML Chart & Data-Visualization Integrity**: when embedding visual charts or HTML comparison tables, compute aggregates at the data source, bucket dates by the reader's local midnight, hatch partial time-window bars so incomplete periods never masquerade as drops, cross-check headline KPI totals against a second source, and prefer HTML/CSS flex/grid bars over stretched `preserveAspectRatio="none"` SVGs.
+6. **Actionable Output**: Every report concludes with a concrete **Builder & Stakeholder Action Matrix** and a **Next-Workflow Handoff** (`$deep-interview`, `$ralplan`, or `$ultragoal`).
 
 ---
 
@@ -85,7 +87,7 @@ PHASE 5: 5-Dimension Self-Assessment (>=85) & Automated Audit (audit-research)
 ### Phase 3: Critical Analysis, Dialectics & System Dynamics
 1. **Causal Loop & Bottleneck Mapping**: Identify reinforcing feedback loops and balancing constraints (scaling limits, unit-cost cliffs, organizational friction).
 2. **Contradiction Arbitration**: When sources or benchmarks conflict, do not average them away. Compare workload parameters, hardware/version baselines, sample sizes, and incentives to specify the exact boundary conditions under which Option A beats Option B.
-3. **Evaluation Integrity Audit (`eval-integrity`, ported from OMO `v5.1.59` `#12040`)**: When evaluating empirical studies, benchmarks, or model evaluations, map the **7 evaluation roles** (`Claim`, `System under test`, `Dataset and split`, `Designer`, `Evaluator or judge`, `Scorer`, `Subjects`), verify an independent ground-truth signal, probe the **8 independence failure modes** (`Contamination`, `Invalid controls`, `Circular judging`, `Scorer-label coupling`, `Evaluator-designer coupling`, `Split/annotator dependence`, `Hypothesis priming`, `Observer/demand effects`), and include a single `**Verdict: PASS | FAIL | INCONCLUSIVE**` line in the report so the HUD `Overview` tab can surface the evaluation integrity badge.
+3. **Evaluation Integrity Audit (`eval-integrity`)**: When evaluating empirical studies, benchmarks, or model evaluations, map the **7 evaluation roles** (`Claim`, `System under test`, `Dataset and split`, `Designer`, `Evaluator or judge`, `Scorer`, `Subjects`), verify an independent ground-truth signal, probe the **8 independence failure modes** (`Contamination`, `Invalid controls`, `Circular judging`, `Scorer-label coupling`, `Evaluator-designer coupling`, `Split/annotator dependence`, `Hypothesis priming`, `Observer/demand effects`), and include a single `**Verdict: PASS | FAIL | INCONCLUSIVE**` line in the report so the HUD `Overview` tab can surface the evaluation integrity badge.
 
 ### Phase 4: Multidimensional Synthesis & Report Drafting
 Write the report to `.omagy/artifacts/research/deep-research-<slug>-<UTC>.md` (and optionally copy or link `.omagy/artifacts/research/deep-research-latest.md`) following [report-template.md](./references/report-template.md):

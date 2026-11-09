@@ -9,7 +9,7 @@ description: "[oh-my-agy] Create and execute durable repo-native multi-goal plan
 
 Use for `$ultragoal`, `create-goals`, `complete-goals`, durable multi-goal planning, or sequential execution of an approved plan/spec. Also used as Autopilot's execution stage.
 
-Codex's hidden `/goal` state (`get_goal`/`create_goal`/`update_goal`) does not exist for agents in Antigravity. The **repo ledger is the single source of truth**. Antigravity's `/goal` slash command is user-triggered. You may suggest it for very long runs, but never depend on it.
+The **repo ledger is the single source of truth**. Antigravity's `/goal` slash command is user-triggered. You may suggest it for very long runs, but never depend on it.
 
 ## Durable artifacts (leader-owned)
 
@@ -21,6 +21,7 @@ Codex's hidden `/goal` state (`get_goal`/`create_goal`/`update_goal`) does not e
 ```json
 {
   "version": 1,
+  "criteria_revision": 1,
   "objective": "<one-line aggregate objective>",
   "source": ".omagy/specs/deep-interview-<slug>.md | .omagy/plans/prd-<slug>.md | inline",
   "created_at": "<ISO>",
@@ -42,7 +43,7 @@ Codex's hidden `/goal` state (`get_goal`/`create_goal`/`update_goal`) does not e
 }
 ```
 
-**Goal rigor classification (`rigor`, ported from OmO `ulw-execute`)**:
+**Goal rigor classification (`rigor`)**:
 - `"light"`: narrow change inside an existing module/pattern with no schema, auth, security, or public API contract change. Verified by targeted tests + acceptance check.
 - `"heavy"`: cross-cutting change, new boundary/schema/auth/security surface, or state machine change. Requires targeted tests + at least 1 adversarial probe + independent `verifier` (`AdversarialVerify`) check before checkpointing.
 
@@ -51,7 +52,7 @@ Ledger entry shape (append; never rewrite earlier lines):
 {"at":"<ISO>","goal_id":"G1","event":"created|started|checkpoint|blocked|failed|steer|review-blockers|final-gate","status":"<status>","evidence":"<commands + exit codes / file refs>","note":"<optional>"}
 ```
 
-Append a ledger line using the crash-resilient newline-isolated hook helper (`sh <plugin>/hooks/run.sh append-jsonl .omagy/ultragoal/ledger.jsonl '<json>'`, which prepends `\n` if a prior crash left a torn tail and refuses symlinks, ported from OMX 0.21.33 PR #3893), or by reading the file and writing it back with the new line added on its own newline. Read the ledger tolerantly (`sh <plugin>/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl` or line-by-line JSON parsing that skips malformed torn lines).
+Append a ledger line using the crash-resilient newline-isolated hook helper (`sh <plugin>/hooks/run.sh append-jsonl .omagy/ultragoal/ledger.jsonl '<json>'`, which prepends `\n` if a prior crash left a torn tail and refuses symlinks), or by reading the file and writing it back with the new line added on its own newline. Read the ledger tolerantly (`sh <plugin>/hooks/run.sh read-jsonl .omagy/ultragoal/ledger.jsonl` or line-by-line JSON parsing that skips malformed torn lines).
 
 ## Operational steps: create
 
@@ -74,12 +75,12 @@ Repeat until every goal is `complete` (or `superseded`):
      - `BLOCKED`: if a worker on `Model: "flash"` or `"inherit"` stalls after 2 attempts on a complex implementation slice, escalate the retry to a higher model tier (`flash -> inherit -> pro`).
 3. Audit the goal against real artifacts (`current_phase:"verifying"`):
    - For `"rigor": "light"`, run targeted tests and acceptance checks directly.
-   - For `"rigor": "heavy"`, form a `DoneClaim` (changed files, commands + exit codes, criterion mapping) and validate it (via the `verifier` subagent when independent confirmation is warranted) using the `AdversarialVerify` contract:
+   - For `"rigor": "heavy"`, form a `DoneClaim` (changed files, commands + exit codes, criterion mapping, and canonical `verdict` from `VERIFICATION_VERDICTS`: `live-ui-verified | unit-test-verified | type-check-only | enforcement-verified | formally-verified | verifier-blocked | verifier-failed`) and validate it (via the `verifier` subagent when independent confirmation is warranted) using the `AdversarialVerify` contract:
      - `verdict`: `"confirmed" | "false-positive" | "needs-fix" | "needs-human-review"`
      - `failure_class`: `"none" | "product" | "harness"`
-4. Checkpoint: when `verdict` is `"confirmed"` (or `"light"` checks pass), set the goal `status:"complete"` with `evidence`, then append a `checkpoint` ledger line containing commands and exit codes. Refresh `updated_at` in state.
-5. **Failure triage (`product` vs `harness`), unavailable verification & blocked-goal cascade (ported from OMX `v0.21.42` `#3964` & OmO `ulw-execute`)**:
-   - **Unavailable verification never fabricates completion (OMX `#3964`)**: if the required test runner, verifier subagent, or external environment is unavailable or indeterminate, never mark the goal `complete` and never fabricate passing evidence. Record a truthful non-terminal `blocked` ledger entry (`event:"blocked"`, `status:"blocked"`, `note:"verification-unavailable:<reason>"`) and keep the goal `in_progress` or `blocked` until verification can actually run.
+4. Checkpoint: when `verdict` is `"confirmed"` (or `"light"` checks pass), set the goal `status:"complete"` with `evidence`, then append a `checkpoint` ledger line containing commands, exit codes, and `criteria_revision` (matching `goals.json` `criteria_revision`). When rendering ledger cells into Markdown or CSV tables, sanitize leading formula characters (`=`, `+`, `-`, `@`, `\t`, `\r`) via `renderLedgerCell`. Refresh `updated_at` in state.
+5. **Failure triage (`product` vs `harness`), unavailable verification & blocked-goal cascade**:
+   - **Unavailable verification never fabricates completion**: if the required test runner, verifier subagent, or external environment is unavailable or indeterminate, never mark the goal `complete` and never fabricate passing evidence. Record a truthful non-terminal `blocked` ledger entry (`event:"blocked"`, `status:"blocked"`, `note:"verification-unavailable:<reason>"`) and keep the goal `in_progress` or `blocked` until verification can actually run.
    - If verification fails with `failure_class: "harness"` (test runner setup, missing fixture, port/env glitch), run up to 1 bounded harness-repair attempt without incrementing `product_failures`.
    - If verification fails with `failure_class: "product"`, increment `product_failures` (max 3 attempts per goal). After 3 product failures or `"needs-human-review"`, set the goal `status:"blocked"` (`[~]`), append `blocked` to the ledger, and **cascade `status:"blocked"`** (`note:"blocked-by:<goal_id>"`) to every downstream `pending` goal whose `depends_on` transitively includes this goal. Continue with remaining independent `pending` goals; if none remain and user input is required, write state `current_phase:"blocked"`, `active:false`, and ask.
 
@@ -87,7 +88,7 @@ Repeat until every goal is `complete` (or `superseded`):
 
 - **Stale-Goal Reconciliation (on start/resume)**: Before executing a `pending` goal, run observable repo checks (`fileExists`, `fileContains`, `gitGrep`) against its target paths. If the repository already satisfies a goal's acceptance criteria from earlier work, verify with targeted tests and record a `checkpoint` with `note:"reconciled-from-repo"` instead of re-implementing.
 - **Explicit Steering**: Change the decomposition only with evidence. Append a `steer` ledger entry with `kind`, `evidence`, and `rationale`, then edit `goals.json` accordingly. Supported kinds: `add_subgoal`, `split_subgoal`, `reorder_pending`, `revise_pending_wording`, `amend_criterion`, `annotate_ledger`, `mark_blocked_superseded`. Never silently delete goals. Mark them `superseded` instead.
-- **Criterion Amendment & Autonomous Ruling Audit Trail (`Rulings, not stalls`)**: When a goal's acceptance criterion must be adjusted or an ambiguity/plan conflict is resolved autonomously against the spec without stalling the run, append a `steer` (`kind:"amend_criterion"` or `kind:"ruling"`) ledger entry recording `decision` (or `previous_criterion` / `amended_criterion`), `rationale`, `evidence`, and `cost_if_wrong` (`"Ruling: <what was decided> — <why> — <cost_if_wrong>"`). Surface all autonomous rulings and any deferred minor review observations explicitly under `"Rulings made & Deferred minors"` in the final closeout report. Ordinary prose does not mutate the plan.
+- **Criterion Amendment, `criteria_revision` Binding & Autonomous Ruling Audit Trail (`Rulings, not stalls`)**: Whenever a goal's acceptance criteria or invariants in `goals.json` are amended after creation, increment top-level `criteria_revision` (default `1`) in `goals.json` and append a `steer` (`kind:"amend_criterion"` or `kind:"ruling"`) ledger entry recording `criteria_revision`, `decision` (or `previous_criterion` / `amended_criterion`), `rationale`, `evidence`, and `cost_if_wrong` (`"Ruling: <what was decided> — <why> — <cost_if_wrong>"`). Any `checkpoint` or `final-gate` receipt recorded against an older `criteria_revision` is stale and must be re-verified against the current `criteria_revision` before closeout. Surface all autonomous rulings and any deferred minor review observations explicitly under `"Rulings made & Deferred minors"` in the final closeout report. Ordinary prose does not mutate the plan.
 
 ## Team bridge
 
@@ -108,4 +109,4 @@ Report goal ids/statuses, ledger path, review verdicts, and any blocker. Never c
 ## Resume
 
 On `continue`/`resume`, read `goals.json`, the tail of `ledger.jsonl`, and the state file, then resume from the first non-complete goal. Do not re-decompose an existing plan unless steering is justified.
-- **Resumed-run `started`-edge closeout bound (ported from OMC `v5.7.20` `#4646`, `#4650`)**: when resuming an interrupted or previously blocked goal, append a fresh `started` ledger entry (`event:"started"`). Only verification runs and `checkpoint` entries recorded **strictly after** that latest unmatched `started` entry count toward closing out the resumed goal — pre-resume notes or stale artifacts from an earlier attempt never satisfy closeout.
+- **Resumed-run `started`-edge closeout bound**: when resuming an interrupted or previously blocked goal, append a fresh `started` ledger entry (`event:"started"`). Only verification runs and `checkpoint` entries recorded **strictly after** that latest unmatched `started` entry count toward closing out the resumed goal — pre-resume notes or stale artifacts from an earlier attempt never satisfy closeout.

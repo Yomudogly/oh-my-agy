@@ -1,6 +1,6 @@
 # Session Transcript Forensics (`$doctor --session`)
 
-Post-session diagnostic workflow for Antigravity JSONL transcripts (`transcript.jsonl` and `transcript_full.jsonl`). Adapted from `superpowers`'s `analyze-session` 7-dimension methodology for Antigravity's native conversation logs.
+Post-session diagnostic workflow for Antigravity JSONL transcripts (`transcript.jsonl` and `transcript_full.jsonl`) using a 7-dimension methodology for Antigravity's native conversation logs.
 
 ## 1. Transcript Discovery
 
@@ -78,3 +78,17 @@ When the user asks to share or archive a session report (`$doctor --session <id>
    - `<HOST-1>`, `<REPO-1>` for internal hostnames and private repository URLs when requested.
 3. **Pass 2 — Independent Scrub Audit**:
    Before declaring the export complete, scan the generated `.omagy/artifacts/session-forensics-*.md` file with regexes for raw `/Users/[^<\s/]+`, `/home/[^<\s/]+`, `@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`, and token prefixes (`sk-`, `ghp_`, `AIza`, `Bearer `). Any match blocks export completion until redacted.
+
+## 5. Comparative Session Analysis (`$doctor --session-compare <baseline> <candidate>`)
+
+To compare two session transcripts (e.g., before vs. after a skill/rule update or failed vs. succeeded run):
+```bash
+sh <PLUGIN_DIR>/hooks/run.sh session-compare "<baseline.jsonl>" "<candidate.jsonl>" [.omagy/artifacts/session-compare-<UTC>.json]
+```
+`session-compare` parses both JSONL transcripts without loading full payloads into prompt context, computing:
+- `baseline` & `candidate` metrics: `duration_ms`, `turns` (`turns_started` / `turns_completed`), `tool_calls`, `failed_tools`, `incomplete`, `stumbles`, `repeated_work` (files read `>= 3` times), and `compactions`.
+- `deltas`: `duration_ms`, `turns`, `tool_calls`, `failed_tools`, `incomplete`, `stumbles`, `repeated_work`, and `compactions`, plus per-tool `byTool` call/failure deltas.
+- `assessment`:
+  - **`no_regression`**: candidate did not increase `failed_tools`, `incomplete` steps, `stumbles`, `repeated_work`, or exceed `--max-duration-increase` (default `50%`).
+  - **`regression`**: candidate increased `failed_tools` (`failed_tools_increased`), `incomplete` (`incomplete_steps_increased`), `stumbles` (`stumbles_increased`), `repeated_work` (`repeated_work_increased`), or wall-clock duration beyond threshold (`duration_regression`). Exits `2` when `--fail-on-regression` is set.
+  - **`inconclusive`**: missing transcript records (`missing_transcript_records`) or unmeasured tool duration (`missing_measured_duration`). Exits `3` when `--fail-on-regression` is set.

@@ -44,7 +44,7 @@ handling cleanup**; **Pass 4: Test reinforcement & junk-test pruning**. Re-run t
 each pass and avoid unrelated refactors. Prefer deletion/existing utilities; no new
 abstractions or dependencies unless explicitly required.
 
-### Pass 4: Test Slop Classification (`R / F / C / D`) & Mutation Proof (ported from OMO `v5.1.54`–`v5.1.55` `#11967`, `#11968`, `#12017`)
+### Pass 4: Test Slop Classification (`R / F / C / D`) & Mutation Proof
 1. Run `sh <plugin>/hooks/run.sh check-test-junk <path...>` to flag regex-detectable junk-test smells (`source-grep`, `prose-pin`, `fixed-sleep`, `focused`, `skipped`, `self-compare`, `lower-bound`; suppress false positives with `// check-test-junk: ignore`).
 2. Evaluate every touched test against the **4-Question Authoring Gate**: (1) What user-visible bug breaks this? (2) Does it call real production code? (3) Would a harmless internal refactor break it? (4) Did a non-redundant assertion fail before passing?
 3. Classify each test as **`R`** (Real-behavior keeper), **`F`** (Weak/flaky -> strengthen in place), **`C`** (Redundant duplicate -> consolidate), or **`D`** (Junk -> delete), using the **2×2 Candidate-vs-Keeper Mutation Proof** before deleting/consolidating:

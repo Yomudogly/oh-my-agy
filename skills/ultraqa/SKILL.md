@@ -13,10 +13,11 @@ Use this explicit opt-in when runnable behavior needs adversarial dynamic end-to
 - Inputs: goal, changed scope, acceptance criteria, runnable command/service, existing tests, and relevant state/cleanup paths.
 - If the user says `continue`, advance the current verified QA step rather than restarting.
 - A shallow build/lint/typecheck/test checklist does not satisfy UltraQA. Exercise the requested behavior through adversarial scenarios whenever it can be run, simulated, or harnessed safely.
+- **Standalone vs. Embedded Ownership**: when invoked standalone (`$ultraqa`), the current agent executes the QA matrix directly; when embedded inside `$autopilot` or `$ultragoal`, the orchestrator delegates QA scenario execution to an independent subagent worker (`test-engineer`, `verifier`, or `executor`) and verifies its evidence rather than self-grading its own implementation in the main lane.
 
 ## Plan and trigger-mapped scenario matrix
 
-Before running commands, record a matrix (in `.omagy/artifacts/ultraqa-<slug>/matrix.md`) with: scenario id, class, trigger status (`triggered` or `not-applicable: <1-line reason>`), intent, user/attacker model, setup, command or harness, expected signal, actual result, `failure_class` (`none | product | harness`), fixes, evidence, and cleanup. Evaluate all **9 adversarial classes** against their concrete trigger conditions (ported from OmO `ulw-execute`):
+Before running commands, record a matrix (in `.omagy/artifacts/ultraqa-<slug>/matrix.md`) with: scenario id, class, trigger status (`triggered` or `not-applicable: <1-line reason>`), intent, user/attacker model, setup, command or harness, expected signal, actual result, `failure_class` (`none | product | harness`), fixes, evidence, and cleanup. Evaluate all **9 adversarial classes** against their concrete trigger conditions:
 
 | # | Adversarial Class | Trigger Condition (run when true; otherwise log 1-line `not-applicable`) | Probes |
 |---|---|---|---|
@@ -42,7 +43,7 @@ Generate temporary tests, scripts, fixtures, or harnesses only when useful. Keep
 
 ## Safety, state, and exit
 
-No destructive commands, secret exfiltration, credential dumping, production writes, or unbounded process spawning. No unbounded waits. Preserve unrelated dirty work. If a scenario is unsafe, record it as blocked along with the safe substitute. Three repeats of the same failure stop with a diagnosis. Cycle 5 stops with residual risks. Success exits after a passing cycle.
+No destructive commands, secret exfiltration, credential dumping, production writes, or unbounded process spawning. No unbounded waits. Preserve unrelated dirty work. If a scenario is unsafe, record it as blocked along with the safe substitute. **Normalized Repeated-Failure Deduplication**: normalize failure output via `sh <plugin>/hooks/run.sh failure-sig "<errorOutput>"` (which strips ANSI escape codes, pytest/vitest dot-progress & pass-summary lines, `Start at` clock timestamps, elapsed duration parentheticals & failing summary banner durations, and Node warning PIDs while preserving assertion literals) before comparing across cycles; three repeats of the same normalized failure signature stop the loop immediately with a diagnosis (`ULTRAQA STOPPED: Same failure detected 3 times`). Cycle 5 stops with residual risks. Success exits after a passing cycle.
 
 State: standalone writes `.omagy/state/ultraqa-state.json`; inside Autopilot, use `state.ultraqa` and `current_phase:"ultraqa"`. Phases: `planning -> baseline -> adversarial-e2e -> diagnose -> fix -> cleanup -> complete`. Update `iteration`, `current_phase`, and `updated_at` as you go (the Stop hook keeps an active run going). Terminal: `active:false`, `current_phase:"complete"|"failed"|"blocked"`, `completed_at`.
 

@@ -26,9 +26,11 @@ For questions about state machines, reducers, scoring formulas, or edge-case tra
 
 ### 2. UI Fork — "What structure holds the data best?"
 For questions of layout, information architecture, navigation model, or density:
-1. Build **three variants (`A`, `B`, `C`) that differ in structure** (information hierarchy, navigation flow, density)—never three color/font reskins.
-2. Provide an on-page switcher cycling `A` / `B` / `C` using realistic data density in `.omagy/artifacts/loft/<slug>/index.html`, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` so the user can test the full-height `A` / `B` / `C` variants in the `Loft` tab of the Auxiliary Pane (or open on an isolated git branch `loft/<slug>`).
-3. Once the user picks a variant (or hybrid), record the structural decision in `DESIGN.md` or `.omagy/specs/` and leave the throwaway harness behind.
+1. **Rubric First (`arena`)**: before building variants, name the 3–5 concrete evaluation criteria (e.g., scan speed, keyboard density, error visibility, mobile collapse) at the top of the harness so variants are judged against explicit goals rather than vibe.
+2. Build **three variants (`A`, `B`, `C`) that differ in structure** (information hierarchy, navigation flow, density)—never three color/font reskins.
+3. **HTML Data-Visualization Hygiene**: when a loft prototype renders charts, timelines, or metrics, compute aggregates at the source, bucket dates by the reader's local midnight, hatch partial-window bars so incomplete periods never look like drops, cross-check KPI totals against a second source, use HTML/CSS bars over stretched `preserveAspectRatio="none"` SVGs, and scope styles with component-prefixed CSS classes (`kpi-label`, `bar-seg`) so `A`/`B`/`C` never collide.
+4. Provide an on-page switcher cycling `A` / `B` / `C` using realistic data density in `.omagy/artifacts/loft/<slug>/index.html`, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` so the user can test the full-height `A` / `B` / `C` variants in the `Loft` tab of the Auxiliary Pane (or open on an isolated git branch `loft/<slug>`).
+5. **Variant Grafting (`arena`)**: once the user picks a winner (or requests a hybrid, e.g., *"Variant B's layout with Variant A's filter bar"*), graft the winning structural traits into `DESIGN.md` or `.omagy/specs/` and leave the throwaway harness behind.
 
 ## Discipline
 

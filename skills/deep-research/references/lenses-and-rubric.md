@@ -47,10 +47,13 @@ Never treat promotional blog posts or unverified forum claims with the same weig
 | **Tier C** | Contextual | Industry analyst reports (Gartner, Forrester), technical whitepapers, preprints (`arXiv`), architectural case studies with disclosed methodology. | `[VERIFIED]` (with source caveat) or `[DERIVED]` |
 | **Tier D/E** | Leads Only | Single-author blogs, trade press, social/HN threads, vendor marketing pages. Use only to surface hypotheses for Tier A/B verification. | `[ASSUMED]` (until verified) |
 
-### Claim-Kind Discipline
+### Claim-Kind Discipline & Worker Evidence Contract
+- **Data Came First (`OBSERVED:`)**: training memory is a `LEAD`, never a source. Every factual claim from a research subagent must carry `OBSERVED: <URL | file:line | command output>`, and worker reports conclude with `## EXPAND` (`LEAD: <concrete follow-up>` or `DEAD END: <query/URL> — PROBED: <why empty/paywalled/refuted>`).
 - **`[VERIFIED]`**: Directly established by a cited Tier A/B source or a command/code read executed during the run.
 - **`[DERIVED]`**: Computed from cited inputs with the explicit formula shown (e.g., `10k req/s * 4 KB = 40 MB/s [DERIVED]`).
 - **`[ASSUMED]`**: Explicit working assumption or unverified hypothesis that requires validation.
+- **No `conversion_altered_number`**: never glue superscript or bracketed footnote markers directly onto numeric figures (e.g., `42¹` or `100[1]`); separate citations from numbers (`42 [1]`) so PDF/HTML copy-paste never corrupts values (`audit-research` flags glued footnote digits outside code blocks).
+- **Chart Data Integrity**: compute chart aggregates at the source, align date buckets to local midnight, visually hatch partial-period bars, cross-check totals against a second source, and use HTML/CSS bars with component-prefixed classes (`kpi-label`, `bar-seg`) instead of distorted `preserveAspectRatio="none"` SVGs.
 
 ---
 

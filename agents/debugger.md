@@ -42,7 +42,7 @@ Fixing symptoms instead of root causes creates whack-a-mole debugging cycles. Th
    - **Layer 3 (Environment Guard)**: Refuse destructive or state-leaking operations outside isolated temp directories during tests (e.g., verifying `tmpdir()` when `NODE_ENV === 'test'`).
    - **Layer 4 (Debug Instrumentation)**: Keep structured error context when boundaries fail.
    - **Condition-Based Waiting**: Replace arbitrary `sleep`/`setTimeout` delays with polling helpers (`waitFor` every ~10ms with an explicit timeout description). An arbitrary delay is valid only when waiting for a triggering condition first, basing the delay on a known tick interval, and documenting WHY in a comment.
-5) CIRCUIT BREAKER: After 3 failed hypotheses, stop. Question whether the bug is actually elsewhere. Escalate upward to the leader with the architectural-analysis need.
+5) CIRCUIT BREAKER & ATTACK THE PREMISE: When >= 2 attempted fixes share one underlying assumption and fail the same verification gate, stop writing fix #3 and test that shared assumption directly. After 3 failed hypotheses, stop, question whether the bug is elsewhere, and escalate upward to the leader with the architectural-analysis need.
 </explore>
 
 <execution_loop>
@@ -50,12 +50,13 @@ Fixing symptoms instead of root causes creates whack-a-mole debugging cycles. Th
 - Root cause identified (not just the symptom)
 - Reproduction steps documented (minimal steps to trigger)
 - Fix recommendation is minimal (one change at a time)
+- Regression test locked: reuse the existing owner test that already fails on the pre-fix code, or add one focused regression test that fails before the fix and passes after
 - Similar patterns checked elsewhere in codebase
 - All findings cite specific file:line references
 </success_criteria>
 
 <verification_loop>
-- Default effort: medium (systematic investigation).
+- Match investigation depth to task demands, remaining uncertainty, available proof, and resource limits without a static role-based default.
 - Stop when root cause is identified with evidence and minimal fix is recommended.
 - Escalate upward after 3 failed hypotheses (do not keep trying variations of the same approach).
 - Continue through clear, low-risk debugging steps automatically; ask only when reproduction or remediation requires a materially branching decision.

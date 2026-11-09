@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // oh-my-agy HUD Sidecar (UI Extension for Antigravity Auxiliary Pane).
-// Read-only status polling (`GET /api/status`, OMX #3963 zero-mutation invariant) + authenticated `agentapi`
+// Read-only status polling (`GET /api/status`, zero-mutation invariant) + authenticated `agentapi`
 // launcher (`POST /api/dispatch`) serving `sidecar://oh-my-agy/hud/` (`?view=overview|workflows|skills|subagents|wiki`).
 
 import { execFileSync } from 'node:child_process';
@@ -13,6 +13,7 @@ import {
   analyzeDiffCodeHealth,
   discoverOmagyScopes,
   hardenWindowsExeSearch,
+  isAwaitingConfirmation,
   redactSecrets,
   readJsonlRecords,
   scanShortcutDebt,
@@ -139,9 +140,9 @@ const SKILL_GUIDE_META = {
   },
   pr: {
     category: 'Review, QA & Cleanup',
-    flags: [],
+    flags: ['--watch'],
     quickStart: '/pr draft a pull request body for this branch',
-    howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail (summary, verification receipts, rulings, and ADR reversibility).',
+    howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail and triages/watches open PRs (--watch) across CI, review threads, and merge state.',
   },
   design: {
     category: 'Design & Prototyping',
@@ -187,9 +188,9 @@ const SKILL_GUIDE_META = {
   },
   doctor: {
     category: 'Knowledge, Control & Setup',
-    flags: ['--session', '--export'],
+    flags: ['--session', '--session-compare', '--export'],
     quickStart: '/doctor',
-    howToUse: 'Audits plugin manifests, SDO skill compliance, hook selftests, stale states, and 7-dimension session transcript forensics (--session).',
+    howToUse: 'Audits plugin manifests, SDO skill compliance, hook selftests, stale states, 7-dimension session transcript forensics (--session), and 2-session regression comparison (--session-compare).',
   },
   skill: {
     category: 'Knowledge, Control & Setup',
@@ -201,7 +202,7 @@ const SKILL_GUIDE_META = {
     category: 'Knowledge, Control & Setup',
     flags: [],
     quickStart: '/omagy-setup',
-    howToUse: 'Installs or updates oh-my-agy in user or workspace scope, configures .gitignore, and migrates legacy .omx artifacts.',
+    howToUse: 'Installs or updates oh-my-agy in user or workspace scope, configures .gitignore, and bootstraps project AGENTS.md.',
   },
   'configure-notifications': {
     category: 'Knowledge, Control & Setup',
@@ -483,7 +484,8 @@ function readModeFilesInDir(dir, sessionLabel = 'shared', scopeLabel = '.') {
     const updatedMs = Date.parse(data.updated_at || '') || st.mtimeMs || 0;
     const phase = String(data.current_phase || 'unknown');
     const isTerminal = TERMINAL.has(phase.toLowerCase()) || Boolean(data.completed_at);
-    const isStale = Boolean(data.active === true && !isTerminal && Date.now() - updatedMs > STALE_MS);
+    const awaitingConfirmation = isAwaitingConfirmation({ data, mtimeMs: st.mtimeMs });
+    const isStale = Boolean(data.active === true && !isTerminal && !awaitingConfirmation && Date.now() - updatedMs > STALE_MS);
     out.push({
       mode: String(data.mode || m[1]),
       active: data.active === true && !isTerminal,
@@ -492,6 +494,7 @@ function readModeFilesInDir(dir, sessionLabel = 'shared', scopeLabel = '.') {
       updatedAt: data.updated_at || new Date(st.mtimeMs).toISOString(),
       updatedMs,
       stale: isStale,
+      awaitingConfirmation,
       session: sessionLabel,
       scope: scopeLabel,
       owner: String(data.owner_conversation_id || data.conversation_id || ''),
@@ -905,7 +908,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     }
   }
 
-  // 2. Team boards summary (including 20-minute completed window per OMC #4661/#4662, across all scopes)
+  // 2. Team boards summary (including 20-minute completed window across all scopes)
   const teams = [];
   for (const sc of scopeEntries) {
     const teamRoot = path.join(sc.root, '.omagy', 'state', 'team');
@@ -1239,74 +1242,71 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     entries: [],
     lint: { missingFrontmatter: [], unknownCategories: [], danglingLinks: [], orphanPages: [], expiredPages: [] },
   };
-  for (const dirName of ['omagy_wiki', 'omx_wiki']) {
-    const wikiDir = path.join(primaryRoot, dirName);
-    const agPath = path.join(wikiDir, 'agreements.md');
-    const idxPath = path.join(wikiDir, 'index.md');
-    const indexedSlugs = new Set();
-    try {
-      if (fs.existsSync(agPath) && !fs.lstatSync(agPath).isSymbolicLink()) {
-        const lines = fs.readFileSync(agPath, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
-        wiki.agreements = lines.slice(0, 30).map((l) => {
-          const expMatch = /(?:\[|\()\s*expires\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[^\])\s]+)?)\s*(?:\]|\))/i.exec(l);
-          const expired = Boolean(expMatch && Date.parse(expMatch[1]) <= nowMs);
-          const author = /(?:\[by:\s*human\]|\(by:\s*human\))/i.test(l) ? 'human' : 'agent';
-          return { text: redactSecrets(l), author, expired };
+  const wikiDir = path.join(primaryRoot, 'omagy_wiki');
+  const agPath = path.join(wikiDir, 'agreements.md');
+  const idxPath = path.join(wikiDir, 'index.md');
+  const indexedSlugs = new Set();
+  try {
+    if (fs.existsSync(agPath) && !fs.lstatSync(agPath).isSymbolicLink()) {
+      const lines = fs.readFileSync(agPath, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
+      wiki.agreements = lines.slice(0, 30).map((l) => {
+        const expMatch = /(?:\[|\()\s*expires\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[^\])\s]+)?)\s*(?:\]|\))/i.exec(l);
+        const expired = Boolean(expMatch && Date.parse(expMatch[1]) <= nowMs);
+        const author = /(?:\[by:\s*human\]|\(by:\s*human\))/i.test(l) ? 'human' : 'agent';
+        return { text: redactSecrets(l), author, expired };
+      });
+    }
+  } catch { /* ignore */ }
+  try {
+    if (fs.existsSync(idxPath) && !fs.lstatSync(idxPath).isSymbolicLink()) {
+      const lines = fs.readFileSync(idxPath, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
+      wiki.pages = lines.slice(0, 40).map((l) => redactSecrets(l));
+      for (const l of lines) {
+        const m = /\[\[([a-zA-Z0-9_-]+)\]\]/.exec(l);
+        if (m) indexedSlugs.add(m[1]);
+      }
+    }
+  } catch { /* ignore */ }
+  try {
+    if (fs.existsSync(wikiDir) && !fs.lstatSync(wikiDir).isSymbolicLink()) {
+      const mdFiles = fs.readdirSync(wikiDir).filter((f) => f.endsWith('.md') && !['index.md', 'agreements.md', 'log.md'].includes(f));
+      const allSlugs = new Set(mdFiles.map((f) => f.slice(0, -3)));
+      const inboundLinks = new Set();
+      for (const f of mdFiles.slice(0, 50)) {
+        const slug = f.slice(0, -3);
+        const raw = readTextSafe(path.join(wikiDir, f), 16 * 1024);
+        const { meta, body } = parseFrontmatter(raw);
+        if (!meta || !meta.title || !meta.category) {
+          wiki.lint.missingFrontmatter.push(slug);
+        } else if (!WIKI_CATEGORIES.has(String(meta.category).toLowerCase())) {
+          wiki.lint.unknownCategories.push(`${slug} (${meta.category})`);
+        }
+        const expiresStr = meta?.expires ? String(meta.expires) : '';
+        const expired = Boolean(expiresStr && Date.parse(expiresStr) <= nowMs);
+        if (expired) wiki.lint.expiredPages.push(slug);
+        const links = [...raw.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
+        for (const target of links) {
+          inboundLinks.add(target);
+          if (!allSlugs.has(target)) wiki.lint.danglingLinks.push(`${slug} -> [[${target}]]`);
+        }
+        wiki.entries.push({
+          slug,
+          title: redactSecrets(String(meta?.title || slug)),
+          category: String(meta?.category || 'uncategorized'),
+          tags: Array.isArray(meta?.tags) ? meta.tags.map(String) : [],
+          expires: expiresStr,
+          expired,
+          links: [...new Set(links)],
+          body: redactSecrets(body.trim().slice(0, 2500)),
         });
       }
-    } catch { /* ignore */ }
-    try {
-      if (fs.existsSync(idxPath) && !fs.lstatSync(idxPath).isSymbolicLink()) {
-        const lines = fs.readFileSync(idxPath, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
-        wiki.pages = lines.slice(0, 40).map((l) => redactSecrets(l));
-        for (const l of lines) {
-          const m = /\[\[([a-zA-Z0-9_-]+)\]\]/.exec(l);
-          if (m) indexedSlugs.add(m[1]);
+      for (const slug of allSlugs) {
+        if (!indexedSlugs.has(slug) && !inboundLinks.has(slug)) {
+          wiki.lint.orphanPages.push(slug);
         }
       }
-    } catch { /* ignore */ }
-    try {
-      if (fs.existsSync(wikiDir) && !fs.lstatSync(wikiDir).isSymbolicLink()) {
-        const mdFiles = fs.readdirSync(wikiDir).filter((f) => f.endsWith('.md') && !['index.md', 'agreements.md', 'log.md'].includes(f));
-        const allSlugs = new Set(mdFiles.map((f) => f.slice(0, -3)));
-        const inboundLinks = new Set();
-        for (const f of mdFiles.slice(0, 50)) {
-          const slug = f.slice(0, -3);
-          const raw = readTextSafe(path.join(wikiDir, f), 16 * 1024);
-          const { meta, body } = parseFrontmatter(raw);
-          if (!meta || !meta.title || !meta.category) {
-            wiki.lint.missingFrontmatter.push(slug);
-          } else if (!WIKI_CATEGORIES.has(String(meta.category).toLowerCase())) {
-            wiki.lint.unknownCategories.push(`${slug} (${meta.category})`);
-          }
-          const expiresStr = meta?.expires ? String(meta.expires) : '';
-          const expired = Boolean(expiresStr && Date.parse(expiresStr) <= nowMs);
-          if (expired) wiki.lint.expiredPages.push(slug);
-          const links = [...raw.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
-          for (const target of links) {
-            inboundLinks.add(target);
-            if (!allSlugs.has(target)) wiki.lint.danglingLinks.push(`${slug} -> [[${target}]]`);
-          }
-          wiki.entries.push({
-            slug,
-            title: redactSecrets(String(meta?.title || slug)),
-            category: String(meta?.category || 'uncategorized'),
-            tags: Array.isArray(meta?.tags) ? meta.tags.map(String) : [],
-            expires: expiresStr,
-            expired,
-            links: [...new Set(links)],
-            body: redactSecrets(body.trim().slice(0, 2500)),
-          });
-        }
-        for (const slug of allSlugs) {
-          if (!indexedSlugs.has(slug) && !inboundLinks.has(slug)) {
-            wiki.lint.orphanPages.push(slug);
-          }
-        }
-      }
-    } catch { /* ignore */ }
-    if (wiki.agreements.length || wiki.pages.length || wiki.entries.length) break;
-  }
+    }
+  } catch { /* ignore */ }
 
   // 9. Quality gates & Doctor / Hook Diagnostics
   const qg = validateQualityGates(primaryRoot);
@@ -1355,7 +1355,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     hookErrors,
   };
 
-  // 9.5 Code Health & Technical Debt (Ponytail v5.3.3 reuse, openCallers, and shortcut: debt ledger)
+  // 9.5 Code Health & Technical Debt (symbol reuse, openCallers, and shortcut: debt ledger)
   const diffHealth = analyzeDiffCodeHealth([primaryRoot]);
   const debtScan = scanShortcutDebt([primaryRoot]);
   const reusedList = Array.isArray(diffHealth.reused) ? diffHealth.reused.map(String) : [];
@@ -1835,7 +1835,7 @@ const HUD_HTML = `<!DOCTYPE html>
           <td class="col-mode"><code>\${esc(m.mode)}</code></td>
           <td class="col-phase">
             <span class="badge \${m.active && !m.stale ? 'badge-active' : ''}">\${esc(m.phase)}</span>
-            <div class="muted" style="font-size:11px;margin-top:2px;">\${m.active ? (m.stale ? 'stale (>6h)' : 'active') : 'inactive'}\${m.iteration != null ? \` &middot; #\${esc(m.iteration)}\` : ''}</div>
+            <div class="muted" style="font-size:11px;margin-top:2px;">\${m.active ? (m.awaitingConfirmation ? 'WAITING CONFIRMATION' : (m.stale ? 'stale (>6h)' : 'active')) : 'inactive'}\${m.iteration != null ? \` &middot; #\${esc(m.iteration)}\` : ''}</div>
           </td>
           <td class="col-scope muted">\${esc(m.session)}</td>
         </tr>\`).join('');
@@ -1961,7 +1961,7 @@ const HUD_HTML = `<!DOCTYPE html>
           </div>\`;
       }
 
-      // Code Health & Technical Debt Card (Ponytail v5.3.3)
+      // Code Health & Technical Debt Card
       const ch = data.codeHealth || { reused: [], created: [], reusedCount: 0, newCount: 0, reusePct: null, openCallers: [], debtTotal: 0, noTriggerCount: 0, debtItems: [] };
       const reusedSyms = Array.isArray(ch.reused) ? ch.reused : [];
       const createdSyms = Array.isArray(ch.created) ? ch.created : [];
@@ -2465,6 +2465,8 @@ async function runSelftest() {
     const deepResearchSkill = snap.catalog?.skills?.find((s) => s.name === 'deep-research');
     const analyzeSkill = snap.catalog?.skills?.find((s) => s.name === 'analyze');
     const codeReviewSkill = snap.catalog?.skills?.find((s) => s.name === 'code-review');
+    const prSkill = snap.catalog?.skills?.find((s) => s.name === 'pr');
+    const doctorSkill = snap.catalog?.skills?.find((s) => s.name === 'doctor');
     const autopilotWf = snap.catalog?.workflows?.find((w) => w.id === 'autopilot');
     const architectAgent = snap.catalog?.subagents?.find((a) => a.name === 'architect');
 
@@ -2591,6 +2593,10 @@ async function runSelftest() {
       && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.quickStart.includes('/deep-research'))
       && Boolean(analyzeSkill && analyzeSkill.flags.includes('--audit'))
       && Boolean(codeReviewSkill && codeReviewSkill.flags.includes('--audit'))
+      && Boolean(prSkill && prSkill.flags.includes('--watch'))
+      && Boolean(doctorSkill && doctorSkill.flags.includes('--session-compare'))
+      && snap.modes.every((m) => typeof m.awaitingConfirmation === 'boolean')
+      && HUD_HTML.includes('WAITING CONFIRMATION')
       && snap.codeHealth?.debtTotal === 1
       && snap.codeHealth?.debtItems?.[0]?.ceiling.includes('[REDACTED_TOKEN]')
       && snap.codeHealth?.debtItems?.[0]?.upgrade === 'upgrade to streaming parser'

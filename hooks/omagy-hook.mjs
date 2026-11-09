@@ -1,18 +1,22 @@
 #!/usr/bin/env node
-// oh-my-agy lifecycle hook runner for Antigravity (tracks OMX v0.21.46, OMC v5.7.31, OMO v5.1.61, superpowers v7.0.2).
-// Replaces oh-my-codex's codex-native-hook.mjs (which delegated to the `omx` CLI) with a
-// dependency-free, fail-open implementation of the parts that map onto Antigravity hooks:
-//   session-start   : bounded project wiki index + active-mode reminder on new session start
-//   pre-invocation  : $skill keyword routing + active-mode reminder + once-per-session wiki index
-//   pre-tool-use    : opt-in planning-mode write guard (never auto-allows)
-//   stop            : bounded, progress-aware continuation (NO_TOOL_CALL / model_stop) + notifications
-//   verify-evidence : deterministic validator for .omagy/evidence/<file>.json team task evidence
-//   review-package  : pre-assembled commit log + diffstat + -U10 diff for $code-review
-//   goal-brief      : single-goal or fence-aware markdown Task section extractor
-//   check-test-junk : 7-rule regex scanner for high-FP junk tests across JS/TS/Py/Rust/Go
-//   research-matrix : multi-lens Boolean query matrix & terminological blueprint generator for $deep-research
-//   audit-research  : 5-dimension >=85 rubric & required-section linter for $deep-research reports
-//   selftest        : offline verification of the above against an isolated temp workspace
+// oh-my-agy lifecycle hook runner for Antigravity.
+// Dependency-free, fail-open lifecycle hook and deterministic CLI runtime for Antigravity:
+//   session-start       : bounded project wiki index + active-mode reminder on new session start
+//   pre-invocation      : $skill keyword routing + active-mode reminder + once-per-session wiki index
+//   pre-tool-use        : opt-in planning-mode write guard (never auto-allows)
+//   stop                : bounded, progress-aware continuation (NO_TOOL_CALL / model_stop) + notifications
+//   verify-evidence     : deterministic validator for .omagy/evidence/<file>.json team task evidence
+//   validate-team-tasks : fail-closed validator for .omagy/state/team/<team>/ task board files
+//   watch-pr            : deterministic PR readiness verdict classifier (ready|waiting|blocked|gone)
+//   failure-sig         : test failure signature normalizer (pytest, vitest, Node warning PIDs)
+//   session-compare     : baseline vs. candidate session transcript comparator & regression gate
+//   wiki-repair         : code-fence-aware [[wiki-link]] & [label](slug.md) rewriter on move/archive/delete
+//   review-package      : pre-assembled commit log + diffstat + -U10 diff for $code-review
+//   goal-brief          : single-goal or fence-aware markdown Task section extractor
+//   check-test-junk     : 7-rule regex scanner for high-FP junk tests across JS/TS/Py/Rust/Go
+//   research-matrix     : multi-lens Boolean query matrix & terminological blueprint generator for $deep-research
+//   audit-research      : 5-dimension >=85 rubric & required-section linter for $deep-research reports
+//   selftest            : offline verification of the above against an isolated temp workspace
 // Contract: JSON on stdin, JSON on stdout, camelCase keys (Antigravity hook protocol).
 
 import fs from 'node:fs';
@@ -164,16 +168,16 @@ function isSubagentPayload(payload, userText = '') {
   return Boolean(userText && (SUBAGENT_PROMPT_RE.test(userText) || userText.includes('<antigravity_runtime>')));
 }
 
-// ---------- mode state & multi-repo root (ported from OMC worktree-paths / state-root + OMX 0.21.31-36 symlink & OMX_ROOT guard) ----------
+// ---------- mode state & multi-repo root ----------
 const IGNORED_SCAN_DIRS = new Set([
-  '.git', '.hg', '.svn', '.omagy', 'omagy_wiki', 'omx_wiki', 'node_modules',
+  '.git', '.hg', '.svn', '.omagy', 'omagy_wiki', 'node_modules',
   'dist', 'build', 'out', '.next', '.nuxt', '.svelte-kit', 'target', 'vendor',
   'coverage', '.venv', 'venv', '__pycache__', '.tox', '.cache', '.turbo', 'sidecars',
 ]);
 
 function hasProjectOrStateMarker(dir) {
   try {
-    for (const marker of ['.omagy', 'omagy_wiki', 'omx_wiki', '.git']) {
+    for (const marker of ['.omagy', 'omagy_wiki', '.git']) {
       const p = path.join(dir, marker);
       if (fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink()) return true;
     }
@@ -193,7 +197,7 @@ export function stateRoot(root) {
   const baseHasMarker = hasProjectOrStateMarker(baseRoot);
   for (let i = 0; i < MAX_WORKSPACE_WALK_DEPTH; i += 1) {
     try {
-      if (fs.existsSync(path.join(cur, '.omagy-workspace')) || fs.existsSync(path.join(cur, '.omc-workspace'))) {
+      if (fs.existsSync(path.join(cur, '.omagy-workspace'))) {
         return cur;
       }
       if (i > 0 && !baseHasMarker && !ancestorProjectRoot && hasProjectOrStateMarker(cur)) {
@@ -319,12 +323,30 @@ function loadModeStates(root, convId = '') {
 function updatedMs(s) {
   return Date.parse(s.data.updated_at || '') || s.mtimeMs || 0;
 }
+export const CONFIRMATION_MTIME_TOLERANCE_MS = 5000;
+export function isAwaitingConfirmation(s) {
+  if (!s || !s.data || typeof s.data !== 'object') return false;
+  const d = s.data;
+  const ac = d.awaiting_confirmation ?? d.state?.awaiting_confirmation;
+  if (ac !== true) return false;
+  const setAtRaw = d.awaiting_confirmation_set_at ?? d.state?.awaiting_confirmation_set_at;
+  if (typeof setAtRaw === 'string' && setAtRaw.trim()) {
+    const setAtMs = Date.parse(setAtRaw.trim());
+    const refMs = Math.max(updatedMs(s), Number(s.mtimeMs || 0));
+    if (Number.isFinite(setAtMs) && refMs > 0 && Math.abs(refMs - setAtMs) > CONFIRMATION_MTIME_TOLERANCE_MS) {
+      return false;
+    }
+  }
+  return true;
+}
 function isActive(s, now = Date.now()) {
   if (s.foreignOwner) return false;
   const d = s.data;
   if (!d || d.active !== true) return false;
   if (TERMINAL.has(String(d.current_phase || '').toLowerCase())) return false;
   if (typeof d.completed_at === 'string' && d.completed_at.trim()) return false;
+  // Waiting on human confirmation is neither crashed/stale nor eligible for auto-nudge.
+  if (isAwaitingConfirmation(s)) return true;
   return now - updatedMs(s) <= STALE_MS;
 }
 function activeStates(roots, modes, convId = '') {
@@ -346,13 +368,16 @@ function activeStates(roots, modes, convId = '') {
   });
 }
 
-// ---------- wiki & working agreements summary (ported from OMX 0.21.18 + OmO v5.1.52 expiry & secret redaction) ----------
+// ---------- wiki & working agreements summary (expiry filtering & secret redaction) ----------
 export function redactSecrets(text) {
   return String(text || '')
     .replace(/\bsk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_KEY]')
     .replace(/\b(?:gh[pousr]|github_pat|glpat|xox[baprs])_[A-Za-z0-9_-]{16,}\b/g, '[REDACTED_TOKEN]')
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]');
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]')
+    .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|client[-_]?secret|secret|password)=['"]?)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}(['"]?)/gi, '$1[REDACTED_SECRET]$2')
+    .replace(/(\bAuthorization\s*:\s*Bearer\s+)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED_TOKEN]')
+    .replace(/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|password|secret|token)\b\s*[:=]\s*['"])(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[^'"\r\n]{12,}(['"])/gi, '$1[REDACTED_SECRET]$2');
 }
 function filterAndRedactWikiLines(raw, maxLines, nowMs = Date.now()) {
   const text = String(raw || '').trim();
@@ -382,41 +407,39 @@ function filterAndRedactWikiLines(raw, maxLines, nowMs = Date.now()) {
 function loadWikiSummary(roots, nowMs = Date.now()) {
   for (const rawRoot of roots) {
     const root = stateRoot(rawRoot);
-    for (const dirName of ['omagy_wiki', 'omx_wiki']) {
-      const indexPath = path.join(root, dirName, 'index.md');
-      const agreementsPath = path.join(root, dirName, 'agreements.md');
-      let indexRaw = '';
-      let agreementsRaw = '';
-      try { indexRaw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { /* ignore */ }
-      try { agreementsRaw = fs.readFileSync(agreementsPath, 'utf8').trim(); } catch { /* ignore */ }
-      const agLines = filterAndRedactWikiLines(agreementsRaw, 25, nowMs);
-      const idxLines = filterAndRedactWikiLines(indexRaw, MAX_WIKI_CONTEXT_LINES, nowMs);
-      if (!agLines.length && !idxLines.length) continue;
-      const parts = [];
-      if (agLines.length) {
-        parts.push(
-          `[oh-my-agy] Working Agreements (${dirName}/agreements.md):`,
-          ...agLines,
-        );
-      }
-      if (idxLines.length) {
-        parts.push(
-          `[oh-my-agy] Project Wiki index (${dirName}/index.md):`,
-          ...idxLines,
-        );
-      }
-      const summary = parts.join('\n');
-      if (summary.length <= MAX_WIKI_CONTEXT_CHARS) return summary;
-      const notice = '\n[Wiki index truncated; use $wiki read or $wiki query for more.]';
-      const bounded = summary.slice(0, MAX_WIKI_CONTEXT_CHARS - notice.length);
-      const lastNewline = bounded.lastIndexOf('\n');
-      return (lastNewline > 0 ? bounded.slice(0, lastNewline) : bounded) + notice;
+    const indexPath = path.join(root, 'omagy_wiki', 'index.md');
+    const agreementsPath = path.join(root, 'omagy_wiki', 'agreements.md');
+    let indexRaw = '';
+    let agreementsRaw = '';
+    try { indexRaw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { /* ignore */ }
+    try { agreementsRaw = fs.readFileSync(agreementsPath, 'utf8').trim(); } catch { /* ignore */ }
+    const agLines = filterAndRedactWikiLines(agreementsRaw, 25, nowMs);
+    const idxLines = filterAndRedactWikiLines(indexRaw, MAX_WIKI_CONTEXT_LINES, nowMs);
+    if (!agLines.length && !idxLines.length) continue;
+    const parts = [];
+    if (agLines.length) {
+      parts.push(
+        '[oh-my-agy] Working Agreements (omagy_wiki/agreements.md):',
+        ...agLines,
+      );
     }
+    if (idxLines.length) {
+      parts.push(
+        '[oh-my-agy] Project Wiki index (omagy_wiki/index.md):',
+        ...idxLines,
+      );
+    }
+    const summary = parts.join('\n');
+    if (summary.length <= MAX_WIKI_CONTEXT_CHARS) return summary;
+    const notice = '\n[Wiki index truncated; use $wiki read or $wiki query for more.]';
+    const bounded = summary.slice(0, MAX_WIKI_CONTEXT_CHARS - notice.length);
+    const lastNewline = bounded.lastIndexOf('\n');
+    return (lastNewline > 0 ? bounded.slice(0, lastNewline) : bounded) + notice;
   }
   return null;
 }
 
-// ---------- hierarchical subdirectory AGENTS.md discovery (ported from OmO directory-agents-injector) ----------
+// ---------- hierarchical subdirectory AGENTS.md discovery ----------
 function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.now()) {
   if (!text || typeof text !== 'string' || !roots.length) return { messages: [], seen: seenList };
   const seen = new Set(Array.isArray(seenList) ? seenList : []);
@@ -456,20 +479,20 @@ function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.now()) {
             messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
           }
         }
-        for (const wikiDirName of ['omagy_wiki', 'omx_wiki']) {
-          const childWikiDir = path.join(d, wikiDirName);
-          if (seen.has(childWikiDir)) continue;
+        const childWikiDir = path.join(d, 'omagy_wiki');
+        if (!seen.has(childWikiDir)) {
           let agRaw = '';
           let idxRaw = '';
           try { agRaw = fs.readFileSync(path.join(childWikiDir, 'agreements.md'), 'utf8').trim(); } catch { agRaw = ''; }
           try { idxRaw = fs.readFileSync(path.join(childWikiDir, 'index.md'), 'utf8').trim(); } catch { idxRaw = ''; }
           const agLines = filterAndRedactWikiLines(agRaw, 12, nowMs);
           const idxLines = filterAndRedactWikiLines(idxRaw, 15, nowMs);
-          if (!agLines.length && !idxLines.length) continue;
-          seen.add(childWikiDir);
-          const relWiki = path.relative(root, childWikiDir);
-          const parts = [`[oh-my-agy] Child-project Wiki (${relWiki}):`, ...agLines, ...idxLines];
-          messages.push(parts.join('\n').slice(0, 1500));
+          if (agLines.length || idxLines.length) {
+            seen.add(childWikiDir);
+            const relWiki = path.relative(root, childWikiDir);
+            const parts = [`[oh-my-agy] Child-project Wiki (${relWiki}):`, ...agLines, ...idxLines];
+            messages.push(parts.join('\n').slice(0, 1500));
+          }
         }
         if (messages.length >= 3) return { messages, seen: [...seen] };
       }
@@ -478,7 +501,27 @@ function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.now()) {
   return { messages, seen: [...seen] };
 }
 
-// ---------- team completion evidence validator (ported from OMX 0.21.18 + OMO v5.1.52 #11542 echo-argv receipt guard) ----------
+// ---------- team completion evidence & task-board validators ----------
+export const VERIFICATION_VERDICTS = Object.freeze([
+  'live-ui-verified',
+  'unit-test-verified',
+  'type-check-only',
+  'enforcement-verified',
+  'formally-verified',
+  'verifier-blocked',
+  'verifier-failed',
+]);
+const PASSING_VERIFICATION_VERDICTS = new Set([
+  'live-ui-verified',
+  'unit-test-verified',
+  'type-check-only',
+  'enforcement-verified',
+  'formally-verified',
+]);
+export function renderLedgerCell(val) {
+  const clean = String(val ?? '').replace(/[\t\r\n]+/g, ' ').trim();
+  return /^[=+\-@]/.test(clean) ? `'${clean}` : clean;
+}
 const NOOP_VERIFICATION_BINS = new Set(['echo', 'printf', 'true', ':', 'rem', 'noop']);
 const PASSTHROUGH_BINS = new Set(['env', 'time', 'nice', 'nohup', 'command']);
 function isRealVerificationCommand(cmd) {
@@ -536,6 +579,22 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
   if (opts.taskId && String(evidence.taskId ?? '') !== String(opts.taskId)) {
     throw new Error(`Evidence taskId "${evidence.taskId ?? ''}" does not match expected taskId "${opts.taskId}".`);
   }
+  if (evidence.verdict !== undefined && evidence.verdict !== null) {
+    const v = String(evidence.verdict).trim();
+    if (!VERIFICATION_VERDICTS.includes(v)) {
+      throw new Error(`Evidence verdict "${v}" must be one of: ${VERIFICATION_VERDICTS.join(', ')}.`);
+    }
+    if (!PASSING_VERIFICATION_VERDICTS.has(v)) {
+      throw new Error(`Evidence verdict "${v}" does not authorize task completion.`);
+    }
+  }
+  const verifiedHeadRaw = evidence.verified_head ?? evidence.sha;
+  if (verifiedHeadRaw !== undefined && verifiedHeadRaw !== null) {
+    const vh = String(verifiedHeadRaw).trim();
+    if (!/^[0-9a-fA-F]{7,64}$/.test(vh)) {
+      throw new Error(`Evidence verified_head "${vh}" must be a valid Git commit SHA (7-64 hex chars).`);
+    }
+  }
   if (!nonPlaceholderText(evidence.summary)
       || !Array.isArray(evidence.verification)
       || evidence.verification.length === 0
@@ -547,10 +606,103 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
       || evidence.unverified.some((item) => !nonPlaceholderText(item))) {
     throw new Error('Evidence requires summary, real non-echo passing verification checks (command/result:"passed"/output), and an unverified array.');
   }
-  return { ok: true, file: target, taskId: evidence.taskId ?? null, team: teamVal ?? null };
+  return {
+    ok: true,
+    file: target,
+    taskId: evidence.taskId ?? null,
+    team: teamVal ?? null,
+    verdict: evidence.verdict ?? null,
+    verifiedHead: verifiedHeadRaw ? String(verifiedHeadRaw).trim() : null,
+  };
 }
 
-// ---------- configurable custom quality gates (ported from OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671) ----------
+export function validateTeamTasks(cwd, teamName) {
+  const cleanTeam = String(teamName || '').trim();
+  if (!cwd || !cleanTeam || /[/\\]|\.\./.test(cleanTeam)) {
+    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam || '<empty>'}`] };
+  }
+  const sRoot = stateRoot(path.resolve(cwd));
+  const teamDir = path.join(sRoot, '.omagy', 'state', 'team', cleanTeam);
+  if (!fs.existsSync(teamDir)) {
+    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam}/<missing_dir>`] };
+  }
+  if (hasSymlinkSegment(sRoot, teamDir)) {
+    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam}/<symlink_dir>`] };
+  }
+  const errors = [];
+  let taskCount = 0;
+  const checkDirs = [teamDir];
+  const subTasksDir = path.join(teamDir, 'tasks');
+  try {
+    if (fs.existsSync(subTasksDir)) {
+      if (fs.lstatSync(subTasksDir).isSymbolicLink()) {
+        errors.push(`team_task_read_failed:${cleanTeam}/tasks`);
+      } else if (fs.statSync(subTasksDir).isDirectory()) {
+        checkDirs.push(subTasksDir);
+      }
+    }
+  } catch {
+    errors.push(`team_task_read_failed:${cleanTeam}/tasks`);
+  }
+
+  for (const dir of checkDirs) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir); } catch {
+      errors.push(`team_task_read_failed:${cleanTeam}/${path.basename(dir)}`);
+      continue;
+    }
+    for (const name of entries) {
+      if (name !== 'tasks.json' && !/^task-.+\.json$/i.test(name)) continue;
+      const full = path.join(dir, name);
+      let st;
+      try { st = fs.lstatSync(full); } catch {
+        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+        continue;
+      }
+      if (st.isSymbolicLink() || !st.isFile() || st.size === 0 || st.size > MAX_EVIDENCE_BYTES) {
+        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+        continue;
+      }
+      let parsed;
+      try { parsed = JSON.parse(fs.readFileSync(full, 'utf8')); } catch {
+        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+        continue;
+      }
+      if (name === 'tasks.json') {
+        const list = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks) ? parsed.tasks : null);
+        if (!list) {
+          errors.push(`team_task_read_failed:${cleanTeam}/tasks.json`);
+          continue;
+        }
+        for (const item of list) {
+          if (!item || typeof item !== 'object' || !nonPlaceholderText(item.id) || typeof item.status !== 'string' || !item.status.trim()) {
+            errors.push(`team_task_read_failed:${cleanTeam}/tasks.json`);
+            break;
+          }
+          taskCount += 1;
+        }
+      } else {
+        const expectedId = name.replace(/^task-/i, '').replace(/\.json$/i, '');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !nonPlaceholderText(parsed.id) || typeof parsed.status !== 'string' || !parsed.status.trim()) {
+          errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+          continue;
+        }
+        if (String(parsed.id).trim() !== expectedId) {
+          errors.push(`team_task_read_failed:${cleanTeam}/${name}:task_id_mismatch`);
+          continue;
+        }
+        taskCount += 1;
+      }
+    }
+  }
+  const ok = errors.length === 0 && taskCount > 0;
+  if (taskCount === 0 && errors.length === 0) {
+    errors.push(`team_task_read_failed:${cleanTeam}/<no_tasks>`);
+  }
+  return { ok, exitCode: ok ? 0 : 1, team: cleanTeam, taskCount, errors };
+}
+
+// ---------- configurable custom quality gates ----------
 const QUALITY_GATE_STAGES = new Set(['deep-interview', 'ralplan', 'code-review']);
 const RESERVED_GATE_SKILLS = new Set([
   'deep-interview', 'ralplan', 'code-review', 'ai-slop-cleaner', 'autopilot',
@@ -560,9 +712,7 @@ const SUNSET_GATE_SKILLS = new Set(['ralph', 'ultrawork', 'pipeline', 'ecomode',
 const VALID_GATE_MODELS = new Set(['inherit', 'flash', 'pro']);
 export function validateQualityGates(cwd, requestedStage = '') {
   const sRoot = stateRoot(cwd || process.cwd());
-  const cfgPath = fs.existsSync(path.join(sRoot, '.omagy', 'config.json'))
-    ? path.join(sRoot, '.omagy', 'config.json')
-    : path.join(sRoot, '.omx-config.json');
+  const cfgPath = path.join(sRoot, '.omagy', 'config.json');
   if (!fs.existsSync(cfgPath)) {
     return { ok: true, stage: requestedStage || null, gates: [], errors: [] };
   }
@@ -629,7 +779,7 @@ export function validateQualityGates(cwd, requestedStage = '') {
   return { ok: errors.length === 0, stage: requestedStage || null, gates, errors };
 }
 
-// ---------- crash-resilient JSONL helpers (ported from OMX 0.21.33 PR #3893) ----------
+// ---------- crash-resilient JSONL helpers ----------
 export function appendJsonlRecord(filePath, rawRecord) {
   const resolved = path.resolve(String(filePath || ''));
   let parsed;
@@ -683,7 +833,7 @@ export function readJsonlRecords(filePath) {
   return { ok: true, file: resolved, records, skipped };
 }
 
-// ---------- Ponytail v5.3.3 codebase reuse map, shortcut debt ledger & diff code-health helpers ----------
+// ---------- codebase reuse map, shortcut debt ledger & diff code-health helpers ----------
 // shortcut: regex symbol scan skips dynamic/barrel re-exports, upgrade to tree-sitter if dynamic export misses matter
 const MAP_MAX_FILES = 4000;
 const MAP_SRC_RE = /\.(py|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|rs|rb|java|kt|kts|php|swift|cs)$/i;
@@ -832,7 +982,7 @@ export function scanShortcutDebt(roots, marker = '') {
   const rootList = Array.isArray(roots) ? roots : [roots || process.cwd()];
   const custom = String(marker || '').trim();
   const escapedCustom = custom ? custom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
-  const markerGroup = escapedCustom || '(?:shortcut|ceiling|ponytail)';
+  const markerGroup = escapedCustom || '(?:shortcut|ceiling)';
   const commentRe = new RegExp(`(?:^\\s*(?:#|\\/\\/|\\/\\*+|\\*)|(?<![:"'\`\\\\])\\s+(?:#|\\/\\/|\\/\\*+))\\s*(${markerGroup})\\s*:\\s*(.+?)(?:\\s*\\*\\/)?$`, 'i');
   const splitRe = /^(.*?)(?:\s*(?:,|;|->|=>|\bupgrade\s*:)\s*|\s+(?=(?:when|if|once|switch\s+to|upgrade\s+to|replace\s+with)\b))(.+)$/i;
   const placeholderRe = /<[a-zA-Z][^>\n]{1,40}>/;
@@ -886,7 +1036,7 @@ export function scanShortcutDebt(roots, marker = '') {
         if (!body || placeholderRe.test(body)) continue;
         // Skip lines that are regex literals or string assertions testing the marker itself
         const trimmedLine = line.trimStart();
-        if (!/^(?:#|\/\/|\/\*|\*)/.test(trimmedLine) && /['"`/].*(?:shortcut|ceiling|ponytail)\s*:/.test(trimmedLine)) continue;
+        if (!/^(?:#|\/\/|\/\*|\*)/.test(trimmedLine) && /['"`/].*(?:shortcut|ceiling)\s*:/.test(trimmedLine)) continue;
         const key = `${relFile}:${i + 1}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1055,7 +1205,7 @@ export function analyzeDiffCodeHealth(roots, opts = {}) {
   return { reused, created, removed, reusePct, openCallers };
 }
 
-// ---------- context-saving subagent handoff helpers (ported from superpowers v6/v7) ----------
+// ---------- context-saving subagent handoff helpers ----------
 function isSafeGitRef(ref) {
   return typeof ref === 'string' && ref.trim().length > 0 && !ref.trim().startsWith('-');
 }
@@ -1271,7 +1421,7 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
   return { ok: true, exitCode: 0, path: target, id: resolvedId, title };
 }
 
-// ---------- junk-test scanner (ported from OMO v5.1.54 #11967 check-test-junk-rules.ts) ----------
+// ---------- junk-test scanner ----------
 const TEST_FILE_NAME_RE = /(?:^|[/\\])(?:__tests__|tests)[/\\].+\.(?:[cm]?[jt]sx?|py|rs|go)$|\.(?:test|spec)\.(?:[cm]?[jt]sx?)$|_test\.(?:py|go|rs)$|(?:^|[/\\])test_[^/\\]+\.py$/i;
 const TEST_JUNK_RULES = [
   {
@@ -1568,6 +1718,13 @@ export function auditResearchReport(reportPath) {
     warnings.push('No [VERIFIED], [DERIVED], or [ASSUMED] claim-kind tags found in report.');
   }
 
+  // Detect HTML-to-markdown footnote digits glued onto numbers (e.g. "42¹" or "100[1]")
+  const proseWithoutCode = content.replace(/^ {0,3}(?:`{3,}|~{3,})[\s\S]*?^ {0,3}(?:`{3,}|~{3,})/gm, '').replace(/`[^`\r\n]+`/g, '');
+  const conversionMatches = proseWithoutCode.match(/\b\d+(?:[¹²³⁴⁵⁶⁷⁸⁹⁰]+|\[\d+\])/g) || [];
+  if (conversionMatches.length > 0) {
+    errors.push(`conversion_altered_number: detected ${conversionMatches.length} number(s) with glued footnote marker(s) (${conversionMatches.slice(0, 3).join(', ')})`);
+  }
+
   const scores = {};
   const lines = content.split(/\r?\n/);
   for (const dim of RESEARCH_RUBRIC_DIMENSIONS) {
@@ -1619,9 +1776,407 @@ export function auditResearchReport(reportPath) {
     scores,
     compositeScore,
     claimCounts,
+    conversionAlteredNumbers: conversionMatches.length,
     errors,
     warnings,
   };
+}
+
+// ---------- watch-pr verdict policy, failure signature normalizer, session compare & wiki link repair ----------
+// shortcut: cold-path CLI helpers live in omagy-hook.mjs for single-file portability, split into lazy-imported hooks/omagy-cli.mjs if hook file exceeds 250KB
+export const DEFAULT_NO_CHECKS_CONFIRM_MS = 60_000;
+export function decideWatchVerdict(rawFacts = {}, options = {}) {
+  const f = rawFacts && typeof rawFacts === 'object' ? rawFacts : {};
+  const norm = (v) => String(v ?? '').trim().toLowerCase();
+  const state = norm(f.state ?? f.prState ?? 'open');
+  if (state === 'merged' || state === 'closed') {
+    return { verdict: 'gone', reasons: [`pr_${state}`] };
+  }
+  const mergeable = norm(f.mergeable);
+  const mergeStateStatus = norm(f.mergeStateStatus);
+  const reviewDecision = norm(f.reviewDecision);
+  const reviewRequired = Boolean(f.reviewRequired);
+  const checks = f.checks && typeof f.checks === 'object' ? f.checks : {};
+  const failed = Number(checks.failed ?? f.checksFailed ?? 0);
+  const canceled = Number(checks.canceled ?? f.checksCanceled ?? 0);
+  const pending = Number(checks.pending ?? f.checksPending ?? 0);
+  const passed = Number(checks.passed ?? f.checksPassed ?? 0);
+  const rawTotal = checks.total ?? f.checksTotal;
+  const total = rawTotal !== undefined ? Number(rawTotal) : (failed + canceled + pending + passed);
+
+  const blocked = [];
+  if (mergeable === 'conflicting') blocked.push('merge_conflicting');
+  if (mergeStateStatus === 'blocked') blocked.push('merge_state_blocked');
+  if (mergeStateStatus === 'dirty') blocked.push('merge_state_dirty');
+  if (mergeStateStatus === 'behind') blocked.push('merge_state_behind');
+  if (failed > 0) blocked.push('checks_failed');
+  if (canceled > 0) blocked.push('checks_canceled');
+  if (mergeStateStatus === 'unstable' && pending === 0) blocked.push('merge_state_unstable');
+  if (reviewDecision === 'changes_requested') blocked.push('changes_requested');
+  if (reviewRequired && reviewDecision !== 'approved') blocked.push('review_required');
+  if (blocked.length > 0) {
+    return { verdict: 'blocked', reasons: [...new Set(blocked)] };
+  }
+
+  const waiting = [];
+  if (f.isDraft === true || mergeStateStatus === 'draft') waiting.push('draft_pr');
+  if (mergeable === 'unknown') waiting.push('mergeable_unknown');
+  if (mergeStateStatus === 'unknown') waiting.push('merge_state_unknown');
+  if (pending > 0 || (mergeStateStatus === 'unstable' && pending > 0)) waiting.push('checks_pending');
+  if (total === 0) {
+    // GitHub post-push check-suite registration race: require a 60s confirmation window when 0 checks are reported.
+    const confirmMs = Number(options.noChecksConfirmMs ?? DEFAULT_NO_CHECKS_CONFIRM_MS);
+    const nowMs = Number(options.nowMs ?? f.nowMs ?? Date.now());
+    const firstSeen = Number(f.noChecksFirstSeenAtMs);
+    const elapsedAttr = Number(f.elapsedSinceFirstZeroChecksMs);
+    const elapsedMs = Number.isFinite(elapsedAttr)
+      ? elapsedAttr
+      : (Number.isFinite(firstSeen) ? (nowMs - firstSeen) : NaN);
+    if (!Number.isFinite(elapsedMs) || elapsedMs < confirmMs) {
+      waiting.push('no_checks_confirm_window');
+    }
+  }
+  if (waiting.length > 0) {
+    return { verdict: 'waiting', reasons: [...new Set(waiting)] };
+  }
+  return {
+    verdict: 'ready',
+    reasons: [],
+    proof: { headSha: String(f.headSha || '') },
+  };
+}
+
+export function normalizeFailureSignature(text) {
+  const raw = String(text || '');
+  const lines = raw.split(/\r?\n/);
+  const kept = [];
+  for (const rawLine of lines) {
+    const cleanLine = rawLine.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    const trimmed = cleanLine.trim();
+    if (!trimmed) continue;
+    if (/^[.sxX]+(?:\s*\[\s*\d+%\s*\])?$/.test(trimmed)) continue;
+    if (/^Start at\s+\d{2}:\d{2}:\d{2}$/i.test(trimmed)) continue;
+    let line = cleanLine.replace(/(?<=\bin\s+\d+(?:\.\d+)?s\s+)\(\d+:\d{2}(?::\d{2})?(?:\.\d+)?\)/g, '');
+    if (/^=*\s*\d+\s+passed(?:,\s*\d+\s+(?:warnings?|skipped|xfailed|xpassed|deselected))*\s+in\s+\d+(?:\.\d+)?s\s*=*$/i.test(line.trim())) continue;
+    if (/^=+\s*.*\b(?:failed|errors?)\b.*\bin\s+\d+(?:\.\d+)?s\s*=+$/i.test(line.trim())) {
+      line = line.replace(/\bin\s+\d+(?:\.\d+)?s(?=\s*=+$)/i, 'in <d>s');
+    }
+    line = line.replace(/(?<=\(node:)\d+(?=\)\s+(?:\[[^\]]+\]\s+)?[A-Za-z]+Warning:)/g, '<pid>');
+    kept.push(line.trimEnd());
+  }
+  return kept.join('\n');
+}
+
+function summarizeTranscriptMetrics(records) {
+  let turnsStarted = 0;
+  let turnsCompleted = 0;
+  let toolCalls = 0;
+  let failedTools = 0;
+  let incomplete = 0;
+  let compactions = 0;
+  let minTs = Infinity;
+  let maxTs = -Infinity;
+  const byTool = {};
+  const fileReads = {};
+
+  for (const rec of records) {
+    if (!rec || typeof rec !== 'object') continue;
+    const ts = Date.parse(rec.created_at || rec.at || rec.timestamp || '');
+    if (Number.isFinite(ts)) {
+      if (ts < minTs) minTs = ts;
+      if (ts > maxTs) maxTs = ts;
+    }
+    const type = String(rec.type || '').toUpperCase();
+    const status = String(rec.status || '').toUpperCase();
+    if (type === 'USER_INPUT' || rec.role === 'user') turnsStarted += 1;
+    if (type === 'PLANNER_RESPONSE' || rec.role === 'assistant') {
+      if (!status || status === 'DONE' || status === 'COMPLETED') turnsCompleted += 1;
+    }
+    if (type.includes('COMPACT') || (typeof rec.content === 'string' && /(?:^|\s)\/compact\b/i.test(rec.content))) {
+      compactions += 1;
+    }
+    if (status === 'ERROR' || status === 'FAILED' || rec.error) {
+      failedTools += 1;
+    } else if (status && status !== 'DONE' && status !== 'COMPLETED') {
+      incomplete += 1;
+    }
+    const calls = Array.isArray(rec.tool_calls) ? rec.tool_calls : [];
+    for (const tc of calls) {
+      if (!tc || typeof tc !== 'object') continue;
+      toolCalls += 1;
+      const rawName = String(tc.name || tc.toolName || tc.function?.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '');
+      const name = rawName || 'unknown';
+      if (!byTool[name]) byTool[name] = { calls: 0, failed: 0 };
+      byTool[name].calls += 1;
+      if (tc.status === 'ERROR' || tc.error) {
+        byTool[name].failed += 1;
+        failedTools += 1;
+      }
+      if (/^(?:read_file|view_file|read)$/i.test(name)) {
+        let argsObj = tc.arguments || tc.args || tc.input || tc.function?.arguments || null;
+        if (typeof argsObj === 'string') {
+          try { argsObj = JSON.parse(argsObj); } catch { argsObj = null; }
+        }
+        const readPath = argsObj && typeof argsObj === 'object'
+          ? String(argsObj.Path || argsObj.filePath || argsObj.TargetFile || argsObj.path || '').trim()
+          : '';
+        if (readPath) {
+          fileReads[readPath] = (fileReads[readPath] || 0) + 1;
+        }
+      }
+    }
+  }
+  const repeatedWork = Object.values(fileReads).filter((c) => c >= 3).length;
+  const stumbles = failedTools + incomplete;
+  const durationMs = (Number.isFinite(minTs) && Number.isFinite(maxTs) && maxTs >= minTs && minTs !== maxTs)
+    ? (maxTs - minTs)
+    : (records.length === 1 && Number.isFinite(minTs) ? 0 : null);
+  return {
+    records: records.length,
+    duration_ms: durationMs,
+    turns: turnsStarted,
+    turns_started: turnsStarted,
+    turns_completed: turnsCompleted,
+    tool_calls: toolCalls,
+    failed_tools: failedTools,
+    incomplete,
+    stumbles,
+    repeated_work: repeatedWork,
+    compactions,
+    byTool,
+  };
+}
+
+export function compareSessions(baselinePath, candidatePath, opts = {}) {
+  const safeRead = (p) => {
+    try {
+      const r = readJsonlRecords(String(p || ''));
+      return Array.isArray(r) ? r : (Array.isArray(r?.records) ? r.records : []);
+    } catch {
+      return [];
+    }
+  };
+  const baseRecs = safeRead(baselinePath);
+  const candRecs = safeRead(candidatePath);
+  const base = summarizeTranscriptMetrics(baseRecs);
+  const cand = summarizeTranscriptMetrics(candRecs);
+  const reasons = [];
+  let status = 'no_regression';
+
+  if (base.records === 0 || cand.records === 0) {
+    status = 'inconclusive';
+    reasons.push('missing_transcript_records');
+  } else if ((base.tool_calls > 0 && base.duration_ms === null) || (cand.tool_calls > 0 && cand.duration_ms === null)) {
+    status = 'inconclusive';
+    reasons.push('missing_measured_duration');
+  } else {
+    if (cand.failed_tools > base.failed_tools) reasons.push('failed_tools_increased');
+    if (cand.incomplete > base.incomplete) reasons.push('incomplete_steps_increased');
+    if (cand.stumbles > base.stumbles && !reasons.includes('failed_tools_increased') && !reasons.includes('incomplete_steps_increased')) {
+      reasons.push('stumbles_increased');
+    }
+    if (cand.repeated_work > base.repeated_work) reasons.push('repeated_work_increased');
+    const maxPct = opts.maxDurationIncreasePct !== undefined ? Number(opts.maxDurationIncreasePct) : 50;
+    if (Number.isFinite(maxPct) && base.duration_ms !== null && base.duration_ms > 0 && cand.duration_ms !== null) {
+      const pctIncrease = ((cand.duration_ms - base.duration_ms) / base.duration_ms) * 100;
+      if (pctIncrease > maxPct) reasons.push('duration_regression');
+    }
+    if (reasons.length > 0) status = 'regression';
+  }
+
+  const allTools = new Set([...Object.keys(base.byTool), ...Object.keys(cand.byTool)]);
+  const byTool = {};
+  for (const t of [...allTools].sort()) {
+    const b = base.byTool[t] || { calls: 0, failed: 0 };
+    const c = cand.byTool[t] || { calls: 0, failed: 0 };
+    byTool[t] = {
+      baseline_calls: b.calls,
+      candidate_calls: c.calls,
+      delta_calls: c.calls - b.calls,
+      baseline_failed: b.failed,
+      candidate_failed: c.failed,
+      delta_failed: c.failed - b.failed,
+    };
+  }
+  const failOnReg = Boolean(opts.failOnRegression);
+  const exitCode = !failOnReg ? 0 : (status === 'regression' ? 2 : (status === 'inconclusive' ? 3 : 0));
+  return {
+    ok: exitCode === 0,
+    exitCode,
+    baseline: {
+      duration_ms: base.duration_ms,
+      turns: base.turns,
+      turns_started: base.turns_started,
+      turns_completed: base.turns_completed,
+      tool_calls: base.tool_calls,
+      failed_tools: base.failed_tools,
+      incomplete: base.incomplete,
+      stumbles: base.stumbles,
+      repeated_work: base.repeated_work,
+      compactions: base.compactions,
+    },
+    candidate: {
+      duration_ms: cand.duration_ms,
+      turns: cand.turns,
+      turns_started: cand.turns_started,
+      turns_completed: cand.turns_completed,
+      tool_calls: cand.tool_calls,
+      failed_tools: cand.failed_tools,
+      incomplete: cand.incomplete,
+      stumbles: cand.stumbles,
+      repeated_work: cand.repeated_work,
+      compactions: cand.compactions,
+    },
+    deltas: {
+      duration_ms: (base.duration_ms !== null && cand.duration_ms !== null) ? (cand.duration_ms - base.duration_ms) : null,
+      turns: cand.turns - base.turns,
+      tool_calls: cand.tool_calls - base.tool_calls,
+      failed_tools: cand.failed_tools - base.failed_tools,
+      incomplete: cand.incomplete - base.incomplete,
+      stumbles: cand.stumbles - base.stumbles,
+      repeated_work: cand.repeated_work - base.repeated_work,
+      compactions: cand.compactions - base.compactions,
+    },
+    byTool,
+    assessment: { status, reasons },
+  };
+}
+
+function transformOutsideCodeSpans(markdown, replacer) {
+  const tokenRe = /(^ {0,3}(?:`{3,}|~{3,})[^\r\n]*\r?\n[\s\S]*?^ {0,3}(?:`{3,}|~{3,})[ \t]*$|`+[^`\r\n]*?`+)/gm;
+  let out = '';
+  let lastIdx = 0;
+  let m;
+  while ((m = tokenRe.exec(markdown)) !== null) {
+    if (m.index > lastIdx) {
+      out += replacer(markdown.slice(lastIdx, m.index));
+    }
+    out += m[0];
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < markdown.length) {
+    out += replacer(markdown.slice(lastIdx));
+  }
+  return out;
+}
+
+export function repairWikiLinks(wikiDir, changes = {}) {
+  const dir = path.resolve(String(wikiDir || ''));
+  if (!dir || !fs.existsSync(dir) || fs.lstatSync(dir).isSymbolicLink()) {
+    return { ok: false, exitCode: 1, filesUpdated: 0, linksRewritten: 0, error: 'Invalid or symlinked wiki directory.' };
+  }
+  const moved = {};
+  const archivedList = [];
+  const deletedList = [];
+  if (Array.isArray(changes)) {
+    for (const item of changes) {
+      if (!item || typeof item !== 'object') continue;
+      const act = String(item.action || '').trim().toLowerCase();
+      const oldSlug = String(item.oldSlug || item.slug || '').trim().replace(/\.md$/i, '');
+      const newSlug = String(item.newSlug || item.to || '').trim().replace(/\.md$/i, '');
+      if (!oldSlug) continue;
+      if ((act === 'move' || act === 'moved' || act === 'rename') && newSlug) moved[oldSlug] = newSlug;
+      else if (act === 'archive' || act === 'archived') archivedList.push(oldSlug);
+      else if (act === 'delete' || act === 'deleted') deletedList.push(oldSlug);
+    }
+  } else if (changes && typeof changes === 'object') {
+    if (changes.moved && typeof changes.moved === 'object') {
+      for (const [k, v] of Object.entries(changes.moved)) {
+        moved[String(k).replace(/\.md$/i, '')] = String(v).replace(/\.md$/i, '');
+      }
+    }
+    if (Array.isArray(changes.archived)) archivedList.push(...changes.archived.map((s) => String(s).replace(/\.md$/i, '')));
+    if (Array.isArray(changes.deleted)) deletedList.push(...changes.deleted.map((s) => String(s).replace(/\.md$/i, '')));
+  }
+  const archived = new Set(archivedList);
+  const deleted = new Set(deletedList);
+  const movedMap = new Map(Object.entries(moved));
+
+  let filesUpdated = 0;
+  let linksRewritten = 0;
+  const entries = fs.readdirSync(dir);
+  for (const name of entries) {
+    if (!name.endsWith('.md')) continue;
+    const full = path.join(dir, name);
+    let st;
+    try { st = fs.lstatSync(full); } catch { continue; }
+    if (st.isSymbolicLink() || !st.isFile()) continue;
+    const orig = fs.readFileSync(full, 'utf8');
+    let fileRewrites = 0;
+    const updated = transformOutsideCodeSpans(orig, (segment) => {
+      let s = segment.replace(/\[\[([^\]|#\r\n]+)(#[^\]|\r\n]*)?(?:\|([^\]\r\n]+))?\]\]/g, (fullMatch, rawTarget, anchor = '', alias = '') => {
+        const slug = rawTarget.trim().replace(/\.md$/i, '');
+        const label = (alias || slug).trim();
+        if (movedMap.has(slug)) {
+          fileRewrites += 1;
+          const nextSlug = movedMap.get(slug);
+          return `[[${nextSlug}${anchor}${alias ? `|${alias}` : ''}]]`;
+        }
+        if (archived.has(slug)) {
+          fileRewrites += 1;
+          return `[[ARCHIVE.md|${label} (archived)]]`;
+        }
+        if (deleted.has(slug)) {
+          fileRewrites += 1;
+          return label;
+        }
+        return fullMatch;
+      });
+      s = s.replace(/\[([^\]\r\n]+)\]\((?:\.\/)?([^)\s#]+?)\.md(#[^)\s]*)?\)/g, (fullMatch, label, rawSlug, anchor = '') => {
+        const slug = rawSlug.trim();
+        if (movedMap.has(slug)) {
+          fileRewrites += 1;
+          return `[${label}](${movedMap.get(slug)}.md${anchor})`;
+        }
+        if (archived.has(slug)) {
+          fileRewrites += 1;
+          return `[${label} (archived)](ARCHIVE.md)`;
+        }
+        if (deleted.has(slug)) {
+          fileRewrites += 1;
+          return label;
+        }
+        return fullMatch;
+      });
+      return s;
+    });
+    if (fileRewrites > 0 && updated !== orig) {
+      fs.writeFileSync(full, updated, 'utf8');
+      filesUpdated += 1;
+      linksRewritten += fileRewrites;
+    }
+  }
+  return { ok: true, exitCode: 0, filesUpdated, linksRewritten };
+}
+
+export function nextAvailableWikiSlug(wikiDir, rawSlug) {
+  const dir = path.resolve(String(wikiDir || ''));
+  const baseSlug = String(rawSlug || '').trim().replace(/\.md$/i, '');
+  if (!dir || !baseSlug || !fs.existsSync(dir)) return baseSlug;
+  let logAndArchive = '';
+  for (const metaFile of ['log.md', 'ARCHIVE.md']) {
+    try {
+      const p = path.join(dir, metaFile);
+      if (fs.existsSync(p) && !fs.lstatSync(p).isSymbolicLink()) {
+        logAndArchive += `\n${fs.readFileSync(p, 'utf8')}`;
+      }
+    } catch { /* ignore */ }
+  }
+  const isCandidateTaken = (candidate) => {
+    if (fs.existsSync(path.join(dir, `${candidate}.md`))) return true;
+    if (fs.existsSync(path.join(dir, 'archive', `${candidate}.md`))) return true;
+    if (fs.existsSync(path.join(dir, 'deleted', `${candidate}.md`))) return true;
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b(?:delete[d]?|archive[d]?|move[d]?)\\b[^\\r\\n]*\\b${escaped}(?![-A-Za-z0-9_])|\\b${escaped}(?![-A-Za-z0-9_])[^\\r\\n]*\\(archived\\)`, 'i').test(logAndArchive);
+  };
+  if (!isCandidateTaken(baseSlug)) {
+    return baseSlug;
+  }
+  let n = 2;
+  while (isCandidateTaken(`${baseSlug}-${n}`)) {
+    n += 1;
+  }
+  return `${baseSlug}-${n}`;
 }
 
 // ---------- transcript ----------
@@ -1787,7 +2342,10 @@ function buildActiveModeMessage(roots, convId = '') {
   const active = activeStates(roots, null, convId);
   if (!active.length) return null;
   const now = Date.now();
-  const desc = active.slice(0, 4).map((s) => `${s.mode} (phase: ${s.data.current_phase || 'unknown'}, updated ${ago(now - updatedMs(s))})`).join('; ');
+  const desc = active.slice(0, 4).map((s) => {
+    const waitingTag = isAwaitingConfirmation(s) ? ', awaiting confirmation' : '';
+    return `${s.mode} (phase: ${s.data.current_phase || 'unknown'}${waitingTag}, updated ${ago(now - updatedMs(s))})`;
+  }).join('; ');
   return `[oh-my-agy] Active workflow state: ${desc} — see ${path.join(active[0].root, '.omagy', 'state')}. ` +
     'If the user says continue/resume, resume from current_phase; if the user changes direction, update or $cancel the mode.';
 }
@@ -1960,7 +2518,7 @@ function preToolUse(payload) {
   const ralplanGate = autopilotStates.find((s) => s.data.ralplan_gate === true && !hasRalplanArtifacts(s.root));
   const s = planning[0] || autopilotPlanning || ralplanGate;
 
-  // Fail closed when an explicit file-mutation tool has no recognizable target argument during active planning (OMO v5.1.49 #11369).
+  // Fail closed when an explicit file-mutation tool has no recognizable target argument during active planning.
   if (!targets.length) {
     if (s && FILE_MUTATION_TOOLS_RE.test(toolName)) {
       return {
@@ -1973,13 +2531,13 @@ function preToolUse(payload) {
 
   const primaryResolved = canonicalizePath(targets[0]);
 
-  // Working Agreements human-entry protection (OMO v5.1.45-49 #11112):
+  // Working Agreements human-entry protection:
   // Escalates full Overwrite on omagy_wiki/agreements.md if it would drop existing [by:human] / (by: human) entries.
   const isFullOverwrite = /^(?:write_file|write_to_file)$/i.test(toolName)
     && (args.Overwrite === true || args.overwrite === true)
     && args.Append !== true && args.append !== true;
   const newContent = typeof (args.Content ?? args.content) === 'string' ? (args.Content ?? args.content) : null;
-  if (isFullOverwrite && newContent !== null && /(?:^|[/\\])(?:omagy_wiki|omx_wiki)[/\\]agreements\.md$/i.test(primaryResolved)) {
+  if (isFullOverwrite && newContent !== null && /(?:^|[/\\])omagy_wiki[/\\]agreements\.md$/i.test(primaryResolved)) {
     try {
       const prevRaw = fs.readFileSync(primaryResolved, 'utf8');
       const humanLines = prevRaw.split('\n').map((l) => l.trim()).filter((l) => /(?:\[by:\s*human\]|\(by:\s*human\)|\bby:\s*human\b)/i.test(l));
@@ -2006,7 +2564,7 @@ function preToolUse(payload) {
     return { decision: 'force_ask', reason };
   }
 
-  // Write-existing-file guard (ported from OmO write-existing-file-guard):
+  // Write-existing-file guard:
   // Escalates full-file Overwrite on a non-empty existing code file that has not been read in this session.
   if (isFullOverwrite && CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
     let existsNonEmpty = false;
@@ -2040,7 +2598,8 @@ async function stop(payload) {
     const routingRec = readJson(runtimeFile(conv, 'routing')) || {};
     const isSubagent = Boolean(routingRec.isSubagent) || isSubagentPayload(payload);
     const active = activeStates(roots, CONTINUATION_MODES, conv)
-      .filter((s) => !isSubagent || (conv && s.owner === String(conv)));
+      .filter((s) => !isSubagent || (conv && s.owner === String(conv)))
+      .filter((s) => !isAwaitingConfirmation(s));
     const nudgeFile = runtimeFile(conv, 'nudge');
     if (active.length) {
       const s = active[0];
@@ -2325,7 +2884,7 @@ async function selftest() {
     const filteredRoots = workspaceRoots({ workspacePaths: [ path.join(ws, 'does-not-exist'), ws ] });
     check('workspaceRoots filters non-existent directories', filteredRoots.length === 1 && filteredRoots[0] === ws);
 
-    // Subagent prompt & hook isolation (OMX codex-native-hook parity)
+    // Subagent prompt & hook isolation
     writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
     const subTranscript = path.join(ws, 'subagent-transcript.jsonl');
     fs.writeFileSync(subTranscript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'TEAM alpha — TASK 1: audit $autopilot and $cancel behavior' })}\n`);
@@ -2335,7 +2894,7 @@ async function selftest() {
     check('subagent prompt suppresses quoted $skill routing and unowned parent stop nudges', !subPreTexts.some((t) => t.includes('Skill routing')) && subStop.decision === 'stop');
     writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
 
-    // Symlink state & planning-guard escape protection (OMX 0.21.31-32 parity)
+    // Symlink state & planning-guard escape protection
     const symTargetState = path.join(ws, 'outside-state.json');
     writeJson(symTargetState, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
     const symStateLink = path.join(ws, '.omagy', 'state', 'symlinked-state.json');
@@ -2353,7 +2912,7 @@ async function selftest() {
     fs.rmSync(path.join(ws, '.omagy', 'state', 'plan-state.json'), { force: true });
     check('preToolUse refuses symlink inside .omagy/ escaping to source file during planning', gSymEscape.decision === 'force_ask');
 
-    // Crash-resilient newline-isolated JSONL append & tolerant reader (OMX 0.21.33 PR #3893 parity)
+    // Crash-resilient newline-isolated JSONL append & tolerant reader
     const ledgerPath = path.join(ws, '.omagy', 'ultragoal', 'ledger.jsonl');
     fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
     fs.writeFileSync(ledgerPath, '{"goal_id":"G1","event":"started"}\n{"goal_id":"G1","event":"torn');
@@ -2361,13 +2920,13 @@ async function selftest() {
     const readRes = readJsonlRecords(ledgerPath);
     check('appendJsonlRecord isolates torn tail with newline and readJsonlRecords recovers valid entries', appRes.isolatedNewline === true && readRes.records.length === 2 && readRes.skipped === 1);
 
-    // Whole-integer env/config parser (OMC v5.7.15 #4599/#4600 parity)
+    // Whole-integer env/config parser
     check('intOr validates whole safe integers and falls back on empty/negative/float/Infinity/NaN',
       intOr('120', 60) === 120 && intOr('0', 60, 0) === 0 && intOr('0', 60, 1) === 60
       && intOr('', 60, 0) === 60 && intOr('-5', 60, 0) === 60 && intOr('1.5', 60, 0) === 60
       && intOr('Infinity', 60, 0) === 60 && intOr('60s', 60, 0) === 60);
 
-    // OMAGY_ROOT / OMAGY_STATE_ROOT override & omagyLogsDir (OMX v0.21.36 #3909 parity)
+    // OMAGY_ROOT / OMAGY_STATE_ROOT override & omagyLogsDir
     const customStateRoot = path.join(ws, 'custom-omagy-root');
     fs.mkdirSync(customStateRoot, { recursive: true });
     process.env.OMAGY_STATE_ROOT = path.join(customStateRoot, '.omagy');
@@ -2375,14 +2934,14 @@ async function selftest() {
     delete process.env.OMAGY_STATE_ROOT;
     check('OMAGY_STATE_ROOT overrides stateRoot and omagyLogsDir', resolvedLogs === path.join(canonicalizePath(customStateRoot), '.omagy', 'logs'));
 
-    // detectSkills quote/code/blockquote/URL/negated/help-question suppression (OMC v5.7.13 & OMO v5.1.45 parity)
+    // detectSkills quote/code/blockquote/URL/negated/help-question suppression
     const suppressedSkills = detectSkills('What does `$autopilot` or "$ralplan" do?\n> $team\n[a -> b] $ultragoal\ndo not use $ultraqa or https://example.com/$plan');
     const preservedLead = detectSkills('$ralplan: design the API using ```js\nconst s = "$team";\n``` and do not use $autopilot');
     const suppressedLeadHelp = detectSkills('$ralplan: how do I use this skill?');
     check('detectSkills suppresses quoted/code/negated/help mentions while preserving leading invocation',
       suppressedSkills.length === 0 && preservedLead.length === 1 && preservedLead[0] === 'ralplan' && suppressedLeadHelp.length === 0);
 
-    // Child-project omagy_wiki discovery (OMO v5.1.45-47 #10921/#11165 parity)
+    // Child-project omagy_wiki discovery
     const childPkgWiki = path.join(ws, 'packages', 'billing', 'omagy_wiki');
     fs.mkdirSync(childPkgWiki, { recursive: true });
     fs.writeFileSync(path.join(childPkgWiki, 'agreements.md'), '- [by:human] All billing amounts use integer cents.\n');
@@ -2390,7 +2949,7 @@ async function selftest() {
     check('discoverSubdirAgents surfaces child-project omagy_wiki once',
       childDisc.messages.some((m) => m.includes('Child-project Wiki') && m.includes('integer cents')));
 
-    // Planning guard multi-target (rename / apply_patch) & fail-closed on missing target (OMO v5.1.49 #11369 parity)
+    // Planning guard multi-target (rename / apply_patch) & fail-closed on missing target
     writeJson(path.join(ws, '.omagy', 'state', 'plan-state.json'), { mode: 'plan', active: true, current_phase: 'drafting', updated_at: new Date().toISOString() });
     const gRenameEscape = preToolUse({
       ...base,
@@ -2408,7 +2967,7 @@ async function selftest() {
     check('planning guard catches rename/apply_patch escapes and fails closed on targetless write_file',
       gRenameEscape.decision === 'force_ask' && gPatchEscape.decision === 'force_ask' && gMissingTarget.decision === 'force_ask');
 
-    // Working Agreements [by:human] overwrite protection (OMO v5.1.45-49 #11112 parity)
+    // Working Agreements [by:human] overwrite protection
     const agFile = path.join(ws, 'omagy_wiki', 'agreements.md');
     fs.writeFileSync(agFile, '- [by:human] Never mutate production tables directly.\n');
     const gDropHuman = preToolUse({
@@ -2422,11 +2981,11 @@ async function selftest() {
     check('agreements-guard blocks Overwrite dropping [by:human] line and allows preserving it',
       gDropHuman.decision === 'force_ask' && !gKeepHuman.decision);
 
-    // Stop continuation includes refusal-is-final rule (OMO v5.1.49 #11371 parity)
+    // Stop continuation includes refusal-is-final rule
     check('stop continuation prompt includes refusal-is-final rule',
       typeof s1.reason === 'string' && s1.reason.includes('permission denial or a refusal by the user is final'));
 
-    // Echo / printf / true no-op verification command guard (OMO v5.1.52 #11542 parity)
+    // Echo / printf / true no-op verification command guard
     const echoRel = '.omagy/evidence/task-echo.json';
     writeJson(path.join(ws, echoRel), {
       team: 'alpha',
@@ -2441,7 +3000,7 @@ async function selftest() {
     } catch { echoRejected = true; }
     check('verify-evidence rejects echo/printf/true no-op verification commands', echoRejected && !isRealVerificationCommand('env FOO=1 echo ok') && isRealVerificationCommand('env NODE_ENV=test npm test'));
 
-    // Time-boxed wiki/agreement expiry & standalone secret redaction (OMO v5.1.52 #11458 & #11556 parity)
+    // Time-boxed wiki/agreement expiry & standalone secret redaction
     const expWikiRoot = path.join(ws, 'exp-wiki-ws');
     const expWikiDir = path.join(expWikiRoot, 'omagy_wiki');
     fs.mkdirSync(expWikiDir, { recursive: true });
@@ -2467,7 +3026,7 @@ async function selftest() {
     check('discoverSubdirAgents skips expired child-wiki entries and redacts standalone secrets',
       childExpMsg.includes('[REDACTED_KEY]') && !childExpMsg.includes('sk-proj-1234567890') && !childExpMsg.includes('Expired auth rule'));
 
-    // Configurable Custom Quality Gates validator (OMX v0.21.41 #3956 & OMC v5.7.22 #4670/#4671 parity)
+    // Configurable Custom Quality Gates validator
     const qgRoot = path.join(ws, 'qg-ws');
     fs.mkdirSync(path.join(qgRoot, '.omagy'), { recursive: true });
     const qgNoop = validateQualityGates(qgRoot, 'ralplan');
@@ -2805,7 +3364,7 @@ async function selftest() {
     }
     check('stateRoot anchors subfolder to parent project root and loadModeStates/discoverOmagyScopes track inner-folder .omagy', t20Ok);
 
-    // T21: extractGoalBrief superpowers v7.0.2 hardening (unclosed fence exitCode 4, subtask retention 7a/7.1, non-English heading hint)
+    // T21: extractGoalBrief markdown hardening (unclosed fence exitCode 4, subtask retention 7a/7.1, non-English heading hint)
     const unclosedFenceMd = path.join(ws, 'unclosed-fence.md');
     fs.writeFileSync(unclosedFenceMd, [
       '# Plan',
@@ -2840,7 +3399,7 @@ async function selftest() {
       && subBriefRes.ok === true && subBriefText.includes('Task 7a: Child Subtask A') && subBriefText.includes('Task 7.1: Child Subtask Dot') && !subBriefText.includes('Task 8')
       && nonEngRes.ok === false && nonEngRes.error.includes('Задача 1'));
 
-    // T22: checkTestJunk 7 regex rules & check-test-junk: ignore suppression (OMO v5.1.54 #11967 parity)
+    // T22: checkTestJunk 7 regex rules & check-test-junk: ignore suppression
     const junkTestFile = path.join(ws, 'sample.test.js');
     fs.writeFileSync(junkTestFile, [
       "const src = fs.readFileSync('src/index.js', 'utf8');",
@@ -2914,17 +3473,17 @@ async function selftest() {
       && mapBriefContent.includes('## Codebase Reuse Map')
       && mapBriefContent.includes('shared/: s1'));
 
-    // T25 (T-DEBT-1): scanShortcutDebt parses shortcut:/ceiling:/ponytail:, splits ceiling vs upgrade, tags noTrigger, and ignores <...> placeholders
+    // T25 (T-DEBT-1): scanShortcutDebt parses shortcut:/ceiling:, splits ceiling vs upgrade, tags noTrigger, and ignores <...> placeholders
     const debtWs = path.join(ws, 'debt-repo');
     fs.mkdirSync(path.join(debtWs, 'src'), { recursive: true });
     fs.writeFileSync(path.join(debtWs, 'src', 'worker.js'), [
       '// shortcut: <ceiling>, <when to upgrade>',
       '// shortcut: 500 items in memory, switch to cursor pagination',
       '// ceiling: single node only',
-      '# ponytail: 10 req/s -> add token bucket',
+      '# shortcut: 10 req/s -> add token bucket',
     ].join('\n'), 'utf8');
     const debtRes = scanShortcutDebt(debtWs);
-    check('scanShortcutDebt extracts shortcut/ceiling/ponytail comments, splits ceiling vs upgrade, tags noTrigger, and ignores template placeholders',
+    check('scanShortcutDebt extracts shortcut/ceiling comments, splits ceiling vs upgrade, tags noTrigger, and ignores template placeholders',
       debtRes.ok === true && debtRes.total === 3 && debtRes.noTriggerCount === 1
       && debtRes.items[0].ceiling === '500 items in memory' && debtRes.items[0].upgrade === 'switch to cursor pagination' && debtRes.items[0].noTrigger === false
       && debtRes.items[1].ceiling === 'single node only' && debtRes.items[1].noTrigger === true
@@ -2993,7 +3552,7 @@ async function selftest() {
     check('analyzeDiffCodeHealth & scanDiffBlockers detect open callers (including $ symbols), ignore moved/generic/.method calls, and compute reusePct',
       healthOk, healthErr);
 
-    // T27 (T-RULES-1): Ponytail v5.3.3 contract markers across rules/AGENTS.md, agents, and skills
+    // T27 (T-RULES-1): Code-reuse and shortcut-debt contract markers across rules/AGENTS.md, agents, and skills
     const agentsRuleText = fs.readFileSync(path.join(pluginRoot, 'rules', 'AGENTS.md'), 'utf8');
     const execAgentText = fs.readFileSync(path.join(pluginRoot, 'agents', 'executor.md'), 'utf8');
     const revAgentText = fs.readFileSync(path.join(pluginRoot, 'agents', 'code-reviewer.md'), 'utf8');
@@ -3007,6 +3566,256 @@ async function selftest() {
       && crSkillText.includes('--audit') && crSkillText.includes('Lean:')
       && anSkillText.includes('--audit')
       && hudSkillText.includes('scanShortcutDebt'));
+
+    // T28: awaiting_confirmation hold (isAwaitingConfirmation, isActive, stop, buildActiveModeMessage)
+    const oldWaitTs = new Date(Date.now() - STALE_MS - 120000).toISOString();
+    const oldWaitDate = new Date(oldWaitTs);
+    writeJson(stateFile, {
+      mode: 'autopilot',
+      active: true,
+      current_phase: 'ralplan',
+      awaiting_confirmation: true,
+      awaiting_confirmation_set_at: oldWaitTs,
+      updated_at: oldWaitTs,
+    });
+    fs.utimesSync(stateFile, oldWaitDate, oldWaitDate);
+    const waitStates = activeStates([ws], ['autopilot'], conv);
+    const waitMsg = buildActiveModeMessage([ws], conv) || '';
+    const waitStop = await stop({ ...base, terminationReason: 'NO_TOOL_CALL' });
+    const expiredConfirmState = {
+      data: {
+        active: true,
+        current_phase: 'ralplan',
+        awaiting_confirmation: true,
+        awaiting_confirmation_set_at: oldWaitTs,
+        updated_at: oldWaitTs,
+      },
+      mtimeMs: Date.parse(oldWaitTs) + CONFIRMATION_MTIME_TOLERANCE_MS + 2000,
+    };
+    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
+    check('isAwaitingConfirmation keeps waiting state active beyond STALE_MS, suppresses stop nudges, and expires after tolerance',
+      waitStates.length === 1 && isAwaitingConfirmation(waitStates[0]) === true
+      && waitMsg.includes('awaiting confirmation')
+      && waitStop.decision === 'stop'
+      && isAwaitingConfirmation(expiredConfirmState) === false);
+
+    // T29: normalizeFailureSignature strips ANSI, pytest/vitest/node-warning noise, and failing banner durations while preserving assertion literals
+    const rawFailOut = [
+      '\x1b[32m....s.x [ 42%]\x1b[0m',
+      'Start at  00:09:56',
+      '(node:54321) [DEP0040] DeprecationWarning: The `punycode` module is deprecated.',
+      '=== 12 passed, 1 warning in 3.45s (0:00:03) ===',
+      '=== 2 failed, 10 passed in 4.82s ===',
+      '15 passed, 2 skipped in 1.20s',
+      "AssertionError: assert '(12:15)' == '(12:16)'",
+      "Expected: expect('(node:42) ready').toBe(true)",
+    ].join('\n');
+    const normSig = normalizeFailureSignature(rawFailOut);
+    check('normalizeFailureSignature strips ANSI/progress/pass/duration/PID noise while preserving assertion literals',
+      !normSig.includes('[ 42%]')
+      && !normSig.includes('\x1b[')
+      && !normSig.includes('Start at')
+      && !normSig.includes('(0:00:03)')
+      && !normSig.includes('15 passed')
+      && normSig.includes('=== 2 failed, 10 passed in <d>s ===')
+      && normSig.includes('(node:<pid>) [DEP0040] DeprecationWarning:')
+      && normSig.includes("assert '(12:15)' == '(12:16)'")
+      && normSig.includes("expect('(node:42) ready')"));
+
+    // T30: decideWatchVerdict (watch-pr) state machine, flat/nested schemas, & 60s zero-checks confirmation window
+    const wGone = decideWatchVerdict({ state: 'MERGED' });
+    const wBlocked = decideWatchVerdict({ state: 'OPEN', mergeable: 'CONFLICTING', reviewDecision: 'CHANGES_REQUESTED', checks: { failed: 1, passed: 2 } });
+    const wZeroEarly = decideWatchVerdict({ state: 'OPEN', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', checks: { total: 0 }, noChecksFirstSeenAtMs: 1000, nowMs: 11000 });
+    const wZeroConfirmed = decideWatchVerdict({ state: 'OPEN', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', headSha: 'abc1234', checks: { total: 0 }, noChecksFirstSeenAtMs: 1000, nowMs: 65000 });
+    const wFlatWaiting = decideWatchVerdict({ prState: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', checksTotal: 0, elapsedSinceFirstZeroChecksMs: 15000 });
+    const wFlatReady = decideWatchVerdict({ prState: 'OPEN', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', checksTotal: 3, checksPassed: 3, headSha: 'flat999' });
+    const wGreen = decideWatchVerdict({ state: 'OPEN', mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewRequired: true, reviewDecision: 'APPROVED', headSha: 'def5678', checks: { passed: 4, pending: 0, failed: 0 } });
+    check('decideWatchVerdict classifies gone/blocked/waiting/ready across nested and flat schemas and enforces 60s no_checks_confirm_window',
+      wGone.verdict === 'gone' && wGone.reasons.includes('pr_merged')
+      && wBlocked.verdict === 'blocked' && wBlocked.reasons.includes('merge_conflicting') && wBlocked.reasons.includes('checks_failed') && wBlocked.reasons.includes('changes_requested')
+      && wZeroEarly.verdict === 'waiting' && wZeroEarly.reasons.includes('no_checks_confirm_window')
+      && wZeroConfirmed.verdict === 'ready' && wZeroConfirmed.proof?.headSha === 'abc1234'
+      && wFlatWaiting.verdict === 'waiting' && wFlatWaiting.reasons.includes('no_checks_confirm_window')
+      && wFlatReady.verdict === 'ready' && wFlatReady.proof?.headSha === 'flat999'
+      && wGreen.verdict === 'ready' && wGreen.proof?.headSha === 'def5678');
+
+    // T31: validateTeamTasks fail-closed integrity, VERIFICATION_VERDICTS, and renderLedgerCell formula-injection guard
+    const teamAlphaDir = path.join(ws, '.omagy', 'state', 'team', 'alpha', 'tasks');
+    fs.mkdirSync(teamAlphaDir, { recursive: true });
+    writeJson(path.join(teamAlphaDir, 'task-1.json'), { id: '1', status: 'completed', title: 'Valid task' });
+    fs.writeFileSync(path.join(teamAlphaDir, 'task-2.json'), '{corrupted json', 'utf8');
+    const vtCorrupt = validateTeamTasks(ws, 'alpha');
+    writeJson(path.join(teamAlphaDir, 'task-2.json'), { id: '99', status: 'pending', title: 'Mismatched id' });
+    const vtMismatch = validateTeamTasks(ws, 'alpha');
+    writeJson(path.join(teamAlphaDir, 'task-2.json'), { id: '2', status: 'pending', title: 'Aligned id' });
+    const vtValid = validateTeamTasks(ws, 'alpha');
+    const evVerdictRel = '.omagy/evidence/task-verdict.json';
+    writeJson(path.join(ws, evVerdictRel), {
+      team: 'alpha',
+      taskId: '1',
+      verdict: 'unit-test-verified',
+      verified_head: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4',
+      summary: 'Verified with unit tests and commit SHA',
+      verification: [{ command: 'npm test', result: 'passed', output: 'all green' }],
+      unverified: [],
+    });
+    const evVerdictOk = validateCompletionEvidence(ws, evVerdictRel, { team: 'alpha', taskId: '1' });
+    writeJson(path.join(ws, evVerdictRel), {
+      team: 'alpha',
+      taskId: '1',
+      verdict: 'verifier-failed',
+      summary: 'Failed verdict',
+      verification: [{ command: 'npm test', result: 'passed', output: 'all green' }],
+      unverified: [],
+    });
+    let evFailedVerdictRejected = false;
+    try { validateCompletionEvidence(ws, evVerdictRel, { team: 'alpha', taskId: '1' }); } catch { evFailedVerdictRejected = true; }
+    check('validateTeamTasks fails closed on corrupt/mismatched tasks, validateCompletionEvidence enforces VERIFICATION_VERDICTS & verified_head, and renderLedgerCell neutralizes formula prefixes',
+      vtCorrupt.ok === false && vtCorrupt.errors.includes('team_task_read_failed:alpha/task-2.json')
+      && vtMismatch.ok === false && vtMismatch.errors.includes('team_task_read_failed:alpha/task-2.json:task_id_mismatch')
+      && vtValid.ok === true && vtValid.taskCount === 2
+      && evVerdictOk.ok === true && evVerdictOk.verdict === 'unit-test-verified' && evVerdictOk.verifiedHead === 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4'
+      && evFailedVerdictRejected === true
+      && renderLedgerCell('=SUM(A1:A2)\tfoo') === "'=SUM(A1:A2) foo");
+
+    // T32: compareSessions (session-compare) regression/no_regression/inconclusive, turns/stumbles/repeated_work, and zero raw-text leakage
+    const txBase = path.join(ws, 'tx-base.jsonl');
+    const txCandReg = path.join(ws, 'tx-cand-reg.jsonl');
+    const txCandClean = path.join(ws, 'tx-cand-clean.jsonl');
+    const txInconclusive = path.join(ws, 'tx-inc.jsonl');
+    fs.writeFileSync(txBase, [
+      JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: 'SECRET_PROMPT_ALPHA /Users/alice/secret.ts' }),
+      JSON.stringify({ created_at: '2026-11-09T10:00:01.000Z', type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'read_file', arguments: { Path: '/Users/alice/secret.ts' } }, { name: 'edit_file' }] }),
+    ].join('\n') + '\n', 'utf8');
+    fs.writeFileSync(txCandReg, [
+      JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: 'SECRET_PROMPT_BETA /Users/bob/private.ts' }),
+      JSON.stringify({
+        created_at: '2026-11-09T10:00:02.500Z',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        tool_calls: [
+          { name: 'read_file', arguments: { Path: '/Users/bob/private.ts' } },
+          { name: 'read_file', arguments: { Path: '/Users/bob/private.ts' } },
+          { name: 'read_file', arguments: { Path: '/Users/bob/private.ts' } },
+          { name: 'edit_file' },
+          { name: 'run_command', status: 'ERROR' },
+          { name: 'run_command' },
+        ],
+      }),
+    ].join('\n') + '\n', 'utf8');
+    fs.writeFileSync(txCandClean, [
+      JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: 'clean run' }),
+      JSON.stringify({ created_at: '2026-11-09T10:00:00.900Z', type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'read_file' }, { name: 'edit_file' }] }),
+    ].join('\n') + '\n', 'utf8');
+    fs.writeFileSync(txInconclusive, `${JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'read_file' }] })}\n`, 'utf8');
+    const cmpReg = compareSessions(txBase, txCandReg, { failOnRegression: true });
+    const cmpClean = compareSessions(txBase, txCandClean, { failOnRegression: true });
+    const cmpInc = compareSessions(txBase, txInconclusive, { failOnRegression: true });
+    const cmpSerialized = JSON.stringify(cmpReg);
+    check('compareSessions detects tool/duration/repeated_work regressions, handles inconclusive durations, and leaks zero prompt/path text',
+      cmpReg.assessment.status === 'regression' && cmpReg.exitCode === 2
+      && cmpReg.assessment.reasons.includes('failed_tools_increased')
+      && cmpReg.assessment.reasons.includes('repeated_work_increased')
+      && cmpReg.assessment.reasons.includes('duration_regression')
+      && cmpReg.deltas.repeated_work === 1 && cmpReg.deltas.stumbles === 1 && cmpReg.baseline.turns === 1
+      && cmpClean.assessment.status === 'no_regression' && cmpClean.exitCode === 0
+      && cmpInc.assessment.status === 'inconclusive' && cmpInc.exitCode === 3
+      && !cmpSerialized.includes('SECRET_PROMPT') && !cmpSerialized.includes('/Users/'));
+
+    // T33: repairWikiLinks (object & array payloads), nextAvailableWikiSlug (-2 archived advances to -3), auditResearchReport conversion_altered_number, and redactSecrets
+    const repairDir = path.join(ws, 'wiki-repair-test');
+    fs.mkdirSync(path.join(repairDir, 'archive'), { recursive: true });
+    fs.writeFileSync(path.join(repairDir, 'guide.md'), [
+      'See [[old-page]], [[archived-page|Arch]], [[deleted-page|Del]], [[arr-del|ArrDel]], and [Doc](old-page.md).',
+      'Inline code `[[deleted-page]]` and `[Doc](old-page.md)` stay untouched.',
+      '```markdown',
+      'Fenced [[old-page]] and [[archived-page|Arch]] stay untouched.',
+      '```',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(repairDir, 'log.md'), '2026-11-09 archived weekly-sync — moved to archive\n', 'utf8');
+    fs.writeFileSync(path.join(repairDir, 'archive', 'weekly-sync-2.md'), '# Archived weekly-sync-2\n', 'utf8');
+    const repRes = repairWikiLinks(repairDir, {
+      moved: { 'old-page': 'new-page' },
+      archived: ['archived-page'],
+      deleted: ['deleted-page'],
+    });
+    const repArrRes = repairWikiLinks(repairDir, [{ action: 'delete', oldSlug: 'arr-del' }]);
+    const repairedText = fs.readFileSync(path.join(repairDir, 'guide.md'), 'utf8');
+    const nextSlug = nextAvailableWikiSlug(repairDir, 'weekly-sync');
+    const gluedNumReport = path.join(ws, 'glued-num-report.md');
+    fs.writeFileSync(gluedNumReport, fs.readFileSync(validReportPath, 'utf8') + '\nLatency dropped by 42¹ ms [VERIFIED].\n', 'utf8');
+    const gluedAudit = auditResearchReport(gluedNumReport);
+    const redactedSample = redactSecrets('Run cmd --api-key=secret_live_1234567890abcdef --token=tok_live_9876543210abcdef and Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 with password: "super_secret_password_123" and api_key: "$API_KEY"');
+    check('repairWikiLinks rewrites links outside code spans (object & array), nextAvailableWikiSlug skips archived -2 slugs, auditResearchReport catches glued footnote digits, and redactSecrets masks inline CLI/Bearer/password secrets',
+      repRes.ok === true && repRes.filesUpdated === 1 && repRes.linksRewritten === 4
+      && repArrRes.ok === true && repArrRes.linksRewritten === 1
+      && repairedText.includes('See [[new-page]], [[ARCHIVE.md|Arch (archived)]], Del, ArrDel, and [Doc](new-page.md).')
+      && repairedText.includes('`[[deleted-page]]`')
+      && repairedText.includes('Fenced [[old-page]]')
+      && nextSlug === 'weekly-sync-3'
+      && gluedAudit.ok === false && gluedAudit.errors.some((e) => e.includes('conversion_altered_number'))
+      && redactedSample.includes('--api-key=[REDACTED_SECRET]')
+      && redactedSample.includes('--token=[REDACTED_SECRET]')
+      && redactedSample.includes('Bearer [REDACTED_TOKEN]')
+      && redactedSample.includes('password: "[REDACTED_SECRET]"')
+      && redactedSample.includes('api_key: "$API_KEY"'));
+
+    // T34: Repo-wide prompt, skill & provenance hygiene (zero Default effort: in vision/debugger/team-worker, zero foreign tool/agent names, and zero upstream provenance references across plugin files)
+    const effortCheckFiles = ['vision.md', 'debugger.md', 'team-worker.md'];
+    const effortViolations = effortCheckFiles.filter((f) => /Default effort:/i.test(fs.readFileSync(path.join(pluginRoot, 'agents', f), 'utf8')));
+    const foreignTokens = ['TodoWrite', 'call_o' + 'mo_agent', 'sisyphus-junior', 'momus', 'metis', 'oracle'];
+    const foreignRe = new RegExp(`\\b(?:${foreignTokens.join('|')})\\b`, 'i');
+    const provWords = [
+      'o' + 'mo', 'o' + 'mx', 'o' + 'mc',
+      'oh-my-' + 'openagent', 'oh-my-' + 'opencode', 'oh-my-' + 'codex', 'oh-my-' + 'claudecode',
+      'pon' + 'ytail', 'super' + 'powers', 'kib' + 'itzer',
+    ];
+    const provenanceRe = new RegExp(`${'ported' + ' from'}|\\b(?:${provWords.join('|')})\\b|${'om' + 'x_wiki'}`, 'i');
+    const foreignViolations = [];
+    const provenanceViolations = [];
+    const checkProvenanceFile = (relPath, absPath) => {
+      if (!fs.existsSync(absPath)) return;
+      let content = fs.readFileSync(absPath, 'utf8');
+      if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
+      if (provenanceRe.test(content)) provenanceViolations.push(relPath);
+    };
+    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
+      checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
+    }
+    for (const af of fs.readdirSync(path.join(pluginRoot, 'agents')).filter((f) => f.endsWith('.md'))) {
+      const txt = fs.readFileSync(path.join(pluginRoot, 'agents', af), 'utf8');
+      if (foreignRe.test(txt)) foreignViolations.push(`agents/${af}`);
+      if (provenanceRe.test(txt)) provenanceViolations.push(`agents/${af}`);
+    }
+    for (const sd of fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
+      const sf = path.join(skillsDir, sd, 'SKILL.md');
+      if (fs.existsSync(sf)) {
+        const sfTxt = fs.readFileSync(sf, 'utf8');
+        if (foreignRe.test(sfTxt)) foreignViolations.push(`skills/${sd}/SKILL.md`);
+        if (provenanceRe.test(sfTxt)) provenanceViolations.push(`skills/${sd}/SKILL.md`);
+      }
+      const refDir = path.join(skillsDir, sd, 'references');
+      if (fs.existsSync(refDir)) {
+        for (const rf of fs.readdirSync(refDir).filter((f) => f.endsWith('.md'))) {
+          checkProvenanceFile(`skills/${sd}/references/${rf}`, path.join(refDir, rf));
+        }
+      }
+    }
+    const pluginWikiDir = path.join(pluginRoot, 'omagy_wiki');
+    if (fs.existsSync(pluginWikiDir)) {
+      for (const wf of fs.readdirSync(pluginWikiDir).filter((f) => f.endsWith('.md'))) {
+        checkProvenanceFile(`omagy_wiki/${wf}`, path.join(pluginWikiDir, wf));
+      }
+      const archiveDir = path.join(pluginWikiDir, 'archive');
+      if (fs.existsSync(archiveDir)) {
+        for (const af of fs.readdirSync(archiveDir).filter((f) => f.endsWith('.md'))) {
+          checkProvenanceFile(`omagy_wiki/archive/${af}`, path.join(archiveDir, af));
+        }
+      }
+    }
+    check('zero static Default effort: lines, zero foreign tool/agent names, and zero upstream provenance references across plugin files',
+      effortViolations.length === 0 && foreignViolations.length === 0 && provenanceViolations.length === 0,
+      `effort=${effortViolations.join(',')} foreign=${foreignViolations.join(',')} provenance=${provenanceViolations.join(',')}`);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
@@ -3205,6 +4014,96 @@ async function main() {
       process.stdout.write(`${lines.join('\n')}\n`);
     }
     process.exitCode = 0;
+    return;
+  }
+  if (event === 'validate-team-tasks') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const pos = rawArgs.filter((a) => a !== '--json');
+    const cwdArg = pos[0] ? path.resolve(pos[0]) : process.cwd();
+    const teamArg = pos[1] || '';
+    const res = validateTeamTasks(cwdArg, teamArg);
+    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
+    process.exitCode = res.exitCode;
+    return;
+  }
+  if (event === 'watch-pr') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const pos = rawArgs.filter((a) => a !== '--json');
+    const inputArg = pos[0] || '{}';
+    let facts = {};
+    try {
+      const text = fs.existsSync(inputArg) ? fs.readFileSync(inputArg, 'utf8') : inputArg;
+      facts = JSON.parse(text);
+    } catch {
+      process.stdout.write(`${JSON.stringify({ verdict: 'blocked', reasons: ['invalid_input_json'] })}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const res = decideWatchVerdict(facts);
+    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
+    process.exitCode = res.verdict === 'blocked' || res.verdict === 'gone' ? 1 : 0;
+    return;
+  }
+  if (event === 'failure-sig') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const pos = rawArgs.filter((a) => a !== '--json');
+    const inputArg = pos[0] || '';
+    const rawText = (inputArg && fs.existsSync(inputArg)) ? fs.readFileSync(inputArg, 'utf8') : (inputArg || readStdin());
+    const signature = normalizeFailureSignature(rawText);
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify({ ok: true, signature }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${signature}\n`);
+    }
+    process.exitCode = 0;
+    return;
+  }
+  if (event === 'session-compare') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const failOnRegression = rawArgs.includes('--fail-on-regression');
+    let maxDurationIncreasePct = 50;
+    const pos = [];
+    for (let i = 0; i < rawArgs.length; i += 1) {
+      const a = rawArgs[i];
+      if (a === '--json' || a === '--fail-on-regression') continue;
+      if (a === '--max-duration-increase' && i + 1 < rawArgs.length) {
+        maxDurationIncreasePct = Number(rawArgs[i + 1]);
+        i += 1;
+      } else {
+        pos.push(a);
+      }
+    }
+    const res = compareSessions(pos[0] || '', pos[1] || '', { failOnRegression, maxDurationIncreasePct });
+    if (pos[2]) {
+      const outPath = path.resolve(pos[2]);
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, `${JSON.stringify(res, null, 2)}\n`, 'utf8');
+    }
+    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
+    process.exitCode = res.exitCode;
+    return;
+  }
+  if (event === 'wiki-repair') {
+    const rawArgs = process.argv.slice(3);
+    const jsonMode = rawArgs.includes('--json');
+    const pos = rawArgs.filter((a) => a !== '--json');
+    const wikiDirArg = pos[0] ? path.resolve(pos[0]) : path.join(process.cwd(), 'omagy_wiki');
+    const changesArg = pos[1] || '{}';
+    let changes = {};
+    try {
+      changes = fs.existsSync(changesArg) ? JSON.parse(fs.readFileSync(changesArg, 'utf8')) : JSON.parse(changesArg);
+    } catch {
+      process.stdout.write(`${JSON.stringify({ ok: false, error: 'Invalid changes JSON' })}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const res = repairWikiLinks(wikiDirArg, changes);
+    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
+    process.exitCode = res.exitCode;
     return;
   }
   const payload = parseJson(readStdin());

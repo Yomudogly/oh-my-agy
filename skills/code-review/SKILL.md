@@ -31,7 +31,7 @@ sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha> .omagy
 1. Identify changed files and review boundaries. Do not silently widen the scope.
    - **Anti-Pre-Judging Guard**: never poison reviewer prompts with instructions to ignore or down-rate specific areas (`"do not flag X"`, `"at most LOW"`). Let the reviewer grade findings independently.
    - **Scoped Fix Re-Review (`--re-review <fix_base_sha>`)**: on fix-round re-reviews after a `REQUEST CHANGES` verdict, generate a review package for `<fix_base_sha>..HEAD` and pass the prior findings list. Reviewers verify only whether prior findings were resolved and whether `<fix_base_sha>..HEAD` introduced new defects, quarantining untouched-code observations under `Out-of-Scope Observations`.
-   - **Whole-Repo / Folder Quality & Lean Audit (`--audit [path]`, ported from Ponytail `v5.3.3` `/ponytail-audit`)**: when invoked with `--audit [path]`, map entry points, data flow, expected load (`single-user script` vs `concurrent service`), and existing `shortcut:` debt (`sh <plugin>/hooks/run.sh scan-debt <workspace>`) first, then audit the target scope ranked by importance (`Must fix` -> `Should fix` -> `Nice to have`, capped at 20 findings), reporting 4-part finding cards (`What this is`, `Problem`, `Fix`, `If we skip it`) and `Lean: -<N> lines, -<M> dependencies possible`.
+   - **Whole-Repo / Folder Quality & Lean Audit (`--audit [path]`)**: when invoked with `--audit [path]`, map entry points, data flow, expected load (`single-user script` vs `concurrent service`), and existing `shortcut:` debt (`sh <plugin>/hooks/run.sh scan-debt <workspace>`) first, then audit the target scope ranked by importance (`Must fix` -> `Should fix` -> `Nice to have`, capped at 20 findings), reporting 4-part finding cards (`What this is`, `Problem`, `Fix`, `If we skip it`) and `Lean: -<N> lines, -<M> dependencies possible`.
 2. Launch both lanes **in parallel**, in one `invoke_subagent` call with two entries, each on a clean context with explicit scope and artifacts. Respect the user's model selection (`Model: "inherit"`).
    - `TypeName: "code-reviewer"`, prompt:
      ```text
@@ -44,6 +44,7 @@ sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha> .omagy
         - Grep repo callers whenever a signature, return value, export, or behavior changes; reserve "Cannot Verify from Diff" for external/dynamic boundaries only.
         - State assumed load; treat `shortcut: <ceiling>, <upgrade>` comments as documented decisions unless expected load crosses the ceiling.
         - Every finding requires a concrete input/scenario case and 4 fields (What this is, Problem, Fix, If we skip it), plus `Lean: -<N> lines possible` when bloat exists.
+        - **Executed-Repro Interrogation (`interrogate`)**: whenever feasible in a read-only/sandboxed check, test candidate findings with a minimal repro command or caller trace before reporting, and report the `Survived / Dropped findings: <survived>/<total>` count so speculative false positives are filtered out before the final report.
      Return files reviewed, severity-rated findings with file:line evidence and concrete fixes,
      and a recommendation: APPROVE / REQUEST CHANGES / COMMENT. Do not review architecture.
      Scope: <review-package file path or diff command, spec/acceptance paths>
@@ -59,7 +60,7 @@ sh <plugin>/hooks/run.sh review-package <workspace> <base_sha> <head_sha> .omagy
      Scope: <same>
      ```
    - For security-sensitive scopes (auth, crypto, input handling, secrets), add a third `security-reviewer` lane.
-   - **Configurable Custom Quality Gates (`qualityGates["code-review"]`, ported from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`)**: if `.omagy/config.json` defines `qualityGates["code-review"]` (strict no-op when absent/empty; reserved controller skills like `code-review`, `ralplan`, `deep-interview`, `ai-slop-cleaner` are rejected to prevent self-recursion), launch each configured gate skill in its own independent subagent (`Model: gate.model || "inherit"`).
+   - **Configurable Custom Quality Gates (`qualityGates["code-review"]`)**: if `.omagy/config.json` defines `qualityGates["code-review"]` (strict no-op when absent/empty; reserved controller skills like `code-review`, `ralplan`, `deep-interview`, `ai-slop-cleaner` are rejected to prevent self-recursion), launch each configured gate skill in its own independent subagent (`Model: gate.model || "inherit"`).
 3. If a role agent is unavailable, use the `self` subagent with the role's `agents/<role>.md` body as a preamble. If a lane still cannot run or returns no evidence, report `independent review unavailable`. Do **not** substitute the current/authoring lane, and do **not** approve.
 
 ## Review taxonomy

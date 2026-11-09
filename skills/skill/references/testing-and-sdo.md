@@ -1,6 +1,6 @@
 # Behavioral Skill Testing & SDO Guide (`$skill test`)
 
-Reference guide for authoring, validating, and pressure-testing Antigravity `SKILL.md` files. Adapted from `superpowers`'s `writing-skills` (`testing-skills-with-subagents.md` and `persuasion-principles.md`).
+Reference guide for authoring, validating, and pressure-testing Antigravity `SKILL.md` files.
 
 ## 1. Search-Driven Optimization (SDO) & The Workflow-Summary Trap
 

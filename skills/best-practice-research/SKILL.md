@@ -42,7 +42,7 @@ This skill is terminal and read-only by default. It gathers evidence and produce
 - State date/version context for current best-practice claims.
 - Label third-party summaries as supplemental; do not use them before official/upstream sources.
 - Flag stale, conflicting, undocumented, or version-mismatched evidence.
-- **Claim-kind & meaning preservation (ported from OmO `ulw-research` `#11151`, `#11289`, `#11302`)**: distinguish `[VERIFIED]` (proven by local command/test output or primary upstream source), `[DERIVED]` (calculated from cited figures), and `[ASSUMED]` claims. Preserve source hedges and scope boundaries (`no hedge_dropped` or `scope_widened`).
+- **Claim-kind & meaning preservation**: distinguish `[VERIFIED]` (proven by local command/test output or primary upstream source), `[DERIVED]` (calculated from cited figures), and `[ASSUMED]` claims. Preserve source hedges and scope boundaries (`no hedge_dropped` or `scope_widened`).
 - Do not over-fetch: gather the smallest evidence set that can support the decision.
 
 ## Workflow

@@ -24,7 +24,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── plugin.json            # Antigravity manifest (v0.4.4, strict JSON)
+├── plugin.json            # Antigravity manifest (v0.4.5, strict JSON)
 ├── assets/logo.png        # Plugin icon
 ├── HOW_TO_USE.md          # Complete guide to all 27 skills, 18 subagents, hooks & recipes
 ├── rules/AGENTS.md        # always-on operating contract (<24 KB)
@@ -66,7 +66,7 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 Run the offline hook selftest at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":62,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":69,"failed":0}
 sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest # -> {"selftest":"PASS",...}
 ```
 

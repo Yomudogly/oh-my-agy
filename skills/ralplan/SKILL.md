@@ -21,7 +21,7 @@ $ralplan --advisory "task description"
 
 - `--interactive`: pause at key decision points (draft review in step 2, final approval in step 6) using `ask_question`. Without it, the Planner -> Architect -> Critic loop runs fully automated.
 - `--deliberate`: force deliberate mode. It adds a pre-mortem (3 scenarios) and an expanded test plan (unit/integration/e2e/observability). Deliberate mode also turns on automatically when the request signals high risk: auth/security, migrations, destructive changes, production incidents, compliance/PII, public API breakage.
-- `--hyperplan` (ported from OmO `hyperplan`): run a 2-round, 5-persona hostile cross-critique tournament before the Planner drafts the PRD:
+- `--hyperplan`: run a 2-round, 5-persona hostile cross-critique tournament before the Planner drafts the PRD:
   - **Round 1 (Independent Analysis)**: dispatch parallel read-only subagents across 5 adversarial lenses:
     1. `skeptic` (`architect` or `research` subagent): attacks accidental complexity, speculative abstractions, and YAGNI violations.
     2. `validator` (`test-engineer` or `verifier` subagent): attacks edge-case blast radius, data loss vectors, and untestable assumptions.
@@ -60,7 +60,7 @@ Standalone: write `.omagy/state/ralplan-state.json` (`mode:"ralplan"`, `active:t
 2. **User feedback** (`--interactive` only): present the draft plus Principles/Drivers/Options with `ask_question` (`Proceed to review` / `Request changes` / `Skip review`). Otherwise proceed automatically.
 3. **Architect review**: `invoke_subagent` with `TypeName: "architect"`. Pass the full task statement, context snapshot path, PRD/test-spec paths, and prior findings. The architect must give the strongest steelman antithesis, at least one real tradeoff tension, and a synthesis when possible. In deliberate mode it flags principle violations. **Wait for the result before step 4.**
 4. **Critic review**: only after the Architect returns, `invoke_subagent` with `TypeName: "critic"`. Pass the same inputs plus the completed Architect review. The Critic enforces principle-option consistency, fair alternatives, clear risk mitigation, testable acceptance criteria, and concrete verification. In deliberate mode it rejects a missing or weak pre-mortem or test plan. Verdict: `APPROVE` | `ITERATE` | `REJECT`.
-4b. **Configurable Custom Quality Gates (`qualityGates.ralplan`, ported from OMX `v0.21.41` `#3956` & OMC `v5.7.22` `#4670`/`#4671`)**:
+4b. **Configurable Custom Quality Gates (`qualityGates.ralplan`)**:
     - If `.omagy/config.json` has no `qualityGates.ralplan` entries, skip this step completely (strict no-op; emit no gate table).
     - When configured after Critic approval (entries normalized via `sh <plugin>/hooks/run.sh quality-gates <workspace> ralplan` or by reading `.omagy/config.json`: `"<skill>"` defaults to `mode: "blocking"`, `model: "inherit"`), reject any reserved workflow-controller skill (`ralplan`, `deep-interview`, `code-review`, `ai-slop-cleaner`, `autopilot`, `ultragoal`, `team`) to prevent self-recursion, and invoke each configured gate skill in a fresh independent subagent (`Model: gate.model`, never reusing the `architect` or `critic` conversation ID).
     - Record all gate results in `.omagy/plans/ralplan-review-{slug}.md`. `advisory` gates never block completion. Any `blocking` gate returning `iterate` or `reject` sets `ralplan_consensus_gate.complete: false` (`blocked_reason: "quality_gate_not_approved:<skill>"`) and feeds into Step 5's re-review loop.
