@@ -10,7 +10,10 @@ The oh-my-agy `Stop` hook sends a notification when the Antigravity agent stops 
 ## Config files
 
 - Global: `~/.gemini/config/oh-my-agy/notifications.json`
-- Per-workspace override (top-level keys replace global ones): `<workspace>/.omagy/notifications.json`
+- Per-workspace override (top-level keys replace global ones, except `command.command`): `<workspace>/.omagy/notifications.json`
+- **Security boundaries (`RCE` & `SSRF` protection)**:
+  - Shell `command.command` execution (`sh -c`) is honored **strictly from user-global `~/.gemini/config/oh-my-agy/notifications.json`**; workspace-local `<workspace>/.omagy/notifications.json` can never supply or override `command.command` (it may only set `command.enabled: false` to mute a global command).
+  - Outbound `slack`, `discord`, `telegram`, and `webhook` URLs must use `https:` and target non-private hosts (`localhost`, `.local`, loopback `127.*`/`::1`, link-local `169.254.*`/`fe80:`, and RFC1918 private IPs `10.*`, `172.16-31.*`, `192.168.*` are rejected).
 
 Schema:
 ```json

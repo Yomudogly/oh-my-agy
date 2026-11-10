@@ -15,10 +15,12 @@ Own implementation, focused validation, and an evidence-backed completion report
 - **Caller Grep & Root-Cause Rule**: before editing, renaming, or removing a function, `grep` every caller across the repository so no open callers are left behind and root causes are fixed once in shared code.
 - **Risky-Logic Test Rule & `shortcut:` Debt Marker**: new non-trivial logic (a branch, loop, parser, money, security, data write, or bug fix) leaves one focused test behind; trivial changes need none. Mark deliberate shortcuts that have a known limit with a comment in the exact form `shortcut: <ceiling>, <when to upgrade>`. Never cut trust-boundary validation, data-loss error handling, security, or accessibility.
 - Read relevant code, tests, callers, and configuration before editing.
+- **Spec-vs-Codebase Architecture Conflict (`NEEDS_CONTEXT`)**: if the assigned brief or spec assumes module boundaries, signatures, state invariants, or data flows that **contradict the actual codebase architecture** found during inspection, **stop before editing and return `NEEDS_CONTEXT`** citing the falsifying `file:line` evidence and concrete options—never silently improvise a divergent architecture.
 - Update directly affected tests or callsites when the requested behavior requires it.
+- **No-Reassurance Test Rerun Rule**: once a targeted or suite verification command passes cleanly, **do not re-run that unchanged test command when zero files have been edited since the pass** (re-run only after a real code/config/fixture edit or when explicitly probing flake determinism).
 - Report uncertainty or a bounded blocker instead of inventing requirements.
 - **Permission denial or user refusal is final**: never reach a refused result with another tool, command, path, or host. Report the blocker upward and ask the user.
-- **Git & commit discipline**: when asked to commit, split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; report `BLOCKED` if dirty work blocks a rebase, and require explicit task authority before rewriting history or pushing to a remote.
+- **Pre-Flight Baseline & Scoped Git Staging Discipline**: record a pre-flight `git status --porcelain` baseline before making any edits so pre-existing dirty/untracked files stay untouched. When asked to commit, split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config in the same commit), **never run blind `git add -A` or `git add .` (or `git commit -a`) on per-goal/scoped commits**, stage explicit owned paths only (`git add -- <owned-paths>`), and inspect `git diff --staged --name-only` so secrets, scratch state, and unrelated files never stage. Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; report `BLOCKED` if dirty work blocks a rebase, and require explicit task authority before rewriting history or pushing to a remote.
 
 - Use outcome-first, quality-focused execution: identify the target result, constraints, success criteria, validation path, and stop condition.
 - Keep the implementation plan and progress updates concise; name the first concrete action before tool-heavy work.
@@ -27,10 +29,10 @@ Own implementation, focused validation, and an evidence-backed completion report
 </constraints>
 
 <execution_loop>
-1. Restate the target, constraints, acceptance criteria, and validation path.
-2. Inspect the relevant files, tests, callers, and recent changes; identify the smallest safe edit.
-3. Implement the change using existing conventions and keep the diff focused.
-4. Run targeted checks for changed behavior, then inspect the output and review the diff.
+1. Record the pre-flight `git status --porcelain` baseline and restate the target, constraints, acceptance criteria, and validation path.
+2. Inspect the relevant files, tests, callers, and recent changes; return `NEEDS_CONTEXT` immediately if spec assumptions contradict codebase architecture, otherwise identify the smallest safe edit.
+3. Implement the change using existing conventions and keep the diff strictly inside owned files.
+4. Run targeted checks once per edit cycle (applying the **No-Reassurance Test Rerun Rule**), inspect the output, and review the diff.
 5. Remove temporary/debug changes and continue until verification passes or a precise blocker remains.
 </execution_loop>
 
@@ -41,7 +43,7 @@ Default final-output shape: outcome-first and evidence-dense. State your 4-state
 ## Status
 - `COMPLETED` — implemented and verified with no open structural concerns.
 - `COMPLETED_WITH_CONCERNS` — implemented and verified, but a file grew beyond intent, an edge case is fragile, or a follow-up concern requires leader review.
-- `NEEDS_CONTEXT` — stopped before guessing because a required interface signature, file path, or requirement decision is missing from the brief.
+- `NEEDS_CONTEXT` — stopped before guessing because a required interface signature, file path, or requirement decision is missing from the brief, or because spec assumptions contradict actual codebase architecture (`file:line` cited).
 - `BLOCKED` — stopped due to an unresolvable technical error, shared-file conflict, or user permission denial.
 
 ## Changes Made
@@ -54,6 +56,9 @@ Default final-output shape: outcome-first and evidence-dense. State your 4-state
 
 ## Assumptions / Blockers
 - Record material assumptions, missing proof, or the exact bounded blocker; write “None” when clear.
+
+### Noticed (Out of Scope)
+- `path/to/adjacent-file:line` — non-blocking pre-existing defect, debt, or follow-up observation spotted outside owned scope (record for leader triage without expanding current slice; write “None” when clear).
 
 ## Summary
 - One or two sentences stating the verified outcome, plus one line noting what was skipped or not checked and any residual risk the user should know.

@@ -1,0 +1,491 @@
+{
+  "version": 1,
+  "skills": {
+    "ai-slop-cleaner": {
+      "positive": [
+        "Clean up and deslop this bloated AI-generated module by removing dead code and duplicate helpers while locking behavior with tests",
+        "Refactor this over-abstracted service to strip defensive fallback bloat, dead wrappers, and repetitive naming passes",
+        "Run a bounded cleanup and deslop pass on src/parser.ts after locking regression tests first",
+        "This file has repetitive AI-generated boilerplate and dead fallback branches; deslop and simplify it safely"
+      ],
+      "negative": [
+        {
+          "prompt": "Run a merge-readiness code review across two independent reviewer and architect lanes before merging",
+          "owner": "code-review"
+        },
+        {
+          "prompt": "Optimize endpoint latency and throughput in an evaluator-gated benchmark loop",
+          "owner": "performance-goal"
+        }
+      ]
+    },
+    "analyze": {
+      "positive": [
+        "Investigate why the checkout retry queue drops events and give me a ranked cross-file synthesis with file references",
+        "Analyze what is causing stale session tokens across auth middleware and worker handlers before making any changes",
+        "Perform a read-only deep repository analysis with explicit confidence and evidence versus inference boundaries",
+        "Why does the webhook signature check fail intermittently across src/webhooks/verify.ts and src/http/rawBody.ts?"
+      ],
+      "negative": [
+        {
+          "prompt": "Execute a multidisciplinary market sizing and competitive landscape deep research report with Tier A-E citations",
+          "owner": "deep-research"
+        },
+        {
+          "prompt": "Clean up and deslop this bloated repetitive module with dead-code and duplication passes",
+          "owner": "ai-slop-cleaner"
+        }
+      ]
+    },
+    "ask": {
+      "positive": [
+        "Ask a locally installed external advisor CLI like Claude Code, Gemini CLI, or Codex CLI for a second opinion on this architecture",
+        "Get another model's opinion from Gemini CLI or Codex CLI on our retry backoff design and save the reusable artifact",
+        "Brainstorm cache invalidation tradeoffs with a local Claude Code or Codex advisor CLI",
+        "Consult external Codex CLI for an independent second opinion on this diff"
+      ],
+      "negative": [
+        {
+          "prompt": "Run a merge-readiness code review with code-reviewer and architect subagent lanes and an APPROVE or REQUEST CHANGES verdict",
+          "owner": "code-review"
+        },
+        {
+          "prompt": "Conduct a Socratic deep interview with quantitative ambiguity gating before planning",
+          "owner": "deep-interview"
+        }
+      ]
+    },
+    "autopilot": {
+      "positive": [
+        "Deliver this feature end-to-end autonomously from requirements seed through consensus planning and evidence-backed completion",
+        "Run hands-off autonomous delivery with durable workflow state from this issue description to verified completion",
+        "Orchestrate full end-to-end autonomous implementation from idea seed with consensus planning and durable state",
+        "Take this feature seed and run the canonical autonomous orchestrator for hands-off delivery"
+      ],
+      "negative": [
+        {
+          "prompt": "Cancel active workflow state and clean up running subagents and background tasks",
+          "owner": "cancel"
+        },
+        {
+          "prompt": "Show an on-demand status board of active workflows, QA cycles, and team tasks",
+          "owner": "hud"
+        }
+      ]
+    },
+    "autoresearch": {
+      "positive": [
+        "Run a stateful validator-gated research loop until the bounded completion artifact passes the script validator",
+        "Keep iterating on this bounded research deliverable until the validator script or architect review passes",
+        "Execute a validator-gated autoresearch loop where the research output artifact must pass deterministic checks",
+        "Continue the stateful research loop until our schema deliverable passes its completion validator"
+      ],
+      "negative": [
+        {
+          "prompt": "Check official upstream documentation and version-aware best practices for an already-chosen library",
+          "owner": "best-practice-research"
+        },
+        {
+          "prompt": "Write a multidisciplinary deep research report across business and technical lenses with a 100-point self-audit",
+          "owner": "deep-research"
+        }
+      ]
+    },
+    "best-practice-research": {
+      "positive": [
+        "Check official upstream documentation and version-aware guidance on current best practices for our chosen framework",
+        "Research upstream standards and official behavior for Node streams backpressure in our already-chosen runtime",
+        "Produce a bounded read-only best-practice recommendation cited from official upstream docs for Prisma transactions",
+        "Verify version-aware upstream API guidance and standards before we wire WebAuthn passkeys"
+      ],
+      "negative": [
+        {
+          "prompt": "Investigate why our local repository state machine deadlocks with concrete repo file references",
+          "owner": "analyze"
+        },
+        {
+          "prompt": "Run a multidisciplinary market sizing TAM SAM SOM and competitive landscape deep research study",
+          "owner": "deep-research"
+        }
+      ]
+    },
+    "cancel": {
+      "positive": [
+        "Stop the workflow and cancel active autopilot and ultragoal state with exact-scope cleanup of subagents",
+        "Cancel the active team and ralplan workflow modes and clean up their state files and background tasks",
+        "A hard blocker prevents progress, so cancel the active workflow mode cleanly right now",
+        "Abort and cancel the running ultraqa workflow and terminate its owned subagents"
+      ],
+      "negative": [
+        {
+          "prompt": "Show an on-demand status board of what workflow modes and team tasks are currently active",
+          "owner": "hud"
+        },
+        {
+          "prompt": "Create a self-contained session handoff artifact so work can resume cleanly in a fresh conversation",
+          "owner": "handoff"
+        }
+      ]
+    },
+    "code-review": {
+      "positive": [
+        "Run a merge-readiness code review through independent code-reviewer and architect lanes before merging this branch",
+        "Give me a quality and security code review assessment with a deterministic APPROVE or REQUEST CHANGES verdict",
+        "Review this scoped diff `if (token == undefined) return true;` for merge readiness across reviewer and architect lanes",
+        "Assess merge readiness of our changes with two independent review subagent lanes"
+      ],
+      "negative": [
+        {
+          "prompt": "Assemble a review-ready PR body from the ledger paper trail with before-and-after evidence and ADR reversibility",
+          "owner": "pr"
+        },
+        {
+          "prompt": "Build an adversarial dynamic end-to-end QA scenario matrix and run up to 5 QA cycles",
+          "owner": "ultraqa"
+        }
+      ]
+    },
+    "configure-notifications": {
+      "positive": [
+        "Configure stop and idle notifications to Slack and Discord webhooks when the agent finishes",
+        "Set up Telegram or macOS local command notifications to notify me when the agent stops",
+        "Disable webhook and Slack idle notifications for this project",
+        "Setup Discord or generic webhook notifications whenever the agent enters idle or blocked state"
+      ],
+      "negative": [
+        {
+          "prompt": "Install, enable, or update the plugin in user scope and bootstrap a project AGENTS.md",
+          "owner": "omagy-setup"
+        },
+        {
+          "prompt": "Diagnose and fix broken hook wiring, Node availability, and stale workflow state",
+          "owner": "doctor"
+        }
+      ]
+    },
+    "deep-interview": {
+      "positive": [
+        "Interview me thoroughly and don't assume anything; run a Socratic deep interview with quantitative ambiguity gating",
+        "This product idea is broad and missing acceptance criteria, so ask me everything via a Socratic deep interview before planning",
+        "Run an ouroboros Socratic interview to resolve scope and ambiguity before any implementation plan",
+        "Don't assume requirements for this multi-tenant billing workflow; interview me with ambiguity scoring first"
+      ],
+      "negative": [
+        {
+          "prompt": "Scope a quick lightweight plan directly without running a full Socratic deep interview",
+          "owner": "plan"
+        },
+        {
+          "prompt": "Build a throwaway HTML prototype with 3 structurally distinct UI variants behind one switcher to feel the design fork",
+          "owner": "loft"
+        }
+      ]
+    },
+    "deep-research": {
+      "positive": [
+        "Run a multidisciplinary deep research study across technical and business lenses with Boolean query matrices and Tier A-E source ranking",
+        "Conduct a market and business landscape deep research analysis with claim-kind tags, contradiction resolution, and a 100-point self-audit",
+        "Execute a technical architecture deep dive using terminological scoping and Boolean query matrices saved under artifacts research",
+        "Validate this product thesis with multidisciplinary deep research across idea, market, and systems lenses"
+      ],
+      "negative": [
+        {
+          "prompt": "Check official upstream release notes and version-aware best practices for our already-chosen router package",
+          "owner": "best-practice-research"
+        },
+        {
+          "prompt": "Run a stateful validator-gated autoresearch loop until the output file passes its validator script",
+          "owner": "autoresearch"
+        }
+      ]
+    },
+    "design": {
+      "positive": [
+        "Create or refresh the repo-local DESIGN.md as the durable source of truth for UI, UX, and frontend decisions",
+        "Draft a durable DESIGN.md brief establishing typography, layout, and product UX rules before frontend implementation",
+        "Refresh DESIGN.md in this repository so frontend product and interface decisions share one design brief",
+        "We need a repo-local DESIGN.md source of truth for our product UI and UX tokens before building screens"
+      ],
+      "negative": [
+        {
+          "prompt": "Restyle our live frontend page to match an approved screenshot reference with pixel-diff evidence and vision verdicts",
+          "owner": "visual-ralph"
+        },
+        {
+          "prompt": "Build a throwaway zero-I/O prototype with 3 UI variants behind a switcher to settle a layout fork",
+          "owner": "loft"
+        }
+      ]
+    },
+    "doctor": {
+      "positive": [
+        "Diagnose and fix installation and runtime issues with plugin discovery, hook wiring, Node availability, and stale state",
+        "Skills, hooks, and continuation nudges are not working; run diagnostics on rules size and agents integrity",
+        "Check why subagents or lifecycle hooks are failing and audit stale workflow state and manifest health",
+        "Audit runtime health including hook selftests, rules byte size, skills integrity, and stale state files"
+      ],
+      "negative": [
+        {
+          "prompt": "Install and enable the plugin in user scope and bootstrap AGENTS.md in this repository",
+          "owner": "omagy-setup"
+        },
+        {
+          "prompt": "Configure Slack or Telegram notifications when the agent stops or goes idle",
+          "owner": "configure-notifications"
+        }
+      ]
+    },
+    "handoff": {
+      "positive": [
+        "Create a structured self-contained session handoff artifact so work can resume cleanly in a fresh conversation",
+        "Save context for the next session in a handoff markdown artifact before context compaction",
+        "Write a session handoff summary under artifacts so a new chat can resume cleanly after compacting context",
+        "Package current progress, open blockers, and next steps into a self-contained handoff artifact before compaction"
+      ],
+      "negative": [
+        {
+          "prompt": "Assemble a review-ready pull request body with before-and-after verification evidence and ADR reversibility",
+          "owner": "pr"
+        },
+        {
+          "prompt": "Store durable project architecture notes and cross-linked markdown pages in omagy_wiki",
+          "owner": "wiki"
+        }
+      ]
+    },
+    "hud": {
+      "positive": [
+        "Show an on-demand status board of active workflows, autopilot phase, ultragoal progress, and team tasks",
+        "What modes are active right now? Check workflow status and QA cycle progress from state files",
+        "Display the workflow status board before resuming work so I can see active ultragoal and team task progress",
+        "Check current autopilot phase, QA cycle, and active workflow status on the HUD board"
+      ],
+      "negative": [
+        {
+          "prompt": "Cancel active workflow modes and terminate their subagents and background tasks",
+          "owner": "cancel"
+        },
+        {
+          "prompt": "Diagnose broken hook wiring, missing Node binary, and plugin installation issues",
+          "owner": "doctor"
+        }
+      ]
+    },
+    "loft": {
+      "positive": [
+        "Settle this design fork that prose cannot resolve by building a throwaway artifact with 3 structurally distinct UI variants behind one switcher",
+        "Our spec stalled because we need to see and feel it first; build a shape-before-steel loft prototype in an HTML harness",
+        "Build a pure zero-I/O logic module inside a throwaway HTML harness to test this state fork before committing to steel",
+        "Create 3 distinct interactive UI layout variants behind a single switcher as a throwaway loft prototype"
+      ],
+      "negative": [
+        {
+          "prompt": "Create or refresh the permanent repo-local DESIGN.md source of truth for product UX decisions",
+          "owner": "design"
+        },
+        {
+          "prompt": "Implement the production UI against an approved mockup image with pixel-diff evidence and vision scoring",
+          "owner": "visual-ralph"
+        }
+      ]
+    },
+    "omagy-setup": {
+      "positive": [
+        "Install, enable, or update the plugin for Antigravity in user or project scope and bootstrap a project AGENTS.md",
+        "Set up this plugin in our repository and bootstrap a project AGENTS.md configuration",
+        "Uninstall or update the plugin installation in user scope",
+        "Enable the plugin in project scope and generate the initial project AGENTS.md file"
+      ],
+      "negative": [
+        {
+          "prompt": "Diagnose why hooks and continuation are not working and check stale workflow states",
+          "owner": "doctor"
+        },
+        {
+          "prompt": "Manage SKILL.md files by listing, adding, validating, and scanning custom skills",
+          "owner": "skill"
+        }
+      ]
+    },
+    "performance-goal": {
+      "positive": [
+        "Run an evaluator-gated performance optimization loop to improve p95 latency and throughput in small reversible patches",
+        "Define a benchmark evaluator command and pass-fail contract first, then optimize memory usage with recorded checkpoints",
+        "Speed up `parseBatch()` benchmark throughput in a measurable goal-oriented optimization loop until the evaluator passes",
+        "Reduce query latency and memory footprint through small reversible patches gated by a benchmark evaluator"
+      ],
+      "negative": [
+        {
+          "prompt": "Execute durable multi-goal feature plans sequentially with goals.json and ledger.jsonl review gates",
+          "owner": "ultragoal"
+        },
+        {
+          "prompt": "Run adversarial dynamic end-to-end QA with a hostile scenario matrix across 5 cycles",
+          "owner": "ultraqa"
+        }
+      ]
+    },
+    "plan": {
+      "positive": [
+        "Let's plan and scope this feature with lightweight evidence-backed planning before implementation when a full deep-interview is unnecessary",
+        "Plan this API pagination change in direct mode without running a heavy multi-agent consensus loop",
+        "Create a lightweight scoping plan for adding CSV export when a full deep interview is unnecessary",
+        "Run a quick critic review of an existing lightweight plan before we start coding"
+      ],
+      "negative": [
+        {
+          "prompt": "Run high-stakes multi-agent consensus planning with independent architectural review, critic gate, and hyperplan 5-persona cross-critique",
+          "owner": "ralplan"
+        },
+        {
+          "prompt": "Conduct a Socratic deep interview with quantitative ambiguity gating because the request is broad and missing criteria",
+          "owner": "deep-interview"
+        }
+      ]
+    },
+    "pr": {
+      "positive": [
+        "Draft a review-ready PR body from the paper trail with a one-line summary, smallest load-bearing visual, and ADR-tested reversibility",
+        "Assemble our pull request description using before-and-after verification evidence from ledger.jsonl and code review artifacts",
+        "Prepare a PR body after ultragoal and code-review summarizing verification evidence and rollback reversibility",
+        "Generate a concise pull request description with the smallest load-bearing visual and ADR reversibility check"
+      ],
+      "negative": [
+        {
+          "prompt": "Run a merge-readiness code review across independent code-reviewer and architect subagent lanes",
+          "owner": "code-review"
+        },
+        {
+          "prompt": "Create a self-contained session handoff artifact so work can resume after context compaction",
+          "owner": "handoff"
+        }
+      ]
+    },
+    "ralplan": {
+      "positive": [
+        "Run multi-agent consensus planning with independent architectural and critic review for this high-stakes database migration",
+        "Produce an execution-ready consensus plan using hyperplan 5-persona hostile cross-critique and architectural review",
+        "We need deliberate consensus planning with architect steelman antithesis and critic review before touching auth",
+        "Execute the high-stakes Autopilot planning stage with independent architectural and critic consensus gates"
+      ],
+      "negative": [
+        {
+          "prompt": "Create and execute durable repo-native multi-goal plans with goals.json and ledger.jsonl sequential completion",
+          "owner": "ultragoal"
+        },
+        {
+          "prompt": "Run a Socratic deep interview with quantitative ambiguity scoring because acceptance criteria are missing",
+          "owner": "deep-interview"
+        }
+      ]
+    },
+    "skill": {
+      "positive": [
+        "List, add, edit, validate, and scan Antigravity SKILL.md files in user or project scope",
+        "Capture this durable codebase-specific release workflow as a reusable validated SKILL.md file",
+        "Search, sync, and validate custom SKILL.md frontmatter descriptions in project scope",
+        "Manage project skills by scanning and validating SKILL.md files and removing an obsolete skill"
+      ],
+      "negative": [
+        {
+          "prompt": "Install, enable, or uninstall the plugin and bootstrap a project AGENTS.md",
+          "owner": "omagy-setup"
+        },
+        {
+          "prompt": "Record persistent project architecture and debugging notes in the omagy_wiki markdown wiki",
+          "owner": "wiki"
+        }
+      ]
+    },
+    "team": {
+      "positive": [
+        "Dispatch coordinated subagent workers on a shared leader-owned task board for parallel lanes and workspace isolation",
+        "Execute our approved plan across N coordinated workers with task-state tracking on a shared team task board",
+        "Run parallel subagent worker lanes with workspace isolation and leader-owned task board coordination",
+        "Coordinate multiple team workers via invoke_subagent and send_message on a shared task board"
+      ],
+      "negative": [
+        {
+          "prompt": "Create and execute sequential multi-goal plans with goals.json and a ledger.jsonl audit trail",
+          "owner": "ultragoal"
+        },
+        {
+          "prompt": "Run multi-agent consensus planning with independent architectural and critic review",
+          "owner": "ralplan"
+        }
+      ]
+    },
+    "ultragoal": {
+      "positive": [
+        "Create-goals and complete-goals for durable repo-native multi-goal execution with a goals.json and ledger.jsonl audit trail",
+        "Execute a durable multi-goal plan sequentially with review gates, ledger audit trail, and resume support",
+        "Break this approved spec into goals.json and run sequential multi-goal execution with ledger checkpoints",
+        "Resume durable multi-goal execution from goals.json and ledger.jsonl through each review gate"
+      ],
+      "negative": [
+        {
+          "prompt": "Optimize benchmark latency and memory in an evaluator-gated performance optimization loop",
+          "owner": "performance-goal"
+        },
+        {
+          "prompt": "Coordinate N parallel subagent workers on a shared leader-owned team task board",
+          "owner": "team"
+        }
+      ]
+    },
+    "ultraqa": {
+      "positive": [
+        "Run adversarial dynamic end-to-end QA by building a hostile scenario matrix and running baseline plus adversarial scenarios",
+        "Test runnable behavior beyond a shallow test checklist in up to 5 bounded diagnose-and-fix QA cycles",
+        "Execute interactive and build-lint-typecheck adversarial QA scenarios against our running server",
+        "Build a hostile end-to-end QA scenario matrix, diagnose failures, fix them, and report across bounded cycles"
+      ],
+      "negative": [
+        {
+          "prompt": "Perform a static merge-readiness code review via code-reviewer and architect subagents",
+          "owner": "code-review"
+        },
+        {
+          "prompt": "Clean up and deslop bloated AI-generated dead code and duplicate helpers",
+          "owner": "ai-slop-cleaner"
+        }
+      ]
+    },
+    "visual-ralph": {
+      "positive": [
+        "Implement and restyle this frontend UI against an approved visual mockup reference with a vision verdict before every edit and pixel-diff evidence",
+        "Clone this live URL visual target with measured pixel-diff evidence, vision verdicts, and a reusable design system",
+        "Match our React component styling to the static reference screenshot using vision verdict scoring before each edit",
+        "Build the UI to match this visual target mockup via measured pixel-diff iterations and vision verdicts"
+      ],
+      "negative": [
+        {
+          "prompt": "Create or refresh the repo-local DESIGN.md text brief before writing any frontend code",
+          "owner": "design"
+        },
+        {
+          "prompt": "Build a throwaway HTML prototype with 3 distinct UI variants behind one switcher to explore a fork",
+          "owner": "loft"
+        }
+      ]
+    },
+    "wiki": {
+      "positive": [
+        "Add, query, read, and lint persistent markdown project knowledge pages with cross-links and tags under omagy_wiki",
+        "Record these architecture decisions and debugging notes in the repository omagy_wiki markdown wiki",
+        "Run wiki query and wiki lint on omagy_wiki to check cross-links and capture our session log",
+        "Look up durable project knowledge in omagy_wiki or delete an outdated wiki page"
+      ],
+      "negative": [
+        {
+          "prompt": "Create a self-contained session handoff artifact under artifacts so work can resume after compaction",
+          "owner": "handoff"
+        },
+        {
+          "prompt": "Manage, scan, and validate Antigravity SKILL.md files in user or project scope",
+          "owner": "skill"
+        }
+      ]
+    }
+  }
+}

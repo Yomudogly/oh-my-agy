@@ -1,6 +1,6 @@
 ---
 name: deep-interview
-description: "[oh-my-agy] Socratic deep interview with quantitative ambiguity gating before planning or execution. Use when a request is broad, ambiguous, or missing acceptance criteria, or when the user says 'deep interview', 'interview me', 'ask me everything', 'don't assume', or 'ouroboros'. Supports --quick, --standard (default), --deep, and --autoresearch."
+description: "[oh-my-agy] Socratic deep interview with quantitative ambiguity gating before planning or execution. Use when a request is broad, ambiguous, or missing acceptance criteria, or when the user says 'deep interview', 'interview me', 'ask me everything', 'don't assume', or 'ouroboros'. Supports --quick, --standard (default), --deep, --ideate, and --autoresearch."
 ---
 
 <Purpose>
@@ -25,6 +25,7 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 - **Quick (`--quick`)**: fast pre-PRD pass; threshold `<= 0.30`; max 5 rounds.
 - **Standard (`--standard`, default)**: full requirement interview; threshold `<= 0.20`; max 12 rounds.
 - **Deep (`--deep`)**: high-rigor exploration; threshold `<= 0.15`; max 20 rounds.
+- **Ideate (`--ideate`, profile or modifier)**: pre-Phase-2 divergent/convergent concept shaping (`How Might We` reframing, `5–8` variations across 7 lenses, `Painkiller vs Vitamin` + 6-Tier Differentiation, `Must/Should/Might Be True` audit) saved to `.omagy/artifacts/ideas/{slug}.md` with a single-answer `ask_question` bridge into Phase 2 Socratic convergence; see [ideation-lenses.md](./references/ideation-lenses.md#ideation-lenses-and-concept-shaping).
 - **Autoresearch (`--autoresearch`)**: Standard rigor, specialized for `$autoresearch` mission readiness (see below).
 
 `max rounds` is a hard cap, not a target. Do not continue only to reach a round count. If no flag is given, use Standard. Optional per-repo overrides may live in `.omagy/config.json` under `deepInterview` (`defaultProfile`, `quickThreshold`, `standardThreshold`, `deepThreshold`, `quickMaxRounds`, `standardMaxRounds`, `deepMaxRounds`, `enableChallengeModes`). Ignore a malformed config. Explicit flags win.
@@ -104,7 +105,7 @@ Use Antigravity's `ask_question` tool for every interview round.
   "updated_at": "<ISO>",
   "state": {
     "slug": "<slug>",
-    "profile": "quick|standard|deep|autoresearch",
+    "profile": "quick|standard|deep|ideate|autoresearch",
     "type": "greenfield|brownfield",
     "initial_idea": "<user input>",
     "rounds": [],

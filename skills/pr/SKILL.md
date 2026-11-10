@@ -64,10 +64,18 @@ Assemble a reviewer-ready Pull Request description directly from the repository 
 ## Branch Closeout, Atomic Commits & Worktree Hygiene
 
 When preparing commits or closing out a development branch or linked worktree after generating the PR body:
-1. **Atomic revertible-behavior commits & dirty-worktree safety**: split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config together in the same commit). Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; if dirty changes block a rebase, stop and ask the user. Require explicit task authority before rewriting published history or pushing to remote branches.
+1. **Atomic revertible-behavior commits, explicit staging & dirty-worktree safety**: split commits by *independently revertible behavior* (never by file type — keep behavior, its tests, and required config together in the same commit). Never run blind `git add -A` or `git add .` on scoped commits: stage explicit owned paths only and inspect `git diff --staged --name-only` so secrets and unrelated dirty files never stage. Never `git stash`, `git reset`, or `git clean` unrelated dirty work before rebasing; if dirty changes block a rebase, stop and ask the user. Require explicit task authority before rewriting published history or pushing to remote branches.
 2. Confirm a fresh passing test/verification run on the current `HEAD` before pushing or merging.
 3. Detect linked worktrees safely (`git rev-parse --git-dir` vs `--git-common-dir` combined with `[ -z "$(git rev-parse --show-superproject-working-tree 2>/dev/null)" ]` so submodules are not misidentified as linked worktrees).
 4. Never run `git worktree remove --force` when untracked or unmerged files/commits exist (`git status --porcelain --untracked-files=all` or unmerged commits on `HEAD` per `worktree_unmerged`: `git rev-list --max-count=1 <workerHead> <workerBranch> --not <leaderHead> <baseCommit> --exclude=<workerBranchPattern> --branches --tags --remotes` must be empty), and never delete a branch without explicit user confirmation.
+
+## Production Ship-Readiness Gate (`--ship`)
+
+When invoked as `$pr --ship` (or closing out a production service/schema release), append a `## Ship Readiness` section to the PR body verified against [ship-readiness.md](../code-review/references/ship-readiness.md):
+- **Observability**: [structured `requestId` + `entryPoint` log attribution, RED/USE signals, and high-cardinality label guard](../code-review/references/ship-readiness.md#1-structured-observability-requestid-entrypoint-reduse-metrics-and-cardinality-guard)
+- **Alerting & Runbook**: [2-tier symptom alerts and 3-line actionable runbook](../code-review/references/ship-readiness.md#2-two-tier-symptom-alerts-and-three-line-actionable-runbooks)
+- **Progressive Rollout & SLO Gate**: [quantitative canary Advance / Hold / Rollback thresholds, Error Budget Release Gate (`>20%` / `0–20%` / `0%` freeze), and RTO-bound rollback plan](../code-review/references/ship-readiness.md#3-progressive-delivery-quantitative-canary-thresholds-error-budget-gate-and-rto-rollback)
+- **Automated Hygiene Gates**: [`sh <plugin>/hooks/run.sh quality-gate`, `floor-guard`, and `git diff --staged --name-only` secret check](../code-review/references/ship-readiness.md#4-pre-ship-automated-gates-quality-gate-floor-guard-and-staged-secret-check)
 
 ## PR Watch, CI Triage & Review Care (`--watch`)
 

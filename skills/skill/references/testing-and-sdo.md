@@ -34,6 +34,13 @@ Different skills fail in different ways. Choose the instructional structure that
 | **Discipline / Gate Skill** (e.g. `$code-review`, `$ralplan`, `$ultraqa`, TDD/verification rules) | Model rationalizes skipping a slow or inconvenient gate under time, sunk-cost, or authority pressure | **Gate Function + Rationalization Table + Red Flags List**: state the non-negotiable gate (`Iron Law`), list the exact excuses models invent (`"This is a small change"`, `"Tests passed earlier"`), and pair each excuse with the counter-rule. |
 | **Reference / Tool Wrapper Skill** (e.g. `$doctor`, `$hud`, `$wiki`) | Model guesses CLI flags or file paths instead of running the exact command | **Command Contract Table**: exact CLI syntax, exit codes, and copy-pasteable one-liners. |
 
+### Write the Procedure, Not the Workaround
+
+Encode durable, repeatable engineering procedures rather than session-specific scar tissue:
+1. **Reject over-specified single-runtime mechanics**: never hardcode incidental quirks of one developer machine, transient OS build, or brittle one-off patch discovered mid-debugging when a portable invariant or standard flag expresses the real contract.
+2. **Collapse fragmented multi-step diagnostics**: never instruct agents to run 5 ad-hoc shell greps in sequence when a single deterministic CLI subcommand or contract check proves the state cleanly.
+3. **State the invariant + verification command**: explain *what must hold* and *how to verify it*, keeping runtime-specific fallbacks clearly bounded.
+
 ---
 
 ## 3. Subagent Pressure Testing (`$skill test <name>`)
@@ -73,3 +80,23 @@ Save `$skill test <name>` evidence to `.omagy/artifacts/skill-test-<name>-<UTC>.
 2. The 3-pressure scenario prompt.
 3. Baseline (`RED`) failure/rationalization excerpt vs updated (`GREEN`) compliance excerpt.
 4. Any wording tightenings applied from meta-testing.
+
+---
+
+## 5. Corpus Routing Evaluation (`$skill eval`) and Rejected-Change Impact Ledger
+
+### Corpus Routing Evaluation (`$skill eval`)
+Whenever you add, rename, prune, or edit a `SKILL.md` frontmatter `description`, run the deterministic TF-IDF routing and collision evaluator before concluding:
+
+```sh
+sh <plugin>/hooks/run.sh skill-eval --min-rank1 90
+```
+
+- Verifies **rank-1 positive trigger accuracy `>= 90%`** across natural-language prompts (with zero forbidden `$/` cheat prefixes), **`100%` negative owner-survival** (confirming sibling skills out-score false-positive traps), and **zero pairwise description cosine collisions `>= 0.75`** (`>= 0.50` surfaced as warnings). Pass `--json` for structured output or `--cases <path>` for a custom eval suite.
+
+### Rejected-Change Impact Ledger
+When pruning, consolidating, or rejecting candidate rules/sections in a skill (including SDO byte-budget trims), record every dropped or rejected item in a compact **Rejected-Change Impact Ledger** inside your review/test artifact so coverage never regresses silently:
+
+| Candidate / Pruned Item | Disposition & Rationale | Covered Instead By | Verification Gate |
+|---|---|---|---|
+| `<rule or snippet>` | `Rejected (one-off workaround / duplicate / out-of-scope)` | `<existing skill/hook/agent or explicit non-goal>` | `skill-eval --min-rank1 90` / `selftest` / `$skill test` |

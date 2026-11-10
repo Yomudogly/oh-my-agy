@@ -4,11 +4,12 @@
 // launcher (`POST /api/dispatch`) serving `sidecar://oh-my-agy/hud/` (`?view=overview|workflows|skills|subagents|wiki`).
 
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   analyzeDiffCodeHealth,
   discoverOmagyScopes,
@@ -20,12 +21,18 @@ import {
   stateRoot,
   validateQualityGates,
 } from '../../hooks/omagy-hook.mjs';
+import {
+  evaluateSkillRouting,
+  runFloorGuard,
+} from '../../hooks/omagy-cli.mjs';
 
 hardenWindowsExeSearch();
 
 const BIND_HOST = '127.0.0.1';
 const STALE_MS = 6 * 3600 * 1000;
 const TEAM_COMPLETED_WINDOW_MS = 20 * 60 * 1000;
+const CODE_HEALTH_TTL_MS = 5000;
+const MAX_CODE_HEALTH_CACHE_ENTRIES = 32;
 const MAX_DISPATCH_BODY_BYTES = 16 * 1024;
 const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
 const WIKI_CATEGORIES = new Set(['architecture', 'decision', 'pattern', 'debugging', 'environment', 'session-log', 'reference', 'convention']);
@@ -45,6 +52,7 @@ const MIME_BY_EXT = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.md': 'text/plain; charset=utf-8',
 };
 
 const SKILL_GUIDE_META = {
@@ -56,9 +64,9 @@ const SKILL_GUIDE_META = {
   },
   'deep-interview': {
     category: 'Orchestration & Planning',
-    flags: ['--quick', '--standard', '--deep', '--autoresearch'],
+    flags: ['--quick', '--standard', '--deep', '--autoresearch', '--ideate'],
     quickStart: '/deep-interview I want to add role-based access control to this app',
-    howToUse: 'Runs Socratic clarification rounds via ask_question until ambiguity is <= 20% and writes an execution-ready spec to .omagy/specs/.',
+    howToUse: 'Runs Socratic clarification rounds via ask_question until ambiguity is <= 20% and writes an execution-ready spec to .omagy/specs/ (or divergent ideation artifacts to .omagy/artifacts/ideas/ with --ideate).',
   },
   ralplan: {
     category: 'Orchestration & Planning',
@@ -116,15 +124,15 @@ const SKILL_GUIDE_META = {
   },
   ask: {
     category: 'Research & Analysis',
-    flags: ['claude', 'gemini', 'codex'],
+    flags: ['claude', 'gemini', 'codex', '--doubt'],
     quickStart: '/ask claude "review our event-sourcing schema for edge cases"',
-    howToUse: 'Queries a locally installed external CLI advisor (Claude, Gemini, or Codex) and saves the response under .omagy/artifacts/.',
+    howToUse: 'Queries a locally installed external CLI advisor (Claude, Gemini, or Codex) via read-only stdin sandboxing (or adversarial --doubt review) and saves the response under .omagy/artifacts/.',
   },
   'code-review': {
     category: 'Review, QA & Cleanup',
-    flags: ['--re-review', '--audit'],
+    flags: ['--re-review', '--audit', '--ship'],
     quickStart: '/code-review the changes on my current branch',
-    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict (or --audit repo-wide review).',
+    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict (plus --audit or --ship pre-PR gates).',
   },
   ultraqa: {
     category: 'Review, QA & Cleanup',
@@ -140,9 +148,9 @@ const SKILL_GUIDE_META = {
   },
   pr: {
     category: 'Review, QA & Cleanup',
-    flags: ['--watch'],
+    flags: ['--watch', '--ship'],
     quickStart: '/pr draft a pull request body for this branch',
-    howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail and triages/watches open PRs (--watch) across CI, review threads, and merge state.',
+    howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail, runs pre-ship readiness gates (--ship), and triages/watches open PRs (--watch) across CI, review threads, and merge state.',
   },
   design: {
     category: 'Design & Prototyping',
@@ -194,9 +202,9 @@ const SKILL_GUIDE_META = {
   },
   skill: {
     category: 'Knowledge, Control & Setup',
-    flags: ['list', 'add', 'edit', 'remove', 'scan', 'test'],
+    flags: ['list', 'add', 'edit', 'remove', 'scan', 'test', 'eval'],
     quickStart: '/skill test deep-research',
-    howToUse: 'Creates, validates, and pressure-tests Antigravity skills (RED -> GREEN -> REFACTOR behavioral subagent evaluation).',
+    howToUse: 'Creates, validates, evaluates routing accuracy (eval), and pressure-tests Antigravity skills (RED -> GREEN -> REFACTOR behavioral subagent evaluation).',
   },
   'omagy-setup': {
     category: 'Knowledge, Control & Setup',
@@ -442,7 +450,7 @@ function resolveStateRoot(rawRoot) {
 export function resolveSafeArtifactFile(workspaceRoot, relPath) {
   const cleanRel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (!cleanRel || cleanRel.includes('\0') || cleanRel.split('/').includes('..')) return null;
-  if (!/^(?:[^/]+\/)*\.omagy\/artifacts\/(?:visual-ralph|loft|research)\//.test(cleanRel)) {
+  if (!/^(?:[^/]+\/)*\.omagy\/artifacts\/(?:visual-ralph|loft|research|ideas)\//.test(cleanRel)) {
     return null;
   }
   const ext = path.extname(cleanRel).toLowerCase();
@@ -460,9 +468,156 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
     const omagyArtifactsSeg = `${path.sep}.omagy${path.sep}artifacts${path.sep}`;
     if (!candidateReal.startsWith(rootReal + path.sep) || !candidateReal.includes(omagyArtifactsSeg)) return null;
     return { filePath: candidateReal, mime: MIME_BY_EXT[ext] };
-  } catch {
+  } catch { /* fail open: deny artifact resolution when path is missing or unreadable */
     return null;
   }
+}
+
+const codeHealthCache = new Map();
+let skillEvalCache = { key: '', value: null };
+
+function statMtimeToken(filePath) {
+  try {
+    const st = fs.statSync(filePath);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch { /* fail open: optional metadata file may not exist yet */
+    return 'missing';
+  }
+}
+
+function readGitMetadataSignature(rootDir) {
+  const dotGit = path.join(rootDir, '.git');
+  let gitDir = dotGit;
+  try {
+    const st = fs.statSync(dotGit);
+    if (st.isFile()) {
+      const raw = fs.readFileSync(dotGit, 'utf8');
+      const m = /^gitdir:\s*(.+)$/im.exec(raw);
+      if (m) gitDir = path.resolve(rootDir, m[1].trim());
+    } else if (!st.isDirectory()) {
+      return 'nogit';
+    }
+  } catch { /* fail open: workspace may not be a git worktree */
+    return 'nogit';
+  }
+  const indexSig = statMtimeToken(path.join(gitDir, 'index'));
+  const headPath = path.join(gitDir, 'HEAD');
+  const headSig = statMtimeToken(headPath);
+  let refSig = '';
+  try {
+    const headRaw = fs.readFileSync(headPath, 'utf8').trim();
+    if (headRaw.startsWith('ref:')) {
+      const refRel = headRaw.slice(4).trim();
+      let commonGitDir = gitDir;
+      const commondirFile = path.join(gitDir, 'commondir');
+      if (fs.existsSync(commondirFile)) {
+        const cdRel = fs.readFileSync(commondirFile, 'utf8').trim();
+        if (cdRel) commonGitDir = path.resolve(gitDir, cdRel);
+      }
+      refSig = statMtimeToken(path.join(commonGitDir, refRel));
+    }
+  } catch { /* fail open: detached or unborn HEAD ref */ }
+  return `${indexSig}|${headSig}|${refSig}`;
+}
+
+function getCachedCodeHealth(primaryRoot, nowMs = Date.now()) {
+  const rootKey = path.resolve(primaryRoot);
+  const gitSig = readGitMetadataSignature(rootKey);
+  const cached = codeHealthCache.get(rootKey);
+  if (
+    cached
+    && cached.gitSig === gitSig
+    && nowMs >= cached.computedAtMs
+    && (nowMs - cached.computedAtMs) < CODE_HEALTH_TTL_MS
+  ) {
+    return cached.value;
+  }
+
+  const diffHealth = analyzeDiffCodeHealth([rootKey]);
+  const debtScan = scanShortcutDebt([rootKey]);
+  const fgRes = runFloorGuard(rootKey, '');
+  const fgSummary = fgRes?.summary || {};
+  const floorGuard = {
+    ok: Boolean(fgRes?.ok),
+    exitCode: Number(fgRes?.exitCode ?? 2),
+    deletedTests: Number(fgSummary.deletedTests || 0),
+    removedAssertions: Number(fgSummary.removedAssertions || 0),
+    untrackedBlockers: Number(fgSummary.untrackedBlockers || 0),
+    suppressions: Number(fgSummary.silencedCheckers || 0),
+    emptyCatches: Number(fgSummary.emptyCatches || 0),
+    protectedBlocksModified: Number(fgSummary.protectedBlocksModified || 0),
+    total: Number(fgSummary.total || 0),
+  };
+
+  const reusedList = Array.isArray(diffHealth.reused) ? diffHealth.reused.map(String) : [];
+  const createdList = Array.isArray(diffHealth.created) ? diffHealth.created.map(String) : [];
+  const value = {
+    reused: reusedList,
+    created: createdList,
+    reusedCount: reusedList.length,
+    newCount: createdList.length,
+    reusePct: diffHealth.reusePct ?? null,
+    openCallers: (diffHealth.openCallers || []).slice(0, 10).map((oc) => ({
+      symbol: String(oc.symbol || ''),
+      file: String(oc.file || ''),
+      line: Number(oc.line || 0),
+      snippet: redactSecrets(String(oc.snippet || oc.text || '')),
+    })),
+    debtTotal: Number(debtScan.total || 0),
+    noTriggerCount: Number(debtScan.noTriggerCount || 0),
+    debtItems: (debtScan.items || []).slice(0, 10).map((it) => ({
+      file: String(it.file || ''),
+      line: Number(it.line || 0),
+      marker: String(it.marker || 'shortcut'),
+      ceiling: redactSecrets(String(it.ceiling || '')),
+      upgrade: redactSecrets(String(it.upgrade || '')),
+      noTrigger: Boolean(it.noTrigger),
+    })),
+    floorGuard,
+  };
+
+  if (codeHealthCache.size >= MAX_CODE_HEALTH_CACHE_ENTRIES && !codeHealthCache.has(rootKey)) {
+    const oldestKey = codeHealthCache.keys().next().value;
+    if (oldestKey !== undefined) codeHealthCache.delete(oldestKey);
+  }
+  codeHealthCache.set(rootKey, { gitSig, computedAtMs: nowMs, value });
+  return value;
+}
+
+function buildSkillEvalSignature(pluginRoot) {
+  const rootDir = path.resolve(pluginRoot);
+  const casesPath = path.join(rootDir, 'hooks', 'skill-eval-cases.json');
+  const skillsDir = path.join(rootDir, 'skills');
+  const parts = [rootDir, statMtimeToken(casesPath), statMtimeToken(skillsDir)];
+  try {
+    if (fs.existsSync(skillsDir) && !fs.lstatSync(skillsDir).isSymbolicLink()) {
+      const dirs = fs.readdirSync(skillsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+        .sort();
+      for (const dirName of dirs) {
+        parts.push(`${dirName}:${statMtimeToken(path.join(skillsDir, dirName, 'SKILL.md'))}`);
+      }
+    }
+  } catch { /* fail open: unreadable skills directory falls back to base signature */ }
+  return parts.join('|');
+}
+
+function getCachedSkillEval(pluginRoot = PLUGIN_ROOT) {
+  const sig = buildSkillEvalSignature(pluginRoot);
+  if (skillEvalCache.value && skillEvalCache.key === sig) {
+    return skillEvalCache.value;
+  }
+  const evalRes = evaluateSkillRouting(pluginRoot, { minRank1: 90 });
+  const value = {
+    ok: Boolean(evalRes.ok),
+    rank1Pct: Number(evalRes.rank1Pct || 0),
+    minRank1: Number(evalRes.minRank1 ?? 90),
+    collisionErrors: evalRes.collisionErrors.length,
+    negativeSurvivalPct: Number(evalRes.negativeSurvivalPct || 0),
+  };
+  skillEvalCache = { key: sig, value };
+  return value;
 }
 
 function readModeFilesInDir(dir, sessionLabel = 'shared', scopeLabel = '.') {
@@ -1353,36 +1508,11 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     staleModes: modes.filter((m) => m.stale).map((m) => m.mode),
     latestRouting,
     hookErrors,
+    skillEval: getCachedSkillEval(PLUGIN_ROOT),
   };
 
-  // 9.5 Code Health & Technical Debt (symbol reuse, openCallers, and shortcut: debt ledger)
-  const diffHealth = analyzeDiffCodeHealth([primaryRoot]);
-  const debtScan = scanShortcutDebt([primaryRoot]);
-  const reusedList = Array.isArray(diffHealth.reused) ? diffHealth.reused.map(String) : [];
-  const createdList = Array.isArray(diffHealth.created) ? diffHealth.created.map(String) : [];
-  const codeHealth = {
-    reused: reusedList,
-    created: createdList,
-    reusedCount: reusedList.length,
-    newCount: createdList.length,
-    reusePct: diffHealth.reusePct ?? null,
-    openCallers: (diffHealth.openCallers || []).slice(0, 10).map((oc) => ({
-      symbol: String(oc.symbol || ''),
-      file: String(oc.file || ''),
-      line: Number(oc.line || 0),
-      snippet: redactSecrets(String(oc.snippet || oc.text || '')),
-    })),
-    debtTotal: Number(debtScan.total || 0),
-    noTriggerCount: Number(debtScan.noTriggerCount || 0),
-    debtItems: (debtScan.items || []).slice(0, 10).map((it) => ({
-      file: String(it.file || ''),
-      line: Number(it.line || 0),
-      marker: String(it.marker || 'shortcut'),
-      ceiling: redactSecrets(String(it.ceiling || '')),
-      upgrade: redactSecrets(String(it.upgrade || '')),
-      noTrigger: Boolean(it.noTrigger),
-    })),
-  };
+  // 9.5 Code Health & Technical Debt (5s + git-mtime cached symbol reuse, openCallers, shortcut: debt, and floorGuard)
+  const codeHealth = getCachedCodeHealth(primaryRoot, nowMs);
 
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
@@ -1684,6 +1814,7 @@ const HUD_HTML = `<!DOCTYPE html>
     const editedPrompts = {};
 
     window.addEventListener('message', (event) => {
+      if (event.source && event.source !== window.parent && event.source !== window) return;
       if (event.data?.type === 'theme-change' && event.data.payload?.cssVariables) {
         for (const [k, v] of Object.entries(event.data.payload.cssVariables)) {
           document.documentElement.style.setProperty(k, v);
@@ -1979,6 +2110,23 @@ const HUD_HTML = `<!DOCTYPE html>
       const debtSub = ch.debtTotal === 0
         ? 'No shortcut: comments'
         : (ch.noTriggerCount ? \`\${ch.noTriggerCount} missing upgrade condition\` : 'All have upgrade conditions');
+      const fg = ch.floorGuard || { ok: true, exitCode: 0, deletedTests: 0, removedAssertions: 0, untrackedBlockers: 0, suppressions: 0, emptyCatches: 0, protectedBlocksModified: 0, total: 0 };
+      const fgParts = [];
+      if (fg.deletedTests) fgParts.push(\`\${fg.deletedTests} deleted test\${fg.deletedTests === 1 ? '' : 's'}\`);
+      if (fg.removedAssertions) fgParts.push(\`\${fg.removedAssertions} removed assertion\${fg.removedAssertions === 1 ? '' : 's'}\`);
+      if (fg.suppressions) fgParts.push(\`\${fg.suppressions} suppression\${fg.suppressions === 1 ? '' : 's'}\`);
+      if (fg.emptyCatches) fgParts.push(\`\${fg.emptyCatches} empty catch\${fg.emptyCatches === 1 ? '' : 'es'}\`);
+      if (fg.protectedBlocksModified) fgParts.push(\`\${fg.protectedBlocksModified} protected block\${fg.protectedBlocksModified === 1 ? '' : 's'}\`);
+      if (fg.untrackedBlockers) fgParts.push(\`\${fg.untrackedBlockers} untracked\`);
+      const floorGuardVal = fg.total > 0
+        ? \`&#9888; \${fg.total} floor issue(s)\`
+        : 'Clean';
+      let floorGuardSub = '0 test deletions, suppressions, or empty catches';
+      if (fg.total > 0) {
+        floorGuardSub = fgParts.length ? fgParts.join(' &middot; ') : 'Anti-tampering floor violation in git diff';
+      } else if (fg.exitCode === 2) {
+        floorGuardSub = 'No git HEAD baseline';
+      }
 
       const fmtSymList = (arr) => {
         const shown = arr.slice(0, 6).map((s) => \`<code>\${esc(s)}</code>\`).join(', ');
@@ -2020,7 +2168,7 @@ const HUD_HTML = `<!DOCTYPE html>
         <div class="card">
           <div style="margin-bottom:10px;">
             <div style="font-weight:600;">Code Health &amp; Technical Debt</div>
-            <div class="muted" style="font-size:11px;margin-top:2px;">Uncommitted git diff symbol reuse, orphaned call sites, and documented code shortcuts</div>
+            <div class="muted" style="font-size:11px;margin-top:2px;">Uncommitted git diff symbol reuse, orphaned call sites, floor-guard anti-tampering, and documented code shortcuts</div>
           </div>
           <div class="health-grid">
             <div class="health-stat">
@@ -2038,6 +2186,11 @@ const HUD_HTML = `<!DOCTYPE html>
               <div class="health-stat-val">\${debtVal}</div>
               <div class="health-stat-sub">\${debtSub}</div>
             </div>
+            <div class="health-stat">
+              <div class="health-stat-label">Floor Guard</div>
+              <div class="health-stat-val">\${floorGuardVal}</div>
+              <div class="health-stat-sub">\${floorGuardSub}</div>
+            </div>
           </div>
           \${diffBreakdownHtml}
           \${openCallersHtml}
@@ -2046,6 +2199,8 @@ const HUD_HTML = `<!DOCTYPE html>
 
       // Consolidated Doctor & Runtime Diagnostics Card (folded from Doctor tab)
       const doc = data.doctor || {};
+      const se = doc.skillEval;
+      const seLabel = se && se.ok ? \`PASS (\${esc(se.rank1Pct)}%)\` : 'FAIL';
       const errRows = (doc.hookErrors || []).map((e) => \`
         <tr>
           <td class="col-event">
@@ -2059,6 +2214,7 @@ const HUD_HTML = `<!DOCTYPE html>
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
             <div style="font-weight:600;">Diagnostics &amp; Runtime Health</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <span class="badge \${se && se.ok ? 'badge-active' : ''}">Skill Eval: \${seLabel}</span>
               <span class="badge \${doc.qualityGatesOk ? 'badge-active' : ''}">Quality Gates: \${doc.qualityGatesOk ? 'OK' : 'INVALID'}</span>
               <span class="badge">Stale Modes: \${(doc.staleModes || []).length ? esc(doc.staleModes.join(', ')) : 'none'}</span>
             </div>
@@ -2305,30 +2461,45 @@ const HUD_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '', options = {}) {
+function verifyHudToken(expected, provided) {
+  if (typeof expected !== 'string' || !expected || typeof provided !== 'string' || !provided) return false;
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(provided, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+export function createHudServer(token, options = {}) {
+  const envToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '';
+  const expectedToken = token === undefined
+    ? (envToken || crypto.randomBytes(24).toString('hex'))
+    : String(token || '');
+  const statusRequiresToken = options.statusRequiresToken ?? (token === undefined ? Boolean(envToken) : Boolean(expectedToken));
   return http.createServer((req, res) => {
     const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
-    if (token && reqUrl.pathname.startsWith('/api/')) {
-      const provided = req.headers['x-sidecar-token'] || reqUrl.searchParams.get('token');
-      if (provided !== token) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'unauthorized' }));
-        return;
-      }
-    }
+    const rawHdrToken = req.headers['x-sidecar-token'];
+    const provided = (typeof rawHdrToken === 'string' ? rawHdrToken : '') || reqUrl.searchParams.get('token') || '';
+    const tokenValid = verifyHudToken(expectedToken, provided);
+    const denyUnauthorized = () => {
+      res.writeHead(401, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+    };
     if (req.method === 'GET' && (reqUrl.pathname === '/' || reqUrl.pathname === '/index.html')) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(HUD_HTML);
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/status') {
+      if (statusRequiresToken && !tokenValid) {
+        denyUnauthorized();
+        return;
+      }
       let workspaces = [];
       const rawWs = reqUrl.searchParams.get('workspaces');
       if (rawWs) {
         try {
           const parsed = JSON.parse(rawWs);
           if (Array.isArray(parsed)) workspaces = parsed;
-        } catch {
+        } catch { /* fail open: accept comma-separated workspace fallback */
           workspaces = rawWs.split(',').filter(Boolean);
         }
       }
@@ -2338,6 +2509,10 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
       return;
     }
     if (req.method === 'POST' && reqUrl.pathname === '/api/dispatch') {
+      if (!expectedToken || !tokenValid) {
+        denyUnauthorized();
+        return;
+      }
       const ct = String(req.headers['content-type'] || '').toLowerCase();
       if (!ct.includes('application/json')) {
         res.writeHead(415, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -2363,7 +2538,7 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
         let payload = {};
         try {
           payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-        } catch {
+        } catch { /* fail open: reject malformed JSON request body */
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
           return;
@@ -2375,20 +2550,32 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/artifact') {
+      if (!expectedToken || !tokenValid) {
+        denyUnauthorized();
+        return;
+      }
       const wsParam = reqUrl.searchParams.get('workspace') || process.env.OMAGY_WORKSPACE || process.cwd();
       const relParam = reqUrl.searchParams.get('rel') || '';
       const resolved = resolveSafeArtifactFile(uriToFsPath(wsParam) || wsParam, relParam);
       if (!resolved) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.writeHead(404, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
         res.end(JSON.stringify({ error: 'Artifact not found or forbidden' }));
         return;
       }
       try {
         const buf = fs.readFileSync(resolved.filePath);
-        res.writeHead(200, { 'Content-Type': resolved.mime, 'Cache-Control': 'no-store' });
+        const csp = resolved.mime.startsWith('text/html')
+          ? "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+          : "sandbox; default-src 'none'; style-src 'unsafe-inline'";
+        res.writeHead(200, {
+          'Content-Type': resolved.mime,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': csp,
+        });
         res.end(buf);
-      } catch {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
+      } catch { /* fail open: return 500 JSON when artifact file read fails */
+        res.writeHead(500, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
         res.end(JSON.stringify({ error: 'Failed to read artifact' }));
       }
       return;
@@ -2396,6 +2583,26 @@ export function createHudServer(token = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found' }));
   });
+}
+
+function snapshotTreeDigest(rootDir) {
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { /* fail open: skip unreadable dir during digest */ return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (e.name === '.git') continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile()) {
+        const st = fs.statSync(full);
+        out.push(`${path.relative(rootDir, full).replace(/\\/g, '/')}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  };
+  walk(rootDir);
+  return out.join('\n');
 }
 
 async function runSelftest() {
@@ -2409,6 +2616,7 @@ async function runSelftest() {
     fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'visual-ralph', 'hero'), { recursive: true });
     fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'loft', 'nav-fork'), { recursive: true });
     fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'research'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'ideas'), { recursive: true });
     fs.mkdirSync(path.join(ws, 'omagy_wiki'), { recursive: true });
 
     fs.writeFileSync(path.join(ws, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
@@ -2437,6 +2645,7 @@ async function runSelftest() {
       'Claim 1 [VERIFIED] and Claim 2 [DERIVED] with token ghp_1234567890abcdefghij123456.',
       '| **Overall Composite** | >= 85 | 91.2 | Audited |',
     ].join('\n'));
+    fs.writeFileSync(path.join(ws, '.omagy', 'artifacts', 'ideas', 'demo-idea.md'), '# Demo Idea\n- Divergent candidate 1\n');
     fs.writeFileSync(path.join(ws, '.omagy', 'goals', 'performance', 'startup', 'state.json'), JSON.stringify({
       slug: 'startup', objective: 'Cut cold start by 20%', evaluator_command: 'npm run bench', status: 'complete',
     }));
@@ -2454,19 +2663,53 @@ async function runSelftest() {
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'index.md'), '- [[arch]] — Architecture — architecture — core\n');
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'arch.md'), '---\ntitle: Architecture\ncategory: architecture\ntags: [core]\n---\nSee [[missing-page]].\n');
     fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
-    fs.writeFileSync(path.join(ws, 'src', 'index.js'), [
+    const origSrcIndex = [
       'export function parseRows(rows) { return rows; }',
       '// shortcut: 500 rows max with token ghp_1234567890abcdefghij123456, upgrade to streaming parser',
-    ].join('\n'));
+    ].join('\n');
+    fs.writeFileSync(path.join(ws, 'src', 'index.js'), origSrcIndex);
 
-    const snap = buildHudSnapshot([`file://${ws}`]);
+    execFileSync('git', ['init', '-q'], { cwd: ws, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'hud-selftest@example.com'], { cwd: ws, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'HUD Selftest'], { cwd: ws, stdio: 'ignore' });
+    execFileSync('git', ['add', 'src/index.js'], { cwd: ws, stdio: 'ignore' });
+    execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: ws, stdio: 'ignore' });
+
+    const wsFileUrl = pathToFileURL(ws).href;
+    const baseNowMs = Date.now();
+    const snap = buildHudSnapshot([wsFileUrl], baseNowMs);
+
+    // Verify 5,000ms TTL memoization & .git/index mtime invalidation on codeHealth.floorGuard
+    fs.writeFileSync(path.join(ws, 'src', 'index.js'), `${origSrcIndex}\ntry { parseRows([]); } ${'ca' + 'tch'} {}\n`);
+    const cachedSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 2000);
+    const expiredSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 6000);
+    fs.writeFileSync(path.join(ws, 'src', 'index.js'), origSrcIndex);
+    const bumpedGitMtime = new Date(Date.now() + 3000);
+    fs.utimesSync(path.join(ws, '.git', 'index'), bumpedGitMtime, bumpedGitMtime);
+    const gitInvalidatedSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 7000);
+    const floorCacheOk = snap.codeHealth?.floorGuard?.ok === true
+      && snap.codeHealth?.floorGuard?.exitCode === 0
+      && snap.codeHealth?.floorGuard?.total === 0
+      && cachedSnap.codeHealth === snap.codeHealth
+      && expiredSnap.codeHealth?.floorGuard?.ok === false
+      && expiredSnap.codeHealth?.floorGuard?.emptyCatches === 1
+      && expiredSnap.codeHealth?.floorGuard?.total === 1
+      && gitInvalidatedSnap.codeHealth?.floorGuard?.ok === true
+      && gitInvalidatedSnap.codeHealth?.floorGuard?.total === 0;
+
     const validArtifact = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/nav-fork/index.html');
+    const validIdeaArtifact = resolveSafeArtifactFile(ws, '.omagy/artifacts/ideas/demo-idea.md');
     const blockedTraversal = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/../../state/autopilot-state.json');
+    const blockedIdeaTraversal = resolveSafeArtifactFile(ws, '.omagy/artifacts/ideas/../../state/autopilot-state.json');
+    const blockedRootTraversal = resolveSafeArtifactFile(ws, '../../state/autopilot-state.json');
+    const deepInterviewSkill = snap.catalog?.skills?.find((s) => s.name === 'deep-interview');
     const deepResearchSkill = snap.catalog?.skills?.find((s) => s.name === 'deep-research');
     const analyzeSkill = snap.catalog?.skills?.find((s) => s.name === 'analyze');
+    const askSkill = snap.catalog?.skills?.find((s) => s.name === 'ask');
     const codeReviewSkill = snap.catalog?.skills?.find((s) => s.name === 'code-review');
     const prSkill = snap.catalog?.skills?.find((s) => s.name === 'pr');
     const doctorSkill = snap.catalog?.skills?.find((s) => s.name === 'doctor');
+    const skillSkill = snap.catalog?.skills?.find((s) => s.name === 'skill');
     const autopilotWf = snap.catalog?.workflows?.find((w) => w.id === 'autopilot');
     const architectAgent = snap.catalog?.subagents?.find((a) => a.name === 'architect');
 
@@ -2508,9 +2751,16 @@ async function runSelftest() {
       { workspaceRoot: ws, runner: mockRunner }
     );
 
-    // H8: HTTP server POST /api/dispatch token & Content-Type test (in-memory request emit, sandbox-safe)
+    // H8: HTTP server POST /api/dispatch, GET /api/artifact CSP/nosniff/token, and GET /api/status zero-mutation test
     const srv = createHudServer('test-secret-token', { workspaceRoot: ws, runner: mockRunner });
-    const invokeHttp = (method, url, headers, bodyObj) => new Promise((resolve) => {
+    const emptyTokenSrv = createHudServer('', { workspaceRoot: ws, runner: mockRunner });
+    const prevUiToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN;
+    delete process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN;
+    const defaultTokenSrv = createHudServer(undefined, { workspaceRoot: ws, runner: mockRunner });
+    if (prevUiToken === undefined) delete process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN;
+    else process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN = prevUiToken;
+
+    const invokeHttp = (method, url, headers, bodyObj, targetSrv = srv) => new Promise((resolve) => {
       const reqListeners = {};
       const req = {
         method,
@@ -2520,15 +2770,17 @@ async function runSelftest() {
         destroy() {},
       };
       let status = 200;
+      let resHeaders = {};
       const res = {
-        writeHead(code) { status = code; },
-        end(str) {
+        writeHead(code, hdrs) { status = code; resHeaders = hdrs || {}; },
+        end(payload) {
+          const text = Buffer.isBuffer(payload) ? payload.toString('utf8') : String(payload || '');
           let json = {};
-          try { json = JSON.parse(str || '{}'); } catch { /* ignore */ }
-          resolve({ status, json });
+          try { json = JSON.parse(text || '{}'); } catch { /* fail open: response body may be plain text or binary artifact */ }
+          resolve({ status, headers: resHeaders, text, json });
         },
       };
-      srv.emit('request', req, res);
+      targetSrv.emit('request', req, res);
       if (reqListeners.data && bodyObj !== undefined) {
         reqListeners.data(Buffer.from(typeof bodyObj === 'string' ? bodyObj : JSON.stringify(bodyObj), 'utf8'));
       }
@@ -2536,9 +2788,36 @@ async function runSelftest() {
     });
 
     const unauthRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' });
+    const emptyTokDispatchRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' }, emptyTokenSrv);
+    const defaultTokStatusRes = await invokeHttp('GET', `/api/status?workspaces=${encodeURIComponent(JSON.stringify([wsFileUrl]))}`, {}, undefined, defaultTokenSrv);
+    const defaultTokArtifactRes = await invokeHttp('GET', `/api/artifact?workspace=${encodeURIComponent(wsFileUrl)}&rel=${encodeURIComponent('.omagy/artifacts/ideas/demo-idea.md')}`, {}, undefined, defaultTokenSrv);
+    const defaultTokDispatchRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' }, defaultTokenSrv);
     const badCtRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'text/plain', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
     const authRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
     const authJson = authRes.json;
+
+    const unauthArtifactRes = await invokeHttp(
+      'GET',
+      `/api/artifact?workspace=${encodeURIComponent(wsFileUrl)}&rel=${encodeURIComponent('.omagy/artifacts/ideas/demo-idea.md')}`,
+      {},
+    );
+    const loftHttpRes = await invokeHttp(
+      'GET',
+      `/api/artifact?workspace=${encodeURIComponent(wsFileUrl)}&rel=${encodeURIComponent('.omagy/artifacts/loft/nav-fork/index.html')}`,
+      { 'x-sidecar-token': 'test-secret-token' },
+    );
+    const ideaHttpRes = await invokeHttp(
+      'GET',
+      `/api/artifact?workspace=${encodeURIComponent(wsFileUrl)}&rel=${encodeURIComponent('.omagy/artifacts/ideas/demo-idea.md')}`,
+      { 'x-sidecar-token': 'test-secret-token' },
+    );
+    const beforeStatusDigest = snapshotTreeDigest(ws);
+    const statusHttpRes = await invokeHttp(
+      'GET',
+      `/api/status?workspaces=${encodeURIComponent(JSON.stringify([wsFileUrl]))}`,
+      { 'x-sidecar-token': 'test-secret-token' },
+    );
+    const afterStatusDigest = snapshotTreeDigest(ws);
 
     // H9: Inner-folder .omagy tracking when parent project ("Travels") has no root .omagy and child ("Travels/Summer trip/.omagy") does
     const travelsWs = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-travels-'));
@@ -2563,7 +2842,7 @@ async function runSelftest() {
         '**Verdict: PASS**',
       ].join('\n'));
       fs.writeFileSync(path.join(summerTrip, '.omagy', 'artifacts', 'loft', 'trip-ui', 'index.html'), '<!DOCTYPE html><title>Trip UI</title><body>Trip</body>');
-      const tSnap = buildHudSnapshot([`file://${travelsWs}`]);
+      const tSnap = buildHudSnapshot([pathToFileURL(travelsWs).href]);
       const innerArtifact = resolveSafeArtifactFile(travelsWs, 'Summer trip/.omagy/artifacts/loft/trip-ui/index.html');
       const innerBlocked = resolveSafeArtifactFile(travelsWs, 'Summer trip/.omagy/artifacts/loft/../../../state/autopilot-state.json');
       innerSnapOk = Array.isArray(tSnap.trackedScopes) && tSnap.trackedScopes.some((sc) => sc.scope === 'Summer trip')
@@ -2577,10 +2856,14 @@ async function runSelftest() {
       fs.rmSync(travelsWs, { recursive: true, force: true });
     }
 
+    const fg = snap.codeHealth?.floorGuard;
+    const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
       && !HUD_HTML.includes('data-view="doctor"')
       && HUD_HTML.includes('Diagnostics &amp; Runtime Health')
       && HUD_HTML.includes('Code Health &amp; Technical Debt')
+      && HUD_HTML.includes('Floor Guard')
+      && HUD_HTML.includes('Skill Eval:')
       && HUD_HTML.includes('Benchmarks &amp; Autoresearch')
       && HUD_HTML.includes('Visual Ralph &amp; Loft Prototypes')
       && HUD_HTML.includes('class="cmd-actions"')
@@ -2590,16 +2873,22 @@ async function runSelftest() {
       && snap.statusLine.includes('autopilot:ultragoal')
       && snap.statusLine.includes('ultragoal:1/1')
       && snap.catalog?.skills?.length === 27
+      && Boolean(deepInterviewSkill && deepInterviewSkill.flags.includes('--ideate'))
       && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.quickStart.includes('/deep-research'))
       && Boolean(analyzeSkill && analyzeSkill.flags.includes('--audit'))
-      && Boolean(codeReviewSkill && codeReviewSkill.flags.includes('--audit'))
-      && Boolean(prSkill && prSkill.flags.includes('--watch'))
+      && Boolean(askSkill && askSkill.flags.includes('--doubt'))
+      && Boolean(codeReviewSkill && codeReviewSkill.flags.includes('--audit') && codeReviewSkill.flags.includes('--ship'))
+      && Boolean(prSkill && prSkill.flags.includes('--watch') && prSkill.flags.includes('--ship'))
       && Boolean(doctorSkill && doctorSkill.flags.includes('--session-compare'))
+      && Boolean(skillSkill && skillSkill.flags.includes('eval'))
       && snap.modes.every((m) => typeof m.awaitingConfirmation === 'boolean')
       && HUD_HTML.includes('WAITING CONFIRMATION')
       && snap.codeHealth?.debtTotal === 1
       && snap.codeHealth?.debtItems?.[0]?.ceiling.includes('[REDACTED_TOKEN]')
       && snap.codeHealth?.debtItems?.[0]?.upgrade === 'upgrade to streaming parser'
+      && Boolean(fg && typeof fg.deletedTests === 'number' && typeof fg.removedAssertions === 'number' && typeof fg.untrackedBlockers === 'number' && typeof fg.suppressions === 'number' && typeof fg.emptyCatches === 'number' && typeof fg.protectedBlocksModified === 'number' && typeof fg.total === 'number')
+      && floorCacheOk
+      && Boolean(se && se.ok === true && se.rank1Pct >= 90 && se.minRank1 === 90 && se.collisionErrors === 0 && se.negativeSurvivalPct === 100)
       && snap.catalog?.subagents?.length === 18
       && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
       && Boolean(architectAgent && architectAgent.cliModel === 'pro')
@@ -2612,9 +2901,23 @@ async function runSelftest() {
       && Boolean(!dBadAgent.ok && dBadAgent.status === 400)
       && Boolean(!dBadMode.ok && dBadMode.status === 400)
       && unauthRes.status === 401
+      && emptyTokDispatchRes.status === 401
+      && defaultTokStatusRes.status === 200
+      && defaultTokArtifactRes.status === 401
+      && defaultTokDispatchRes.status === 401
+      && unauthArtifactRes.status === 401
       && badCtRes.status === 415
       && authRes.status === 200
       && authJson.ok === true
+      && loftHttpRes.status === 200
+      && loftHttpRes.headers['Content-Security-Policy'] === "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+      && ideaHttpRes.status === 200
+      && ideaHttpRes.headers['Content-Type'] === 'text/plain; charset=utf-8'
+      && ideaHttpRes.headers['X-Content-Type-Options'] === 'nosniff'
+      && ideaHttpRes.headers['Content-Security-Policy'] === "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+      && HUD_HTML.includes('event.source !== window.parent')
+      && statusHttpRes.status === 200
+      && beforeStatusDigest === afterStatusDigest
       && snap.research?.length === 1
       && snap.research[0].compositeScore === 91.2
       && snap.research[0].claims.verified === 1
@@ -2632,7 +2935,10 @@ async function runSelftest() {
       && snap.wiki.entries.length === 1
       && snap.wiki.lint.danglingLinks.includes('arch -> [[missing-page]]')
       && Boolean(validArtifact && validArtifact.mime.includes('text/html'))
+      && Boolean(validIdeaArtifact && validIdeaArtifact.mime === 'text/plain; charset=utf-8')
       && blockedTraversal === null
+      && blockedIdeaTraversal === null
+      && blockedRootTraversal === null
       && innerSnapOk;
 
     process.stdout.write(`${JSON.stringify({
@@ -2650,14 +2956,29 @@ async function runSelftest() {
   }
 }
 
-const isMainModule = Boolean(process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)));
+function sameModulePath(a, b) {
+  const ra = path.resolve(a);
+  const rb = path.resolve(b);
+  if (ra === rb) return true;
+  if (process.platform === 'win32' && ra.toLowerCase() === rb.toLowerCase()) return true;
+  try {
+    return fs.realpathSync(ra) === fs.realpathSync(rb);
+  } catch { /* fail open: non-existent argv[1] cannot match module path */
+    return false;
+  }
+}
+
+const isMainModule = Boolean(process.argv[1] && sameModulePath(process.argv[1], fileURLToPath(import.meta.url)));
 if (isMainModule) {
   const modeArg = (process.argv[2] || '').toLowerCase();
   if (modeArg === 'selftest' || modeArg === '--selftest') {
     runSelftest();
   } else {
     const port = Number(process.env.ANTIGRAVITY_SIDECAR_WEB_PORT || process.env.PORT || 0);
-    const server = createHudServer();
+    const envToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '';
+    const server = createHudServer(envToken || crypto.randomBytes(24).toString('hex'), {
+      statusRequiresToken: Boolean(envToken),
+    });
     server.listen(port, BIND_HOST, () => {
       const addr = server.address();
       const actualPort = typeof addr === 'object' && addr ? addr.port : port;

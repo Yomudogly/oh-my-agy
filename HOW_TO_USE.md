@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.5`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, and practical recipe in **`oh-my-agy` (`v0.4.6`)** for Google Antigravity.
 
 ---
 
@@ -113,17 +113,19 @@ Read-only research that gathers local repo usage (`explore`) and official/upstre
   /best-practice-research What is the current recommended Next.js 15 caching strategy for authenticated API routes?
   ```
 
-#### `/deep-interview` — Socratic Requirements Interview with Ambiguity Gating
-Runs an **Explore-First** codebase pass, computes a weighted ambiguity score across Goal, Constraints, Success Criteria, and Context, applies the **Two-Filter + Owner-Decision Survival Gate** (never asks discoverable facts; uses Antigravity's interactive `ask_question` UI), and builds an **Affected User Ideal State & Gap Table**.
+#### `/deep-interview` — Socratic Requirements Interview & Divergent Ideation (`--ideate`)
+Runs an **Explore-First** codebase pass, computes a weighted ambiguity score across Intent, Outcome, Scope, Constraints, Success Criteria, and Context, applies the **Two-Filter + Owner-Decision Survival Gate** (never asks discoverable facts; uses Antigravity's interactive `ask_question` UI), checks **Phase 0 Capability Map DAGs** (`>= 3` capabilities) and `"Want vs. Should Want"` XY-problem probes, and builds an **Affected User Ideal State & Gap Table** with `Always / Ask First / Never` boundaries.
 - **Flags**:
-  - `--quick`: Threshold `<= 0.30`, max 3 rounds
-  - `--standard` (default): Threshold `<= 0.20`, max 8 rounds
-  - `--deep`: Threshold `<= 0.10`, max 12 rounds
+  - `--quick`: Threshold `<= 0.30`, max 5 rounds
+  - `--standard` (default): Threshold `<= 0.20`, max 12 rounds
+  - `--deep`: Threshold `<= 0.15`, max 20 rounds
+  - `--ideate`: Divergent-to-convergent concept shaping (`How Might We` reframing, `5–8` variations across 7 lenses, `Painkiller vs Vitamin` + 6-Tier Differentiation, `Must/Should/Might Be True` assumption audit) saved to `.omagy/artifacts/ideas/<slug>.md` before converging into Phase 2 Socratic crystallization
   - `--autoresearch`: Interviews specifically to define a validator-gated `/autoresearch` contract
-- **Outputs**: `.omagy/interviews/<slug>-<UTC>.md` and `.omagy/specs/deep-interview-<slug>.md`
+- **Outputs**: `.omagy/artifacts/ideas/<slug>.md` (`--ideate`), `.omagy/interviews/<slug>-<UTC>.md`, and `.omagy/specs/deep-interview-<slug>.md`
 - **Examples**:
   ```text
   /deep-interview Build a tenant-isolated audit log export system
+  /deep-interview --ideate Explore product wedges for developer incident replay
   /deep-interview --quick Add dark mode support to the dashboard
   ```
 
@@ -144,12 +146,14 @@ Creates or refreshes the repository's `DESIGN.md` as the single source of truth 
   /design Create a DESIGN.md for a developer observability CLI and web console
   ```
 
-#### `/ask` — External CLI Second Opinion
-Queries a locally installed `claude`, `gemini`, or `codex` CLI in non-interactive mode for an independent second opinion and saves the output under `.omagy/artifacts/ask-<advisor>-<slug>-<UTC>.md`.
+#### `/ask` — Sandboxed External CLI Second Opinion & Blind-Claim Critique (`--doubt`)
+Queries a locally installed `claude`, `gemini`, or `codex` CLI in non-interactive mode by piping a `0600` temp file over `stdin` (`< <tmpfile>`, zero shell interpolation of code or diffs) into read-only sandboxes (`codex exec --sandbox read-only`, `gemini --approval-mode plan`, `claude -p`) and saves the output under `.omagy/artifacts/ask-<advisor>-<slug>-<UTC>.md`.
+- **Flags**:
+  - `--doubt`: Assembles a **Blind-Claim Packet** (`## ARTIFACT` + `## CONTRACT` + raw test/command outputs, strictly omitting persuasive author `CLAIM` narratives) and triages findings through the 4-tier `RECONCILE` precedence into `.omagy/artifacts/ask-<advisor>-doubt-<slug>-<UTC>.md`.
 - **Examples**:
   ```text
   /ask claude Review our rate-limiter state machine for edge cases
-  /ask codex Suggest a zero-downtime Postgres migration for splitting the users table
+  /ask codex --doubt Verify src/auth/session.ts against .omagy/specs/deep-interview-auth.md
   ```
 
 ---
@@ -197,7 +201,7 @@ Chains **`/deep-interview -> /ralplan -> /ultragoal`** with durable state in `.o
 Turns a brief or plan into `.omagy/ultragoal/goals.json` and executes goals sequentially with an append-only audit trail in `.omagy/ultragoal/ledger.jsonl` (using crash-resilient newline-isolated JSONL appends).
 - **Key Features**:
   - **Rigor Tiering**: Each goal is tagged `"rigor": "light"` (fast inline verification) or `"rigor": "heavy"` (independent `verifier` subagent pass).
-  - **Adversarial Verification (`product` vs `harness`)**: Distinguishes product bugs (`failure_class: "product"`, max 3 retries) from test/env harness issues (`failure_class: "harness"`, repaired without burning the product retry budget).
+  - **Blind-Claim `AdversarialVerify` & 4-Tier `RECONCILE`**: Strips persuasive executor narratives from verification inputs, distinguishes `product` vs `harness` failures, reconciles findings across `(1) Contract gap -> (2) Actionable defect -> (3) Explicit Ruling -> (4) Context noise`, and halts `Doubt/Review theater` after `>= 2` cycles with `0` actionable tier-1/2 defects.
   - **Dependency Cascade**: If a goal becomes `"blocked"` (`[~]`), dependent goals automatically cascade to `"blocked"`.
   - **Final Quality Gate**: Runs `architect` (`CLEAR`) + `verifier` (`PASS`) before marking the run `complete`.
 - **Examples**:
@@ -232,7 +236,7 @@ Iterates on a bounded research artifact until an explicit validator command (exi
   ```
 
 #### `/performance-goal` — Evaluator-Gated Performance Optimization Loop
-Requires an upfront benchmark evaluator command and quantitative target, captures a baseline (`checkpoint-0.json`), and applies small, single-hypothesis reversible patches recorded in `checkpoints.jsonl` until the target is met.
+Requires an upfront benchmark evaluator command and quantitative target, captures a baseline (`checkpoint-0.json`), and applies small, single-hypothesis reversible patches recorded in `checkpoints.jsonl` until the target is met (consulting `references/domain-playbooks.md` for the Core Web Vitals Field CrUX vs Lab Lighthouse **Metric-Honesty Rule**, `EXPLAIN (ANALYZE, BUFFERS)` 3-signal triage, connection pool sizing, viewer-keyed caching, and *"Neutral is a revert"*).
 - **Example**:
   ```text
   /performance-goal Reduce p95 bundle parse latency below 45ms using `npm run bench:parse`
@@ -242,16 +246,18 @@ Requires an upfront benchmark evaluator command and quantitative target, capture
 
 ### 3.4 Verification, QA, Cleanup & Shipping
 
-#### `/code-review` — Dual-Lane Merge-Readiness & Whole-Repo Audit Review
-Runs `code-reviewer` and `architect` in parallel across two axes (**Axis 1: Spec & Requirement Compliance**, **Axis 2: Code Quality & Operational Standards**) plus the **Demolition Test**, **ADR Test**, caller-grep verification on signature/behavior changes, expected-load calibration, and `shortcut:` ceiling checks, then computes a deterministic verdict (`APPROVE`, `REQUEST CHANGES`, or `COMMENT`) using a 4-part finding schema (`Location` + `Symptom` + `Why` + `Fix`) and `Lean: -<N> lines` estimates.
+#### `/code-review` — Dual-Lane Merge-Readiness, Ship-Readiness & Whole-Repo Audit Review
+Runs `code-reviewer` and `architect` in parallel across two axes (**Axis 1: Spec & Requirement Compliance**, **Axis 2: Code Quality & Operational Standards**) plus the **Demolition Test**, **ADR Test**, caller-grep verification on signature/behavior changes, `[Pre-existing in base]` vs `[Introduced in diff]` calibration, the **Concept-Count Test**, expected-load calibration, and `shortcut:` ceiling checks, then computes a deterministic verdict (`APPROVE`, `REQUEST CHANGES`, or `COMMENT`) using a 4-part finding schema (`Location` + `Symptom` + `Why` + `Fix`) and `Lean: -<N> lines` estimates.
 - **Flags**:
   - `--re-review`: Scopes the pass to verifying prior review fixes and checking for newly introduced regressions.
   - `--audit [path]`: Runs a read-only whole-repo (or subtree) quality & lean audit (`codebase-map` + `scan-debt`), producing a `Lean: -<N> lines` ledger and `shortcut:` debt report without requiring a branch diff.
+  - `--ship`: Activates the production ship-readiness checklist (`references/ship-readiness.md`: structured `requestId` + `entryPoint` logging, RED/USE + metric cardinality guard, 2-tier symptom alerts + 3-line runbooks, quantitative canary Advance/Hold/Rollback thresholds, Error Budget Release Gate, RTO-bound rollback plan, `quality-gate` scanner verification, and `floor-guard` check).
 - **Examples**:
   ```text
   /code-review Review the current branch diff against main
   /code-review --re-review
   /code-review --audit src/
+  /code-review --ship
   ```
 
 #### `/ultraqa` — 9-Class Adversarial End-to-End QA
@@ -272,13 +278,15 @@ Locks behavior with regression tests first, classifies fallbacks (`Essential | S
   /ai-slop-cleaner --review Audit src/api/ for speculative fallbacks and dead abstractions
   ```
 
-#### `/pr` — Assemble a Review-Ready PR Body & Watch Open PRs (`--watch`)
-Reads `.omagy/plans/`, `.omagy/ultragoal/`, `.omagy/evidence/`, and review artifacts to generate `.omagy/artifacts/pr-body-<slug>.md` with a 1-line summary, ASCII/Mermaid architecture visual, Before/After verification commands, and ADR-tested reversibility notes (plus optional `gh pr create` / `gh pr edit`). With `--watch`, runs deterministic PR/CI/review triage (`watch-pr`, 60s zero-checks confirmation window, `real / flaky / environmental` CI failure triage, and 3-surface + GraphQL `reviewThreads` review comment care).
+#### `/pr` — Assemble a Review-Ready PR Body, Ship Gate (`--ship`) & Watch Open PRs (`--watch`)
+Reads `.omagy/plans/`, `.omagy/ultragoal/`, `.omagy/evidence/`, and review artifacts to generate `.omagy/artifacts/pr-body-<slug>.md` with a 1-line summary, ASCII/Mermaid architecture visual, Before/After verification commands, and ADR-tested reversibility notes (plus optional `gh pr create` / `gh pr edit`).
 - **Flags**:
-  - `--watch`: Classify PR state (`ready | waiting | blocked | gone`), triage CI failures, and resolve review threads.
+  - `--ship`: Appends the production ship-readiness & rollout checklist (`requestId` observability, canary Advance/Hold/Rollback gates, Error Budget Release Gate, RTO-bound rollback plan, `quality-gate` & `floor-guard` verification, and `git diff --staged --name-only` staging audit).
+  - `--watch`: Classify PR state (`ready | waiting | blocked | gone` via `watch-pr` with 60s zero-checks confirmation window), triage CI failures (`real / flaky / environmental`), and resolve review threads across all 3 GitHub review surfaces + GraphQL `reviewThreads`.
 - **Examples**:
   ```text
   /pr Draft the PR description for this branch
+  /pr --ship
   /pr --watch
   ```
 
@@ -304,7 +312,7 @@ Generates `.omagy/artifacts/handoff-<slug>-<UTC>.md` (and `handoff-latest.md`) c
   ```
 
 #### `/hud` — Workflow Status Board & Auxiliary Pane UI (`sidecar://oh-my-agy/hud/`)
-Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`5` tabs: `Overview` with consolidated workflow, `Code Health & Technical Debt` 3-tile KPI strip, `Benchmarks & Autoresearch`, `Visual Ralph & Loft Prototypes`, and `Diagnostics & Runtime Health` cards; `Workflows` and `Skills` with inline editable prompts + `Run in Chat` / `New Chat` execution; `Subagents` with `Dispatch into Active Chat` / `Launch Standalone Chat` invocation; and `Wiki`).
+Prints a compact read-only dashboard of all active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` working agreements, and surfaces a one-click pill (`[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`) to toggle the single Auxiliary Pane UI extension (`5` tabs: `Overview` with consolidated workflow, `Code Health & Technical Debt` 4-tile KPI strip including `Floor Guard`, `Benchmarks & Autoresearch`, `Visual Ralph & Loft Prototypes`, and `Diagnostics & Runtime Health` with `Skill Eval` badge; `Workflows` and `Skills` with inline editable prompts + `Run in Chat` / `New Chat` execution; `Subagents` with `Dispatch into Active Chat` / `Launch Standalone Chat` invocation; and `Wiki`).
 - **Example**:
   ```text
   /hud
@@ -319,7 +327,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
   ```
 
 #### `/doctor` — Diagnostics, Health Check & Session Transcript Forensics (`--session` / `--session-compare`)
-Verifies plugin placement, `hooks/run.sh selftest` (`69/69` checks), `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `./references/` links), strict JSON manifest version consistency, `.omagy/` size budget & dead-PID `.tmp` hygiene, and stale or `awaiting_confirmation` `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`). With `--session-compare <baseline.jsonl> <candidate.jsonl>`, runs privacy-safe A/B transcript regression analysis (`session-compare`).
+Verifies plugin placement, `hooks/run.sh selftest` (`74/74` checks), `hooks/run.sh skill-eval --min-rank1 90`, `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest`, live hook routing (`$TMPDIR/oh-my-agy/<conversationId>.routing.json`), `.omagy/config.json` `qualityGates` validation, `rules/AGENTS.md` size budget (`<24KB`) and hook module caps (`omagy-hook.mjs <235KB`, `omagy-cli.mjs <100KB`), skills/agents integrity (`<20KB`, SDO frontmatter without `->`, valid `.md#anchor` links), strict JSON manifest version consistency, `.omagy/` size budget & dead-PID `.tmp` hygiene, and stale or `awaiting_confirmation` `.omagy/state/` files. With `--session [conversationId|path]`, runs 7-dimension post-session JSONL transcript forensics (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) and optional two-pass scrubbed export (`--export [skeleton|evidence|full]`). With `--session-compare <baseline.jsonl> <candidate.jsonl>`, runs privacy-safe A/B transcript regression analysis (`session-compare`).
 - **Examples**:
   ```text
   /doctor
@@ -334,13 +342,14 @@ Verifies user or project plugin installation, optionally creates a project `AGEN
   /omagy-setup
   ```
 
-#### `/skill` — Manage, Validate, Test & Extract Reusable Skills
-Lists, inspects, adds, edits, scans, validates, pressure-tests, or extracts reusable Antigravity skills (`SKILL.md`).
-- **Subcommands**: `list`, `info`, `search`, `add`, `edit`, `remove`, `validate` (includes SDO frontmatter and `<20KB` checks), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing + 5-rep micro-tests), `scan`, `sync`, `extract` (runs the 3-question Skillify gate to turn a recurring session workflow into a durable skill).
+#### `/skill` — Manage, Validate, Evaluate, Test & Extract Reusable Skills
+Lists, inspects, adds, edits, scans, validates, evaluates routing accuracy, pressure-tests, or extracts reusable Antigravity skills (`SKILL.md`), enforcing the **"Write the Procedure, Not the Workaround"** authoring standard.
+- **Subcommands**: `list`, `info`, `search`, `add`, `edit`, `remove`, `validate` (includes strict YAML frontmatter, SDO, `.md#anchor` link, and `<20KB` checks), `eval` (runs `hooks/run.sh skill-eval --min-rank1 90` TF-IDF routing, `owner`-negative survival, and cosine collision checks against `hooks/skill-eval-cases.json`), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing + 5-rep micro-tests), `scan`, `sync`, `extract` (runs the 3-question Skillify gate to turn a recurring session workflow into a durable skill).
 - **Examples**:
   ```text
   /skill list
   /skill validate
+  /skill eval
   /skill test code-review
   /skill extract prisma-migration-check
   ```
@@ -406,7 +415,7 @@ All runtime state lives in your workspace under `.omagy/` (add `.omagy/` to `.gi
 │   └── ledger.jsonl                           # Crash-resilient append-only execution audit trail
 ├── goals/performance/<slug>/                  # Performance baseline, checkpoints.jsonl, summary.md
 ├── evidence/task-<id>.json                    # Verified completion evidence for code-changing team tasks
-└── artifacts/                                 # Reusable outputs: handoff-latest.md, pr-body-*.md, loft/, ask-*
+└── artifacts/                                 # Reusable outputs: handoff-latest.md, pr-body-*.md, ideas/, loft/, ask-*
 ```
 
 ### How to Resume Interrupted Work
@@ -434,7 +443,7 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
 
 ## 7. Lifecycle Hooks & CLI Utilities
 
-`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs):
+`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (lazy-loading [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) only on cold CLI commands and `selftest`):
 
 - **`SessionStart` & `PreInvocation` (Enabled by default)**:
   - Detects `/skill` and `$skill` triggers and natural-language routing keywords while stripping code blocks, inline code, HTML comments, blockquotes, relay headers (`[a -> b]`), URLs, quoted strings, negated invocations (`do not use $autopilot`), and informational help queries (`what does $ralplan do?`), and preserving leading `$skill` invocations on reference-heavy prompts.
@@ -445,16 +454,17 @@ Unlike `.omagy/` (which is transient workflow state and gitignored), **`omagy_wi
   - Automatically skips leader skill routing, codebase map injection, and unowned parent states when invoked inside a delegated subagent prompt (`isSubagentPayload`).
 - **`Stop` (Enabled by default)**:
   - Continues active `autopilot`, `ultragoal`, `ultraqa`, `autoresearch`, or `performance-goal` loops on normal stops (`NO_TOOL_CALL`), bounded to at most 2 consecutive nudges without a state update, while enforcing that a permission denial or user refusal is final (must mark the task/goal `blocked` instead of retrying via another tool/path).
-  - Scans `git diff` on completion claims for left-behind blocker patterns (`test.skip`, `test.only`, `TODO: implement`, `throw new Error("Not implemented")`, and `open-caller:<symbol>` broken call sites of removed non-generic symbols).
+  - Scans tracked `git diff` (via hunk-spoof-immune `parseUnifiedDiff`) and bounded untracked code files on completion claims (`scanDiffBlockers`) for left-behind blocker patterns (`test.skip`, `test.only`, `TODO: implement`, `throw new Error("Not implemented")`), unexempted checker suppressions (requiring `-- <reason>` or `shortcut:`), bare/placeholder empty `catch` blocks (exempting `/* fail open: ... */` or `shortcut:`), `omagy-ignore-start..end` / `simplify-ignore-start..end` protected-block tampering, and `open-caller:<symbol>` broken call sites of removed non-generic symbols.
 - **`PreToolUse` (Opt-in in `hooks.json`)**:
   - Blocks file writes outside `.omagy/` and `omagy_wiki/` while a planning mode (`deep-interview`, `ralplan`, `plan`, or `autopilot` planning phase) is active, inspecting all target paths across `Path`, `TargetFile`, `filePath`, rename/move destinations, `edits[]`, and `apply_patch` (`*** Add/Update/Delete File:` and `*** Move to:`) headers, and failing closed when an explicit file-mutation tool omits its path argument.
+  - Enforces `protected-block-guard`: reconstructs post-edit file content (`reconstructPostEditContent` across `write_file`, `edit_file`, `multi_replace_file_content`, `apply_patch`, and delete/move/rename) and requires user confirmation whenever any `omagy-ignore-start..end` or `simplify-ignore-start..end` block is modified or removed.
   - Enforces `agreements-guard`: blocks full overwrites of `omagy_wiki/agreements.md` that drop `[by:human]` entries.
   - Enforces `write-existing-file-guard`: requires user confirmation before a full-file `Overwrite: true` on an existing non-empty source file that hasn't been read yet in the current session.
 
-### Built-In Hook CLI Commands
+### Built-In Hook CLI Commands (20 Total)
 
 ```bash
-# 1. Run the 69-check offline hook selftest
+# 1. Run the 74-check offline hook & static repository selftest
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Pre-assemble a git review package (supports -C <dir>; exits 3 on 0-commit or non-ancestor range)
@@ -504,6 +514,15 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh session-compare baseline.json
 
 # 17. Repair [[wiki-links]] and [label](slug.md) links outside code spans on move/archive/delete (/wiki)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh wiki-repair omagy_wiki '{"moved":{"old-slug":"new-slug"},"archived":["old-arch"],"deleted":["gone"]}'
+
+# 18. Run 9-category anti-tampering floor guard across working tree + staged + untracked against HEAD or <baseRef> (exit 0|1|2)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh floor-guard . main --json
+
+# 19. Evaluate TF-IDF skill routing accuracy, owner-negative survival, and cosine collisions across all 27 skills (/skill eval)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-eval ~/.gemini/config/plugins/oh-my-agy --min-rank1 90
+
+# 20. Validate semgrep and axe scanner JSON reports fail-closed (exit 0 clean, 1 blocking findings, 2 empty/invalid scan)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh quality-gate semgrep-report.json axe-report.json --json
 ```
 
 ---

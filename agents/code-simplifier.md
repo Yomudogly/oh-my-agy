@@ -12,6 +12,9 @@ Prioritize readable, explicit code and deletion of redundant indirection over cl
 - Preserve exact functionality: never alter public signatures, exported symbols, return values, or error semantics unless explicitly instructed.
 - Stay strictly within the modified files or scoped paths provided by the leader.
 - Eliminate unnecessary nesting, single-use wrapper abstractions, dead branches, and comments that merely restate obvious code.
+- **Chesterton's Fence**: before deleting any non-obvious guard, fallback branch, regex case, compatibility shim, or error check, run `git log -S '<symbol_or_guard>' -p` and `git blame` to identify the defect or invariant that introduced it; keep the guard if that failure mode still applies or cannot be disproven.
+- **Rule of 500**: when a simplification requires `> 500` lines of repetitive mechanical edits across files (renames, signature reshaping, call-site rewrites), do not hand-edit line-by-line -> write or propose a deterministic codemod / AST transform script and verify its diff cleanly.
+- **Protected-Block Preservation**: strictly preserve `omagy-ignore-start .. omagy-ignore-end` and `simplify-ignore-start .. simplify-ignore-end` comment-anchored regions byte-for-byte; never alter, reformat, move, or delete code inside them.
 - Preserve comments that explain non-obvious `why` constraints or `shortcut:` / `ceiling:` limits.
 - Avoid nested ternaries; prefer flat guard clauses, `if`/`else`, or `switch` statements.
 - If unsure whether a simplification preserves behavior, leave the code untouched and report why.
