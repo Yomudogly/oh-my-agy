@@ -100,8 +100,8 @@ export const BLOCKER_PATTERNS = [
 function runtimeDir() {
   return process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
 }
-function readStdin() {
-  try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
+export function readStdin() {
+  try { return fs.readFileSync(0, 'utf8'); } catch { /* fail open: missing stdin returns empty string */ return ''; }
 }
 export function stripUtf8Bom(text) {
   return String(text ?? '').replace(/^\uFEFF/, '');
@@ -2183,7 +2183,6 @@ export function auditResearchReport(reportPath) {
 }
 
 // ---------- watch-pr verdict policy, failure signature normalizer, session compare & wiki link repair ----------
-// shortcut: legacy CLI helpers remain in omagy-hook.mjs while newer evaluators live in lazy-imported hooks/omagy-cli.mjs, migrate remaining CLI helpers if omagy-hook.mjs exceeds 175KB
 export const DEFAULT_NO_CHECKS_CONFIRM_MS = 60_000;
 export function decideWatchVerdict(rawFacts = {}, options = {}) {
   const f = rawFacts && typeof rawFacts === 'object' ? rawFacts : {};
@@ -3503,223 +3502,15 @@ async function notify(payload, roots) {
   writeJson(recFile, { at: new Date().toISOString(), event });
 }
 
-// ---------- selftest ----------
-async function selftest() {
-  const { runSelftest } = await import('./omagy-selftest.mjs');
-  return runSelftest();
-}
-
 // ---------- main ----------
-function parseCliArgs(rawArgs = []) {
-  let jsonMode = false;
-  let dashC = '';
-  const pos = [];
-  for (let i = 0; i < rawArgs.length; i += 1) {
-    const a = rawArgs[i];
-    if (a === '--json') jsonMode = true;
-    else if (a === '-C' && i + 1 < rawArgs.length) { dashC = rawArgs[i + 1]; i += 1; }
-    else pos.push(a);
-  }
-  return { jsonMode, dashC, pos };
-}
-
-function runThrowingJsonCli(fn) {
-  try {
-    process.stdout.write(`${JSON.stringify(fn())}\n`);
-    process.exitCode = 0;
-  } catch (err) {
-    process.stdout.write(`${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) })}\n`);
-    process.exitCode = 1;
-  }
-}
+const LIFECYCLE_HOOK_EVENTS = new Set(['session-start', 'pre-invocation', 'pre-tool-use', 'stop']);
 
 async function main() {
   const event = (process.argv[2] || '').toLowerCase();
   const rawArgs = process.argv.slice(3);
-  if (event === 'selftest') {
-    const r = await selftest();
-    process.stdout.write(`${JSON.stringify(r)}\n`);
-    process.exitCode = r.selftest === 'PASS' ? 0 : 1;
-    return;
-  }
-  if (event === 'verify-evidence') {
-    const [cwdArg, relArg, teamArg, taskIdArg] = rawArgs;
-    runThrowingJsonCli(() => validateCompletionEvidence(cwdArg || process.cwd(), relArg, { team: teamArg, taskId: taskIdArg }));
-    return;
-  }
-  if (event === 'append-jsonl') {
-    const [fileArg, jsonArg] = rawArgs;
-    runThrowingJsonCli(() => appendJsonlRecord(fileArg, jsonArg || readStdin()));
-    return;
-  }
-  if (event === 'read-jsonl') {
-    runThrowingJsonCli(() => readJsonlRecords(rawArgs[0]));
-    return;
-  }
-  if (event === 'quality-gates') {
-    const res = validateQualityGates(rawArgs[0] || process.cwd(), rawArgs[1] || '');
-    process.stdout.write(`${JSON.stringify(res)}\n`);
-    process.exitCode = res.ok ? 0 : 1;
-    return;
-  }
-  if (event === 'review-package') {
-    const { dashC, pos } = parseCliArgs(rawArgs);
-    const res = buildReviewPackage(dashC || pos[0] || process.cwd(), dashC ? pos[0] : pos[1], (dashC ? pos[1] : pos[2]) || 'HEAD', (dashC ? pos[2] : pos[3]) || '');
-    process.stdout.write(`${JSON.stringify(res)}\n`);
-    process.exitCode = res.ok ? 0 : (res.exitCode || 1);
-    return;
-  }
-  if (event === 'goal-brief') {
-    const { dashC, pos } = parseCliArgs(rawArgs);
-    const baseDir = dashC ? path.resolve(dashC) : process.cwd();
-    const resolveRel = (p) => (p ? (path.isAbsolute(p) ? p : path.resolve(baseDir, p)) : '');
-    const res = extractGoalBrief(resolveRel(pos[0]), pos[1] || '', resolveRel(pos[2]));
-    process.stdout.write(`${JSON.stringify(res)}\n`);
-    process.exitCode = res.ok ? 0 : (res.exitCode || 1);
-    return;
-  }
-  if (event === 'check-test-junk') {
-    const { jsonMode, dashC, pos } = parseCliArgs(rawArgs);
-    const baseDir = dashC ? path.resolve(dashC) : process.cwd();
-    const targets = pos.length
-      ? pos.map((p) => (path.isAbsolute(p) ? p : path.resolve(baseDir, p)))
-      : [baseDir];
-    const res = checkTestJunk(targets);
-    if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
-    else {
-      const lines = [`CHECK-TEST-JUNK: ${res.ok ? 'PASS' : 'FAIL'} (${res.filesScanned} file(s) scanned, ${res.violations.length} violation(s))`];
-      for (const v of res.violations) lines.push(`${v.file}:${v.line} [${v.rule}] ${v.message} :: ${v.snippet}`);
-      process.stdout.write(`${lines.join('\n')}\n`);
-    }
-    process.exitCode = res.exitCode;
-    return;
-  }
-  if (event === 'research-matrix') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const res = buildResearchMatrix(pos[0] || '', pos[1] || 'general', pos.slice(2));
-    if (!res.ok) {
-      process.stdout.write(`${JSON.stringify(res)}\n`);
-      process.exitCode = res.exitCode || 1;
-      return;
-    }
-    process.stdout.write(jsonMode ? `${JSON.stringify(res, null, 2)}\n` : res.markdown);
-    process.exitCode = 0;
-    return;
-  }
-  if (event === 'audit-research') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const res = auditResearchReport(pos[0] || '');
-    if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
-    else {
-      const lines = [
-        `DEEP RESEARCH AUDIT: ${res.file || pos[0] || ''} (${res.ok ? 'PASS' : 'FAIL'}, composite=${res.compositeScore ?? 'n/a'})`,
-        `Claims: [VERIFIED]=${res.claimCounts?.verified ?? 0} [DERIVED]=${res.claimCounts?.derived ?? 0} [ASSUMED]=${res.claimCounts?.assumed ?? 0}`,
-        ...(res.errors || []).map((e) => `ERROR: ${e}`),
-        ...(res.warnings || []).map((w) => `WARN: ${w}`),
-      ];
-      process.stdout.write(`${lines.join('\n')}\n`);
-    }
-    process.exitCode = res.ok ? 0 : (res.exitCode || 1);
-    return;
-  }
-  if (event === 'codebase-map') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const targetRoot = pos[0] ? path.resolve(pos[0]) : process.cwd();
-    const budgetArg = pos[1] ? intOr(pos[1], 1800, 100) : intOr(process.env.OMAGY_MAP_CHARS, 1800, 100);
-    const mapText = buildCodebaseMap([targetRoot], budgetArg);
-    if (jsonMode) process.stdout.write(`${JSON.stringify({ ok: true, root: targetRoot, budget: budgetArg, map: mapText }, null, 2)}\n`);
-    else if (mapText) process.stdout.write(`${mapText}\n`);
-    process.exitCode = 0;
-    return;
-  }
-  if (event === 'scan-debt') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const targetRoot = pos[0] ? path.resolve(pos[0]) : process.cwd();
-    const res = scanShortcutDebt([targetRoot], pos[1] || '');
-    if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
-    else if (res.total === 0) process.stdout.write('No shortcut debt. Clean ledger.\n');
-    else {
-      const lines = res.items.map((it) => `${it.file}:${it.line}, ceiling: ${it.ceiling}. upgrade: ${it.upgrade || '[no-trigger]'}${it.noTrigger ? ' [no-trigger]' : ''}.`);
-      lines.push(`${res.total} marker${res.total === 1 ? '' : 's'}, ${res.noTriggerCount} with no trigger.`);
-      process.stdout.write(`${lines.join('\n')}\n`);
-    }
-    process.exitCode = 0;
-    return;
-  }
-  if (event === 'validate-team-tasks') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const res = validateTeamTasks(pos[0] ? path.resolve(pos[0]) : process.cwd(), pos[1] || '');
-    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
-    process.exitCode = res.exitCode;
-    return;
-  }
-  if (event === 'watch-pr') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const inputArg = pos[0] || '{}';
-    let facts = {};
-    try {
-      facts = JSON.parse(stripUtf8Bom(fs.existsSync(inputArg) ? fs.readFileSync(inputArg, 'utf8') : inputArg));
-    } catch { /* fail open: report blocked on malformed watch-pr JSON */
-      process.stdout.write(`${JSON.stringify({ verdict: 'blocked', reasons: ['invalid_input_json'] })}\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const res = decideWatchVerdict(facts);
-    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
-    process.exitCode = res.verdict === 'blocked' || res.verdict === 'gone' ? 1 : 0;
-    return;
-  }
-  if (event === 'failure-sig') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const inputArg = pos[0] || '';
-    const signature = normalizeFailureSignature((inputArg && fs.existsSync(inputArg)) ? fs.readFileSync(inputArg, 'utf8') : (inputArg || readStdin()));
-    process.stdout.write(jsonMode ? `${JSON.stringify({ ok: true, signature }, null, 2)}\n` : `${signature}\n`);
-    process.exitCode = 0;
-    return;
-  }
-  if (event === 'session-compare') {
-    const jsonMode = rawArgs.includes('--json');
-    const failOnRegression = rawArgs.includes('--fail-on-regression');
-    let maxDurationIncreasePct = 50;
-    const pos = [];
-    for (let i = 0; i < rawArgs.length; i += 1) {
-      const a = rawArgs[i];
-      if (a === '--json' || a === '--fail-on-regression') continue;
-      if (a === '--max-duration-increase' && i + 1 < rawArgs.length) { maxDurationIncreasePct = Number(rawArgs[i + 1]); i += 1; }
-      else pos.push(a);
-    }
-    const res = compareSessions(pos[0] || '', pos[1] || '', { failOnRegression, maxDurationIncreasePct });
-    if (pos[2]) {
-      const outPath = path.resolve(pos[2]);
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, `${JSON.stringify(res, null, 2)}\n`, 'utf8');
-    }
-    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
-    process.exitCode = res.exitCode;
-    return;
-  }
-  if (event === 'wiki-repair') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const wikiDirArg = pos[0] ? path.resolve(pos[0]) : path.join(process.cwd(), 'omagy_wiki');
-    const changesArg = pos[1] || '{}';
-    let changes = {};
-    try {
-      changes = JSON.parse(stripUtf8Bom(fs.existsSync(changesArg) ? fs.readFileSync(changesArg, 'utf8') : changesArg));
-    } catch { /* fail open: reject malformed wiki-repair JSON */
-      process.stdout.write(`${JSON.stringify({ ok: false, error: 'Invalid changes JSON' })}\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const res = repairWikiLinks(wikiDirArg, changes);
-    process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
-    process.exitCode = res.exitCode;
-    return;
-  }
-  if (COLD_CLI_EVENTS.has(event)) {
-    const { handleColdCliCommand } = await import('./omagy-cli.mjs');
-    const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-    const defaultRoot = event === 'skill-eval' ? pluginRoot : process.cwd();
-    process.exitCode = handleColdCliCommand(event, rawArgs, defaultRoot);
+  if (event && !LIFECYCLE_HOOK_EVENTS.has(event)) {
+    const { runNonLifecycleCli } = await import('./omagy-skill.mjs');
+    process.exitCode = await runNonLifecycleCli(event, rawArgs);
     return;
   }
   const payload = parseJson(readStdin());
@@ -3729,7 +3520,7 @@ async function main() {
     else if (event === 'pre-invocation') result = preInvocation(payload);
     else if (event === 'pre-tool-use') result = preToolUse(payload);
     else if (event === 'stop') result = await stop(payload);
-  } catch (err) {
+  } catch (err) { /* fail open: log hook failure and emit safe fallback JSON */
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[oh-my-agy] hook ${event} failed open: ${msg}\n`);
     try {
@@ -3758,7 +3549,6 @@ export function sameModulePath(a, b) {
   }
 }
 
-const LIFECYCLE_HOOK_EVENTS = new Set(['session-start', 'pre-invocation', 'pre-tool-use', 'stop']);
 const isMainModule = Boolean(process.argv[1] && sameModulePath(process.argv[1], fileURLToPath(import.meta.url)));
 if (isMainModule) {
   main().catch((err) => {

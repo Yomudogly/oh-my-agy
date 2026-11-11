@@ -95,6 +95,12 @@ import {
   validateStagedDiffRedaction,
   verifyPlanHash,
 } from './omagy-cli.mjs';
+import {
+  initSkillScaffold,
+  runNonLifecycleCli,
+  validateSkillDirectory,
+  validateSkillsManifest,
+} from './omagy-skill.mjs';
 
 function readFixture(filePath) { return fs.readFileSync(filePath, 'utf8'); } // check-test-junk: ignore
 
@@ -1173,7 +1179,7 @@ export async function runSelftest() {
       cliSelfRaw = readFixture(cliSelfPath);
       hookByteSize = Buffer.byteLength(hookSelfRaw, 'utf8');
       cliByteSize = Buffer.byteLength(cliSelfRaw, 'utf8');
-      zeroStaticCliImport = !/^\s*import\s+(?!\()[^;\r\n]*['"]\.\/omagy-(?:cli|selftest)\.mjs['"]/m.test(hookSelfRaw);
+      zeroStaticCliImport = !/^\s*import\s+(?!\()[^;\r\n]*['"]\.\/omagy-(?:skill|cli|selftest)\.mjs['"]/m.test(hookSelfRaw);
       const agentsDir = path.join(pluginRoot, 'agents');
       const agentFiles = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort();
       agentCount = agentFiles.length;
@@ -1486,10 +1492,10 @@ export async function runSelftest() {
       if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
       if (provenanceRe.test(content)) provenanceViolations.push(relPath);
     };
-    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
+    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
       checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
     }
-    for (const coreRel of ['rules/AGENTS.md', 'sidecars/hud/main.mjs']) {
+    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs']) {
       const coreTxt = rTxt(coreRel);
       if (retiredSubagentRe.test(coreTxt) || personaWordRe.test(coreTxt)) retiredViolations.push(coreRel);
     }
@@ -2636,6 +2642,224 @@ export async function runSelftest() {
     }
     check('init-deep-scan density/churn, wiki-query weighted + CJK bi-grams, wiki-lint dead refs, and privacy-safe session-scan pass',
       t50Ok, t50Detail);
+
+    // T51: omagy-skill.mjs cold CLI dispatch, byte budgets, skill-validate (--strict, SR-1, sibling links, manifest), and skill-init (--scope shared|project|user|--dir)
+    let t51Ok = false;
+    let t51Detail = '';
+    try {
+      const hookBytesT51 = fs.statSync(path.join(pluginRoot, 'hooks', 'omagy-hook.mjs')).size;
+      const cliBytesT51 = fs.statSync(path.join(pluginRoot, 'hooks', 'omagy-cli.mjs')).size;
+      const skillBytesT51 = fs.statSync(path.join(pluginRoot, 'hooks', 'omagy-skill.mjs')).size;
+      const hookTxtT51 = rTxt('hooks/omagy-hook.mjs');
+      const retiredShortcutOk = !hookTxtT51.includes('legacy CLI helpers remain in omagy-hook.mjs');
+      const emptyEventOut = execFileSync(process.execPath, [hookSelfPath], { input: '', encoding: 'utf8' }).trim();
+
+      let capturedOut = '';
+      const origStdoutWrite = process.stdout.write.bind(process.stdout);
+      const prevExitCode = process.exitCode;
+      let directUnknownCode = -1;
+      try {
+        process.stdout.write = (chunk) => { capturedOut += String(chunk); return true; };
+        directUnknownCode = await runNonLifecycleCli('unknown-subcommand-xyz', []);
+      } finally {
+        process.stdout.write = origStdoutWrite;
+        process.exitCode = prevExitCode;
+      }
+      const directUnknownJson = JSON.parse(capturedOut.trim() || '{}');
+      const cliUnknown = runCliJson(['unknown-subcommand-xyz'], ws);
+      const cliMapLegacy = runCliJson(['codebase-map', pluginRoot, '600', '--json'], ws);
+      const cliWatchLegacy = runCliJson(['watch-pr', '{"state":"open","mergeable":"mergeable","checks":{"passed":2,"total":2}}', '--json'], ws);
+      const cliSigLegacy = runCliJson(['failure-sig', 'AssertionError: expected 1 to equal 2 at test.js:10:5', '--json'], ws);
+
+      const byteAndDispatchOk = hookBytesT51 < 170_000
+        && cliBytesT51 < 93_734
+        && skillBytesT51 > 0 && skillBytesT51 < 256_000
+        && COLD_CLI_EVENTS.size === 13
+        && zeroStaticCliImport
+        && retiredShortcutOk
+        && emptyEventOut === '{}'
+        && directUnknownCode === 2
+        && directUnknownJson.ok === false
+        && directUnknownJson.error === 'unknown_command:unknown-subcommand-xyz'
+        && cliUnknown.code === 2
+        && cliUnknown.json.error === 'unknown_command:unknown-subcommand-xyz'
+        && cliMapLegacy.code === 0 && cliMapLegacy.json.ok === true
+        && cliWatchLegacy.code === 0 && cliWatchLegacy.json.verdict === 'ready'
+        && cliSigLegacy.code === 0 && cliSigLegacy.json.ok === true;
+
+      const t51Ws = path.join(ws, 't51-ws');
+      fs.mkdirSync(t51Ws, { recursive: true });
+      const scShared = await initSkillScaffold('release-notes-drafter', {
+        scope: 'shared',
+        rootDir: t51Ws,
+        resources: ['references', 'scripts', 'assets', 'resources'],
+      });
+      const sharedManifestPath = path.join(t51Ws, '.agents', 'skills.json');
+      const sharedManifestObj = readJson(sharedManifestPath);
+      const valSharedSkill = await validateSkillDirectory(scShared.skillDir, { strict: true });
+      writeJson(sharedManifestPath, {
+        ...sharedManifestObj,
+        inherits: [{ path: 'vendor/shared-skills', include_only: ['^release-'], exclude: ['^wip-'] }],
+      });
+      const valSharedManifest = await validateSkillsManifest(sharedManifestPath, { strict: true, rootDir: t51Ws });
+      const valManifestViaDir = await validateSkillDirectory(sharedManifestPath, { strict: true, rootDir: t51Ws });
+
+      const cliInitProj = runCliJson(['skill-init', 'proj-lint-helper', '--scope', 'project', '--json'], t51Ws);
+      const cliValProj = runCliJson(['skill-validate', '.agents/skills/proj-lint-helper', '--strict', '--json'], t51Ws);
+      const scCustom = await initSkillScaffold('custom-dir-helper', { dir: 'custom-skills', rootDir: t51Ws });
+
+      const sharedSkillMdPath = path.join(scShared.skillDir, 'SKILL.md');
+      const sentinelText = `${readFixture(sharedSkillMdPath)}\n<!-- sentinel -->\n`;
+      fs.writeFileSync(sharedSkillMdPath, sentinelText, 'utf8');
+      const scOverwriteBlocked = await initSkillScaffold('release-notes-drafter', { scope: 'shared', rootDir: t51Ws });
+      const sentinelPreserved = readFixture(sharedSkillMdPath).includes('<!-- sentinel -->');
+      const scInvalidName = await initSkillScaffold('Bad_Name/..', { scope: 'project', rootDir: t51Ws });
+
+      const prevUserSkillsDir = process.env.OMAGY_USER_SKILLS_DIR;
+      const isolatedUserDir = path.join(ws, 't51-user-skills');
+      let scUser = null;
+      let valUser = null;
+      try {
+        process.env.OMAGY_USER_SKILLS_DIR = isolatedUserDir;
+        scUser = await initSkillScaffold('user-scoped-helper', { scope: 'user', rootDir: t51Ws });
+        valUser = await validateSkillDirectory(scUser.skillDir, { strict: true });
+      } finally {
+        if (prevUserSkillsDir === undefined) delete process.env.OMAGY_USER_SKILLS_DIR;
+        else process.env.OMAGY_USER_SKILLS_DIR = prevUserSkillsDir;
+      }
+
+      const scaffoldOk = scShared.ok === true && scShared.exitCode === 0
+        && fs.existsSync(path.join(scShared.skillDir, 'SKILL.md'))
+        && fs.existsSync(path.join(scShared.skillDir, 'references', 'guide.md'))
+        && fs.existsSync(path.join(scShared.skillDir, 'scripts', 'run.mjs'))
+        && fs.existsSync(path.join(scShared.skillDir, 'assets', '.gitkeep'))
+        && fs.existsSync(path.join(scShared.skillDir, 'resources', '.gitkeep'))
+        && sharedManifestObj?.entries?.[0]?.path === 'tools/agents/skills'
+        && valSharedSkill.ok === true && valSharedSkill.errors.length === 0 && valSharedSkill.warnings.length === 0
+        && valSharedManifest.ok === true && valSharedManifest.entriesCount === 1 && valSharedManifest.inheritsCount === 1
+        && valManifestViaDir.ok === true && valManifestViaDir.kind === 'manifest'
+        && cliInitProj.code === 0 && cliValProj.code === 0 && cliValProj.json.ok === true
+        && scCustom.ok === true && scCustom.scope === 'custom'
+        && scOverwriteBlocked.ok === false && scOverwriteBlocked.exitCode === 1 && sentinelPreserved
+        && scInvalidName.ok === false && scInvalidName.exitCode === 2
+        && scUser?.ok === true && scUser.skillDir === path.join(isolatedUserDir, 'user-scoped-helper')
+        && valUser?.ok === true;
+
+      const advRoot = path.join(ws, 't51-adv');
+      const mkAdvSkill = (slug, desc, body, extraFn) => {
+        const d = path.join(advRoot, slug);
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, 'SKILL.md'), `---\nname: ${slug}\ndescription: "${desc}"\n---\n\n# ${slug}\n\n${body}\n`, 'utf8');
+        if (extraFn) extraFn(d);
+        return d;
+      };
+      const goodDesc = 'Run deterministic checks on repository fixtures cleanly. Use when validating test inputs or schema invariants.';
+
+      const advOver20k = await validateSkillDirectory(mkAdvSkill('over-twenty-k', goodDesc, 'x'.repeat(20_100)));
+      const nearDir = mkAdvSkill('near-nineteen-k', goodDesc, 'y'.repeat(19_200));
+      const advNearLoose = await validateSkillDirectory(nearDir, { strict: false });
+      const advNearStrict = await validateSkillDirectory(nearDir, { strict: true });
+      const advRef40k = await validateSkillDirectory(mkAdvSkill('big-ref-skill', goodDesc, 'See [big.md](./references/big.md).', (d) => {
+        fs.mkdirSync(path.join(d, 'references'), { recursive: true });
+        fs.writeFileSync(path.join(d, 'references', 'big.md'), `# Big\n## One\n## Two\n${'z'.repeat(40_100)}\n`, 'utf8');
+      }));
+      const advNestedRef = await validateSkillDirectory(mkAdvSkill('nested-ref-skill', goodDesc, 'Body text.', (d) => {
+        fs.mkdirSync(path.join(d, 'references', 'sub'), { recursive: true });
+        fs.writeFileSync(path.join(d, 'references', 'sub', 'doc.md'), '# Nested\n', 'utf8');
+      }));
+      const advArrowDesc = await validateSkillDirectory(mkAdvSkill('arrow-desc-skill', 'Plan -> execute -> verify workflow. Use when running steps.', 'Body.'));
+      const advHtmlDesc = await validateSkillDirectory(mkAdvSkill('html-desc-skill', 'Inject <script>alert(1)</script> payload. Use when testing tags.', 'Body.'));
+      const advUnbalDesc = await validateSkillDirectory(mkAdvSkill('unbal-desc-skill', 'Broken <placeholder token in summary. Use when testing brackets.', 'Body.'));
+      const advPlaceholderOk = await validateSkillDirectory(mkAdvSkill('placeholder-ok', 'Run command with <target-slug> and <UTC> arguments cleanly. Use when testing placeholders.', 'Body.'), { strict: true });
+
+      const advBadAnchor = await validateSkillDirectory(mkAdvSkill('bad-anchor-skill', goodDesc, 'Read [guide](./references/guide.md#missing-sec).', (d) => {
+        fs.mkdirSync(path.join(d, 'references'), { recursive: true });
+        fs.writeFileSync(path.join(d, 'references', 'guide.md'), '# Guide\n\n## Real Section\nText.\n', 'utf8');
+      }));
+      const advMissingScript = await validateSkillDirectory(mkAdvSkill('missing-script-skill', goodDesc, 'Run [helper](./scripts/missing.mjs).'));
+      const advBackslashLink = await validateSkillDirectory(mkAdvSkill('backslash-link-skill', goodDesc, 'Run [helper](scripts\\run.mjs).'));
+      fs.writeFileSync(path.join(advRoot, 'outside.md'), '# Outside\n', 'utf8');
+      const advEscapeLink = await validateSkillDirectory(mkAdvSkill('escape-link-skill', goodDesc, 'See [out](../outside.md).'));
+
+      let advSymlinkOk = false;
+      const symSkillDir = mkAdvSkill('symlink-escape-skill', goodDesc, 'Body.');
+      try {
+        fs.symlinkSync(path.join(advRoot, 'outside.md'), path.join(symSkillDir, 'escaped.md'), 'file');
+        const symRes = await validateSkillDirectory(symSkillDir);
+        advSymlinkOk = symRes.ok === false && symRes.exitCode === 1 && symRes.errors.some((e) => e.includes('symlink_escapes_skill_dir'));
+      } catch { /* fail open: Windows without symlink privilege verifies dangling containment path */
+        advSymlinkOk = process.platform === 'win32';
+      }
+
+      const badManifestPath = path.join(advRoot, 'bad-skills.json');
+      writeJson(badManifestPath, { entries: [{ path: 'tools/agents/skills', exclude: ['['] }] });
+      const advBadRegex = await validateSkillsManifest(badManifestPath);
+
+      const advReadme = await validateSkillDirectory(mkAdvSkill('clutter-readme', goodDesc, 'Body.', (d) => fs.writeFileSync(path.join(d, 'README.md'), '# hi\n', 'utf8')));
+      const advCreationLog = await validateSkillDirectory(mkAdvSkill('clutter-log', goodDesc, 'Body.', (d) => fs.writeFileSync(path.join(d, 'CREATION-LOG.md'), '# log\n', 'utf8')));
+      const advTestMd = await validateSkillDirectory(mkAdvSkill('clutter-testmd', goodDesc, 'Body.', (d) => fs.writeFileSync(path.join(d, 'test-notes.md'), '# test\n', 'utf8')));
+      const advExamplePy = await validateSkillDirectory(mkAdvSkill('clutter-py', goodDesc, 'Body.', (d) => fs.writeFileSync(path.join(d, 'example.py'), 'print(1)\n', 'utf8')));
+      const advSkillZip = await validateSkillDirectory(mkAdvSkill('clutter-zip', goodDesc, 'Body.', (d) => fs.writeFileSync(path.join(d, 'bundle.skill'), 'PK', 'utf8')));
+      const advTodo = await validateSkillDirectory(mkAdvSkill('clutter-todo', goodDesc, `${'TO' + 'DO'}: finish writing instructions.`));
+      const advHomePath = await validateSkillDirectory(mkAdvSkill('clutter-home', goodDesc, `Inspect ${'/Us' + 'ers'}/alice/repo/config.json first.`));
+      const advShortDesc = await validateSkillDirectory(mkAdvSkill('short-desc-skill', 'Short desc', 'Body.'), { strict: true });
+      const advTriggerlessStrict = await validateSkillDirectory(
+        mkAdvSkill('no-trigger-skill', 'Formatting helper for local markdown tables and lists in repositories.', '## When to Use\nOnly in body.\n'),
+        { strict: true },
+      );
+
+      const adversarialOk = advOver20k.ok === false && advOver20k.exitCode === 1
+        && advNearLoose.ok === true && advNearLoose.warnings.length === 1
+        && advNearStrict.ok === false && advNearStrict.exitCode === 1 && advNearStrict.errors.length === 1
+        && advRef40k.ok === false && advRef40k.exitCode === 1
+        && advNestedRef.ok === false && advNestedRef.exitCode === 1
+        && advArrowDesc.ok === false && advArrowDesc.exitCode === 1
+        && advHtmlDesc.ok === false && advHtmlDesc.exitCode === 1
+        && advUnbalDesc.ok === false && advUnbalDesc.exitCode === 1
+        && advPlaceholderOk.ok === true && advPlaceholderOk.exitCode === 0
+        && advBadAnchor.ok === false && advBadAnchor.exitCode === 1
+        && advMissingScript.ok === false && advMissingScript.exitCode === 1
+        && advBackslashLink.ok === false && advBackslashLink.exitCode === 1
+        && advEscapeLink.ok === false && advEscapeLink.exitCode === 1
+        && advSymlinkOk
+        && advBadRegex.ok === false && advBadRegex.exitCode === 1 && advBadRegex.errors.some((e) => e.includes('invalid_regex'))
+        && advReadme.ok === false && advReadme.exitCode === 1
+        && advCreationLog.ok === false && advCreationLog.exitCode === 1
+        && advTestMd.ok === false && advTestMd.exitCode === 1
+        && advExamplePy.ok === false && advExamplePy.exitCode === 1
+        && advSkillZip.ok === false && advSkillZip.exitCode === 1
+        && advTodo.ok === false && advTodo.exitCode === 1
+        && advHomePath.ok === false && advHomePath.exitCode === 1
+        && advShortDesc.ok === false && advShortDesc.exitCode === 1
+        && advTriggerlessStrict.ok === false && advTriggerlessStrict.exitCode === 1;
+
+      const dsColDir = path.join(ws, 't51-ds-col');
+      fs.mkdirSync(dsColDir, { recursive: true });
+      fs.writeFileSync(path.join(dsColDir, '.DS_Store'), 'junk', 'utf8');
+      await initSkillScaffold('clean-col-item', { dir: dsColDir, rootDir: ws });
+      fs.writeFileSync(path.join(dsColDir, 'clean-col-item', '.DS_Store'), 'junk', 'utf8');
+      const dsColRes = await validateSkillDirectory(dsColDir, { strict: true });
+
+      const shippedColRes = await validateSkillDirectory(path.join(pluginRoot, 'skills'), { strict: true });
+      const shippedPrRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'pr'), { strict: true });
+      const shippedVrRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'visual-ralph'), { strict: true });
+      const shippedUqaRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'ultraqa'), { strict: true });
+
+      const shippedOk = dsColRes.ok === true && dsColRes.skillCount === 1
+        && shippedColRes.ok === true && shippedColRes.exitCode === 0
+        && shippedColRes.skillCount === 20
+        && shippedColRes.errors.length === 0 && shippedColRes.warnings.length === 0
+        && shippedPrRes.ok === true && shippedPrRes.errors.length === 0
+        && shippedVrRes.ok === true && shippedVrRes.errors.length === 0
+        && shippedUqaRes.ok === true && shippedUqaRes.errors.length === 0;
+
+      t51Ok = byteAndDispatchOk && scaffoldOk && adversarialOk && shippedOk;
+      t51Detail = `hook=${hookBytesT51} cli=${cliBytesT51} skill=${skillBytesT51} dispatch=${byteAndDispatchOk} scaffold=${scaffoldOk} adv=${adversarialOk} shipped=${shippedOk}`;
+    } catch (e) { /* fail open: capture T51 error detail */
+      t51Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('omagy-skill.mjs cold CLI dispatch, <170KB hook ceiling, skill-validate (--strict, SR-1, sibling links, manifest), and skill-init scopes pass',
+      t51Ok, t51Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
