@@ -28,9 +28,23 @@ import {
   evaluateSkillRouting,
   runFloorGuard,
 } from '../../hooks/omagy-cli.mjs';
-import { HUD_HTML, renderHudHtml } from './ui.mjs';
+import {
+  HUD_HTML,
+  buildSkillCommandWithFlags,
+  buildSubagentInvokeSnippet,
+  prepareLoftSrcdoc,
+  renderHudHtml,
+  renderSafeMarkdown,
+} from './ui.mjs';
 
-export { HUD_HTML, renderHudHtml };
+export {
+  HUD_HTML,
+  buildSkillCommandWithFlags,
+  buildSubagentInvokeSnippet,
+  prepareLoftSrcdoc,
+  renderHudHtml,
+  renderSafeMarkdown,
+};
 
 hardenWindowsExeSearch();
 
@@ -2774,6 +2788,131 @@ async function runSelftest() {
       fs.rmSync(artWs, { recursive: true, force: true });
     }
 
+    // H16: Slide-Over Drawer (#artifact-drawer), 3-mode Visual Ralph comparator, Loft srcdoc local-asset/module/theme inlining [W-1], & null-source guard
+    const sampleLoftHtml = [
+      '<!DOCTYPE html><html><head><title>Arena</title>',
+      '<link rel="stylesheet" href="https://cdn.example.invalid/evil.css">',
+      '<link rel="stylesheet" href="./styles.css">',
+      '<script src="https://cdn.example.invalid/evil.js"></script>',
+      '</head><body><script type="module" src="./app.mjs"></script></body></html>',
+    ].join('\n');
+    const preparedLoft = prepareLoftSrcdoc(
+      sampleLoftHtml,
+      'variant-a/index.html',
+      {
+        './styles.css': '.card { color: var(--hud-primary); }',
+        './variant-a/styles.css': '.box { border: 1px solid var(--hud-border); }',
+        './variant-a/app.mjs': "import { computeScore } from '../logic.mjs';\nglobalThis.__loftAnswer = computeScore(21);\n",
+        './logic.mjs': 'export function computeScore(x) { return x * 2; }\n',
+      },
+      '--hud-primary: #60a5fa; --hud-border: #334155;',
+    );
+    const inlinedModuleMatch = /<script type="module" data-inlined-asset="\.\/variant-a\/app\.mjs">\n([\s\S]*?)\n<\/script>/.exec(preparedLoft);
+    let bundledLoftAnswer = null;
+    if (inlinedModuleMatch) {
+      try {
+        delete globalThis.__loftAnswer;
+        new Function(inlinedModuleMatch[1])();
+        bundledLoftAnswer = globalThis.__loftAnswer;
+        delete globalThis.__loftAnswer;
+      } catch { /* fail open: bundled module eval check failed */ }
+    }
+    const h16Ok = HUD_HTML.includes('id="artifact-drawer"')
+      && HUD_HTML.includes('id="artifact-drawer-backdrop"')
+      && HUD_HTML.includes('role="dialog"')
+      && HUD_HTML.includes('aria-modal="true"')
+      && HUD_HTML.includes("event.key === 'Escape'")
+      && HUD_HTML.includes('side-by-side')
+      && HUD_HTML.includes('split-slider')
+      && HUD_HTML.includes('onion-skin')
+      && HUD_HTML.includes('type="range" min="0" max="100"')
+      && HUD_HTML.includes('sandbox="allow-scripts" referrerpolicy="no-referrer"')
+      && HUD_HTML.includes('frame.srcdoc = prepared')
+      && HUD_HTML.includes('selectLoftEntry')
+      && HUD_HTML.includes('showLoftArenaVerdict')
+      && !/allow-same-origin/i.test(HUD_HTML)
+      && !/<iframe\b[^>]*\bsrc\s*=/i.test(HUD_HTML)
+      && !/<iframe\b[^>]*token=/i.test(HUD_HTML)
+      && HUD_HTML.includes('if (!event.source || (event.source !== window.parent && event.source !== window)) return;')
+      && !preparedLoft.includes('cdn.example.invalid')
+      && preparedLoft.includes('data-inlined-asset="./variant-a/styles.css"')
+      && preparedLoft.includes("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:")
+      && preparedLoft.includes('id="omagy-hud-theme-vars"')
+      && preparedLoft.includes('--hud-primary: #60a5fa;')
+      && !/\bimport\s+\{\s*computeScore\s*\}/.test(preparedLoft)
+      && bundledLoftAnswer === 42;
+
+    // H17: Digest-diffed live SSE reactivity, workspace-change reconnect, 15s poll fallback, stateful DOM preservation, & surfaced telemetry
+    const h17Ok = HUD_HTML.includes("new EventSource('/api/events?'")
+      && HUD_HTML.includes('connectEventStream()')
+      && HUD_HTML.includes('activeEventSource.close()')
+      && !HUD_HTML.includes('setInterval(loadSnapshot, 4000)')
+      && HUD_HTML.includes('setInterval(loadSnapshot, 15000)')
+      && HUD_HTML.includes('data.digest === lastSnapshotDigest')
+      && HUD_HTML.includes('function captureUiState()')
+      && HUD_HTML.includes('function restoreUiState(state)')
+      && HUD_HTML.indexOf('id="artifact-drawer"') > HUD_HTML.indexOf('id="view-wiki"')
+      && HUD_HTML.includes('data-hud-key="ug-ledger"')
+      && HUD_HTML.includes('Recent Ledger Events')
+      && HUD_HTML.includes('data-hud-key="iv-rounds"')
+      && HUD_HTML.includes('Open Spec')
+      && HUD_HTML.includes('Open Distillation')
+      && HUD_HTML.includes('data-hud-key="ov-artifacts"')
+      && HUD_HTML.includes('Checkpoints (')
+      && HUD_HTML.includes('/hud --handoff')
+      && HUD_HTML.includes('Cancel Mode');
+
+    // H18: .toString()-shared composer helpers, XSS-safe Markdown Wiki explorer, customization://oh-my-agy, light/dark CSS tokens, & >=12px floor
+    const cmdAddFlags = buildSkillCommandWithFlags('/ralplan', ['--light', '--interactive']);
+    const cmdSwapFlags = buildSkillCommandWithFlags('/ralplan --light Scope HUD', ['--deliberate'], ['--light', '--deliberate']);
+    const cmdSubcmd = buildSkillCommandWithFlags('/skill list', ['validate'], ['list', 'init', 'validate']);
+    const saSnippetPro = buildSubagentInvokeSnippet('executor', 'pro', 'Implement G4');
+    const saSnippetInherit = buildSubagentInvokeSnippet('explore', 'inherit', 'Map exports');
+    const hostileMd = [
+      '# Architecture Note',
+      '',
+      'Cross-link to [[target-slug]] and [[overview-doc|Overview Doc]] with [Settings](customization://oh-my-agy) and [Bad](javascript:alert(1)).',
+      '',
+      '<img src=x onerror=alert(1)><script>evil()</script>',
+      '',
+      '```js',
+      'const literal = "[[inside-fence]]";',
+      '```',
+      '',
+      '| Col A | Col B |',
+      '| --- | --- |',
+      '| `[[inside-code]]` | **bold** |',
+    ].join('\n');
+    const renderedMd = renderSafeMarkdown(hostileMd);
+    const h18Ok = cmdAddFlags === '/ralplan --light --interactive'
+      && cmdSwapFlags === '/ralplan --deliberate Scope HUD'
+      && cmdSubcmd === '/skill validate'
+      && saSnippetPro.includes('invoke_subagent(')
+      && saSnippetPro.includes('TypeName: "executor"')
+      && saSnippetPro.includes('Model: "pro"')
+      && saSnippetInherit.includes('Model: "inherit"')
+      && HUD_HTML.includes(buildSkillCommandWithFlags.toString())
+      && HUD_HTML.includes(buildSubagentInvokeSnippet.toString())
+      && HUD_HTML.includes(renderSafeMarkdown.toString())
+      && renderedMd.includes('<h1 class="md-h1">Architecture Note</h1>')
+      && renderedMd.includes('data-wiki-slug="target-slug"')
+      && renderedMd.includes('data-wiki-slug="overview-doc"')
+      && !renderedMd.includes('data-wiki-slug="inside-fence"')
+      && !renderedMd.includes('data-wiki-slug="inside-code"')
+      && renderedMd.includes('href="customization://oh-my-agy"')
+      && !renderedMd.includes('href="javascript:')
+      && renderedMd.includes('&lt;img src=x onerror=alert(1)&gt;')
+      && !/<img\b/i.test(renderedMd)
+      && !/<script\b/i.test(renderedMd)
+      && renderedMd.includes('<table class="hud-table md-table">')
+      && HUD_HTML.includes('customization://oh-my-agy')
+      && !HUD_HTML.includes('plugin://')
+      && HUD_HTML.includes('@media (prefers-color-scheme: light)')
+      && HUD_HTML.includes('var(--background,')
+      && HUD_HTML.includes('var(--foreground,')
+      && !/https?:\/\//i.test(HUD_HTML)
+      && !/font-size\s*:\s*(?:[0-9]|1[01])(?:\.[0-9]+)?px\b/i.test(HUD_HTML);
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -2860,7 +2999,10 @@ async function runSelftest() {
       && innerSnapOk
       && h13Ok
       && h14Ok
-      && h15Ok;
+      && h15Ok
+      && h16Ok
+      && h17Ok
+      && h18Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',

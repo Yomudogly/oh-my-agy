@@ -2880,6 +2880,51 @@ export async function runSelftest() {
     check('omagy-skill.mjs cold CLI dispatch, <170KB hook ceiling, skill-validate (--strict, SR-1, sibling links, manifest), and skill-init scopes pass',
       t51Ok, t51Detail);
 
+    // T52: sidecars/hud/ui.mjs modularity, provenance/path hygiene, pure helper exports, and HUD --selftest (H1-H18) gate
+    let t52Ok = false;
+    let t52Detail = '';
+    try {
+      const skillModPath = path.join(pluginRoot, 'hooks', 'omagy-skill.mjs');
+      const hudUiPath = path.join(pluginRoot, 'sidecars', 'hud', 'ui.mjs');
+      const hudMainPath = path.join(pluginRoot, 'sidecars', 'hud', 'main.mjs');
+      const skillModBytes = fs.statSync(skillModPath).size;
+      const hudUiBytes = fs.statSync(hudUiPath).size;
+      const hudUiTxt = rTxt('sidecars/hud/ui.mjs');
+      const personalPathRe = new RegExp(`(?:${'/Us' + 'ers/'}|${'/ho' + 'me/'}|[A-Za-z]:\\\\\\\\Users\\\\\\\\)[A-Za-z0-9._-]+`, 'i');
+      const uiMod = await import('../sidecars/hud/ui.mjs');
+      const hudOutRaw = execFileSync(process.execPath, [hudMainPath, '--selftest'], { encoding: 'utf8', timeout: 25_000 });
+      const hudOut = JSON.parse(hudOutRaw.trim());
+
+      t52Ok = fs.existsSync(skillModPath)
+        && fs.existsSync(hudUiPath)
+        && skillModBytes < 256_000
+        && hudUiBytes < 256_000
+        && provenanceViolations.length === 0
+        && retiredViolations.length === 0
+        && !personalPathRe.test(rTxt('hooks/omagy-skill.mjs'))
+        && !personalPathRe.test(hudUiTxt)
+        && !/\bfrom\s+['"]\.\/main\.mjs['"]/.test(hudUiTxt)
+        && !/allow-same-origin/i.test(uiMod.HUD_HTML)
+        && !uiMod.HUD_HTML.includes('plugin://')
+        && uiMod.HUD_HTML.includes('customization://oh-my-agy')
+        && uiMod.HUD_HTML.includes('!event.source || (event.source !== window.parent')
+        && typeof uiMod.renderHudHtml === 'function'
+        && typeof uiMod.HUD_HTML === 'string'
+        && typeof uiMod.buildSkillCommandWithFlags === 'function'
+        && typeof uiMod.buildSubagentInvokeSnippet === 'function'
+        && typeof uiMod.renderSafeMarkdown === 'function'
+        && typeof uiMod.prepareLoftSrcdoc === 'function'
+        && hudOut.selftest === 'PASS'
+        && hudOut.views === 5
+        && hudOut.skills === 20
+        && hudOut.subagents === 14;
+      t52Detail = `hudUi=${hudUiBytes}B skillMod=${skillModBytes}B hudSelftest=${hudOut.selftest}`;
+    } catch (e) { /* fail open: capture T52 error detail */
+      t52Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('sidecars/hud/ui.mjs modularity (<256KB, zero circularity/provenance/personal-paths) and HUD --selftest (H1-H18) pass',
+      t52Ok, t52Detail);
+
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
   } finally {
