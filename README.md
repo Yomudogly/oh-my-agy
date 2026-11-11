@@ -13,7 +13,7 @@ Multi-agent workflow layer for [Google Antigravity](https://antigravity.google).
 - **Multi-Lens, Quick & Loop Deep Research**: 5-phase technical, business, idea, and implementation investigations (`/deep-research`), bounded upstream docs lookups (`/deep-research --quick`), and validator-gated research loops (`/deep-research --loop`) with Tier A–E source ranking and a 5-dimension `>=85` self-audit
 - **14 Role Subagents & 20 Workflow Skills**: spike-verified 3-tier `tools:` YAML frontmatter, causal hypothesis tracing (`tracer`), blast-radius & statechart mapping (`/analyze --blast-radius|--statechart`), throwaway & arena prototyping (`/loft --arena`), `stdin`-sandboxed external second opinions (`/ask --doubt`), PR paper-trail assembly (`/pr --ship` / `--watch`), session handoff (`/hud --handoff`), setup/notifications/forensics (`/doctor --setup|--notifications|--init-deep|--session-scan`), and persistent markdown wiki (`/wiki` with CJK `wiki-query` & dead-ref `wiki-lint`)
 
-All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle hooks run on a dependency-free 4-module Node.js runtime (`hooks/omagy-hook.mjs` `<-` `hooks/omagy-skill.mjs` `<-` `hooks/omagy-cli.mjs` `<-` `hooks/omagy-selftest.mjs`).
+All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle hooks run on a dependency-free 4-module Node.js runtime (`hooks/omagy-hook.mjs` `<-` `{hooks/omagy-skill.mjs, hooks/omagy-cli.mjs}` `<-` `hooks/omagy-selftest.mjs`, with `omagy-hook.mjs` loading zero cold modules on lifecycle events).
 
 ## Requirements
 

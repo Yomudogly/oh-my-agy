@@ -2704,8 +2704,21 @@ export async function runSelftest() {
       const valSharedManifest = await validateSkillsManifest(sharedManifestPath, { strict: true, rootDir: t51Ws });
       const valManifestViaDir = await validateSkillDirectory(sharedManifestPath, { strict: true, rootDir: t51Ws });
 
+      const sharedAutoWs = path.join(ws, 't51-shared-auto');
+      fs.mkdirSync(path.join(sharedAutoWs, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(sharedAutoWs, 'src', 'index.js'), 'export const x = 1;\n', 'utf8');
+      const cliInitSharedAuto = runCliJson(['skill-init', 'release-drafter', '--scope', 'shared', '--resources', 'references,scripts', '--json'], sharedAutoWs);
+      const cliBareSharedVal = runCliJson(['skill-validate', '--strict', '--json'], sharedAutoWs);
+
+      const emptyAppWs = path.join(ws, 't51-empty-app');
+      fs.mkdirSync(path.join(emptyAppWs, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(emptyAppWs, 'src', 'index.js'), 'export const y = 2;\n', 'utf8');
+      const cliBareEmptyVal = runCliJson(['skill-validate', '--strict', '--json'], emptyAppWs);
+
       const cliInitProj = runCliJson(['skill-init', 'proj-lint-helper', '--scope', 'project', '--json'], t51Ws);
       const cliValProj = runCliJson(['skill-validate', '.agents/skills/proj-lint-helper', '--strict', '--json'], t51Ws);
+      const cliBadInitFlag = runCliJson(['skill-init', 'bad-flag-skill', '--with-refs', '--json'], t51Ws);
+      const cliBadValFlag = runCliJson(['skill-validate', '.agents/skills/proj-lint-helper', '--strcit', '--json'], t51Ws);
       const scCustom = await initSkillScaffold('custom-dir-helper', { dir: 'custom-skills', rootDir: t51Ws });
 
       const sharedSkillMdPath = path.join(scShared.skillDir, 'SKILL.md');
@@ -2738,7 +2751,14 @@ export async function runSelftest() {
         && valSharedSkill.ok === true && valSharedSkill.errors.length === 0 && valSharedSkill.warnings.length === 0
         && valSharedManifest.ok === true && valSharedManifest.entriesCount === 1 && valSharedManifest.inheritsCount === 1
         && valManifestViaDir.ok === true && valManifestViaDir.kind === 'manifest'
+        && cliInitSharedAuto.code === 0 && cliInitSharedAuto.json.ok === true
+        && fs.existsSync(path.join(sharedAutoWs, 'tools', 'agents', 'skills', 'release-drafter', 'references', 'guide.md'))
+        && fs.existsSync(path.join(sharedAutoWs, 'tools', 'agents', 'skills', 'release-drafter', 'scripts', 'run.mjs'))
+        && cliBareSharedVal.code === 0 && cliBareSharedVal.json.ok === true && cliBareSharedVal.json.kind === 'manifest'
+        && cliBareEmptyVal.code === 2 && cliBareEmptyVal.json.ok === false
         && cliInitProj.code === 0 && cliValProj.code === 0 && cliValProj.json.ok === true
+        && cliBadInitFlag.code === 2 && cliBadInitFlag.json.ok === false && cliBadInitFlag.json.error === 'unknown_option:--with-refs'
+        && cliBadValFlag.code === 2 && cliBadValFlag.json.ok === false && cliBadValFlag.json.errors?.[0] === 'unknown_option:--strcit'
         && scCustom.ok === true && scCustom.scope === 'custom'
         && scOverwriteBlocked.ok === false && scOverwriteBlocked.exitCode === 1 && sentinelPreserved
         && scInvalidName.ok === false && scInvalidName.exitCode === 2

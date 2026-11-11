@@ -339,10 +339,10 @@ All-in-one operational health, setup, notification, and transcript forensics too
 
 #### `/skill` — Author, Scaffold (`init`), Validate (`validate`), Share, Evaluate (`>=95%`), Test & Extract Skills
 Self-contained skill authoring, SDO governance, team sharing (`.agents/skills.json`), routing evaluation, pressure-testing, and extraction suite (`skills/skill/SKILL.md` + `references/testing-and-sdo.md`), enforcing 3-level progressive disclosure, degrees-of-freedom calibration, anti-clutter hygiene, and **"Write the Procedure, Not the Workaround"**.
-- **Subcommands**: `list`, `info`, `search`, `init <name> [--scope project|shared|user] [--with-refs] [--with-scripts]` (`hooks/run.sh skill-init`), `add`, `edit`, `remove`, `validate [target] [--strict]` (`hooks/run.sh skill-validate`, including `.agents/skills.json` `entries`/`inherits`), `sync` (materialize `.agents/skills.json` into `.agents/skills/`), `eval` (`hooks/run.sh skill-eval --min-rank1 95`), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing), `scan`, `extract` (requires `>= 2` concrete validations, genericized repo-independent paths, and `skill-validate --strict` compliance).
+- **Subcommands**: `list`, `info`, `search`, `init <name> [--scope project|shared|user] [--dir <path>] [--resources references,scripts,assets,resources]` (`hooks/run.sh skill-init`), `add`, `edit`, `remove`, `validate [target] [--strict]` (`hooks/run.sh skill-validate`, including `.agents/skills.json` `entries`/`inherits`), `sync` (materialize `.agents/skills.json` into `.agents/skills/`), `eval` (`hooks/run.sh skill-eval --min-rank1 95`), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing), `scan`, `extract` (requires `>= 2` concrete validations, genericized repo-independent paths, and `skill-validate --strict` compliance).
 - **Examples**:
   ```text
-  /skill init api-contract-audit --scope project --with-refs
+  /skill init api-contract-audit --scope project --resources references,scripts
   /skill validate --strict
   /skill sync
   /skill eval
@@ -537,7 +537,7 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh wiki-repair omagy_wiki '{"mov
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-validate ~/.gemini/config/plugins/oh-my-agy/skills --strict --json
 
 # 32. Scaffold an SDO-compliant skill across project (.agents/skills), shared (.agents/skills.json), or user scope (/skill init)
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-init api-contract-audit --scope project --with-refs --json
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-init api-contract-audit --scope project --resources references,scripts --json
 ```
 
 ---

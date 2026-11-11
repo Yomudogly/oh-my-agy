@@ -1210,22 +1210,42 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     let jsonMode = false;
     let strict = false;
     let dashC = '';
+    let cliErr = '';
+    let endOfOpts = false;
     const pos = [];
     for (let i = 0; i < rawArgs.length; i += 1) {
       const a = rawArgs[i];
-      if (a === '--json') jsonMode = true;
-      else if (a === '--strict') strict = true;
-      else if (a === '-C' && i + 1 < rawArgs.length) { dashC = rawArgs[i + 1]; i += 1; }
-      else pos.push(a);
+      if (!endOfOpts && a === '--') { endOfOpts = true; continue; }
+      if (!endOfOpts && a === '--json') jsonMode = true;
+      else if (!endOfOpts && a === '--strict') strict = true;
+      else if (!endOfOpts && a === '-C') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:-C'; }
+        else { dashC = rawArgs[i + 1]; i += 1; }
+      } else if (!endOfOpts && a.startsWith('-')) {
+        if (!cliErr) cliErr = `unknown_option:${a}`;
+      } else {
+        pos.push(a);
+      }
     }
+    if (!cliErr && pos.length > 1) cliErr = `unexpected_argument:${pos[1]}`;
     const baseDir = dashC ? path.resolve(dashC) : process.cwd();
     let targetArg = pos[0] ? (path.isAbsolute(pos[0]) ? pos[0] : path.resolve(baseDir, pos[0])) : '';
-    if (!targetArg) {
+    if (!cliErr && !targetArg) {
+      const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { /* fail open: missing path */ return false; } };
+      const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { /* fail open: missing path */ return false; } };
       const pluginSkills = path.join(baseDir, 'skills');
+      const sharedManifest = path.join(baseDir, '.agents', 'skills.json');
       const projectSkills = path.join(baseDir, '.agents', 'skills');
-      targetArg = fs.existsSync(pluginSkills) ? pluginSkills : (fs.existsSync(projectSkills) ? projectSkills : baseDir);
+      const selfSkillMd = path.join(baseDir, 'SKILL.md');
+      if (isDir(pluginSkills)) targetArg = pluginSkills;
+      else if (isFile(sharedManifest)) targetArg = sharedManifest;
+      else if (isDir(projectSkills)) targetArg = projectSkills;
+      else if (isFile(selfSkillMd)) targetArg = baseDir;
+      else cliErr = `no_skills_target_found:${baseDir}`;
     }
-    const res = await validateSkillDirectory(targetArg, { strict, rootDir: baseDir });
+    const res = cliErr
+      ? { ok: false, exitCode: 2, kind: 'unknown', target: targetArg || baseDir, skillCount: 0, referenceFiles: [], errors: [cliErr], warnings: [] }
+      : await validateSkillDirectory(targetArg, { strict, rootDir: baseDir });
     if (jsonMode) {
       process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
     } else {
@@ -1247,31 +1267,62 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     let dir = '';
     let resources = '';
     let description = '';
+    let cliErr = '';
+    let endOfOpts = false;
     const pos = [];
+    const appendRes = (v) => { resources = resources ? `${resources},${v}` : String(v || ''); };
     for (let i = 0; i < rawArgs.length; i += 1) {
       const a = rawArgs[i];
-      if (a === '--json') jsonMode = true;
-      else if (a === '--force') force = true;
-      else if (a === '-C' && i + 1 < rawArgs.length) { dashC = rawArgs[i + 1]; i += 1; }
-      else if (a === '--scope' && i + 1 < rawArgs.length) { scope = rawArgs[i + 1]; i += 1; }
-      else if (a.startsWith('--scope=')) scope = a.slice(8);
-      else if (a === '--dir' && i + 1 < rawArgs.length) { dir = rawArgs[i + 1]; i += 1; }
-      else if (a.startsWith('--dir=')) dir = a.slice(6);
-      else if (a === '--resources' && i + 1 < rawArgs.length) { resources = rawArgs[i + 1]; i += 1; }
-      else if (a.startsWith('--resources=')) resources = a.slice(12);
-      else if (a === '--description' && i + 1 < rawArgs.length) { description = rawArgs[i + 1]; i += 1; }
-      else if (a.startsWith('--description=')) description = a.slice(14);
-      else pos.push(a);
+      if (!endOfOpts && a === '--') { endOfOpts = true; continue; }
+      if (!endOfOpts && a === '--json') jsonMode = true;
+      else if (!endOfOpts && a === '--force') force = true;
+      else if (!endOfOpts && a === '-C') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:-C'; }
+        else { dashC = rawArgs[i + 1]; i += 1; }
+      } else if (!endOfOpts && a === '--scope') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:--scope'; }
+        else { scope = rawArgs[i + 1]; i += 1; }
+      } else if (!endOfOpts && a.startsWith('--scope=')) scope = a.slice(8);
+      else if (!endOfOpts && a === '--dir') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:--dir'; }
+        else { dir = rawArgs[i + 1]; i += 1; }
+      } else if (!endOfOpts && a.startsWith('--dir=')) dir = a.slice(6);
+      else if (!endOfOpts && a === '--resources') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:--resources'; }
+        else { appendRes(rawArgs[i + 1]); i += 1; }
+      } else if (!endOfOpts && a.startsWith('--resources=')) appendRes(a.slice(12));
+      else if (!endOfOpts && a === '--description') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:--description'; }
+        else { description = rawArgs[i + 1]; i += 1; }
+      } else if (!endOfOpts && a.startsWith('--description=')) description = a.slice(14);
+      else if (!endOfOpts && a.startsWith('-')) {
+        if (!cliErr) cliErr = `unknown_option:${a}`;
+      } else {
+        pos.push(a);
+      }
     }
+    if (!cliErr && pos.length > 1) cliErr = `unexpected_argument:${pos[1]}`;
     const baseDir = dashC ? path.resolve(dashC) : process.cwd();
-    const res = await initSkillScaffold(pos[0] || '', {
-      scope,
-      dir,
-      rootDir: baseDir,
-      resources,
-      description,
-      force,
-    });
+    const res = cliErr
+      ? {
+        ok: false,
+        exitCode: 2,
+        skillName: pos[0] || '',
+        scope,
+        skillDir: '',
+        createdFiles: [],
+        manifestUpdated: null,
+        validation: null,
+        error: cliErr,
+      }
+      : await initSkillScaffold(pos[0] || '', {
+        scope,
+        dir,
+        rootDir: baseDir,
+        resources,
+        description,
+        force,
+      });
     if (jsonMode) {
       process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
     } else {
