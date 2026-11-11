@@ -24,7 +24,7 @@ This skill is terminal and read-only by default. It gathers evidence and produce
 ## Do Not Activate When
 
 - The answer is fully repo-local; use the `explore` subagent (or direct reads) for codebase facts.
-- The main question is whether to adopt, replace, upgrade, or compare dependencies; use the `dependency-expert` subagent.
+- The main question is whether to adopt, replace, upgrade, or compare dependencies; route comparative evaluation to the `researcher` subagent (with `explore` for local usage).
 - The user only needs implementation against already-grounded requirements; execute directly, or use `$team` when coordinated parallel work is warranted.
 - The task can be answered from stable local project conventions without current external lookup.
 
@@ -32,7 +32,7 @@ This skill is terminal and read-only by default. It gathers evidence and produce
 
 1. Use the `explore` subagent (or direct reads) first for brownfield facts: current code usage, local constraints, versions, config, and integration points.
 2. Use the `researcher` subagent (`invoke_subagent`, TypeName `researcher`) or `search_web`/`read_url_content`/context7 directly for official/upstream docs, release notes, standards, migration guides, source-backed examples, and current best-practice evidence for an already chosen technology.
-3. Use the `dependency-expert` subagent only for adoption/upgrade/replacement/comparison decisions.
+3. Use the `researcher` subagent for adoption/upgrade/replacement/comparison decisions as well, pairing with `explore` when local call-site impact matters.
 4. Return to the caller with explicit evidence, uncertainty, and any implementation handoff constraints.
 
 ## Source-Quality & Fidelity Rules

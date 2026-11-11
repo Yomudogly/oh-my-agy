@@ -42,7 +42,7 @@ Reference template for [`skills/deep-research/SKILL.md`](../SKILL.md). Save comp
 ## 3. Research Methodology & Evidentiary Framework
 
 ### 3.1 Active Lenses & Subagent Routing
-- Lenses applied (`--technical`, `--business`, `--idea`, `--implementation`) and specialist lanes consulted (`explore`, `researcher`, `dependency-expert`, `architect`, `analyst`).
+- Lenses applied (`--technical`, `--business`, `--idea`, `--implementation`) and specialist lanes consulted (`explore`, `researcher`, `architect`, `planner`).
 
 ### 3.2 Search Strategy & Source Tier Distribution
 - Summary of Boolean query clusters executed (`research-matrix`).

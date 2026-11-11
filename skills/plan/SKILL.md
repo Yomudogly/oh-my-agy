@@ -47,7 +47,7 @@ Plan creates concise, actionable work plans. It auto-detects interview vs direct
 ### Interview (`--interview` / `CLEAR` with owner-decision forks)
 1. Gather codebase facts (directly or via the `explore` subagent).
 2. Run candidate questions through the **Two-Filter + Owner-Decision Survival Gate**. Ask one surviving question per `ask_question` call, informed by repo facts. Put the recommended option first with `(Recommended)`.
-3. Build on the answers. Optionally invoke the `analyst` subagent to surface hidden requirements.
+3. Build on the answers. Optionally invoke the `planner` subagent to surface hidden requirements.
 4. Create the plan when owner-decision forks are resolved or the user signals readiness.
 
 ### Direct / Autonomous Default (`--direct` or `UNCLEAR`)

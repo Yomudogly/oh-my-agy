@@ -1131,7 +1131,7 @@ export async function runSelftest() {
       skillsParity && skillIssues.length === 0,
       skillIssues.join(', ') || `count=${diskSkillCount}`);
 
-    // T7: rules/AGENTS.md <24KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 18 agents/*.md valid YAML frontmatter + <antigravity_runtime>, and zero personal path leaks
+    // T7: rules/AGENTS.md <24KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 14 agents/*.md valid YAML frontmatter + subagent/mainAgent/tools + <antigravity_runtime>, and zero personal path leaks
     const rulesPath = path.join(pluginRoot, 'rules', 'AGENTS.md');
     const hookSelfPath = path.join(pluginRoot, 'hooks', 'omagy-hook.mjs');
     const cliSelfPath = path.join(pluginRoot, 'hooks', 'omagy-cli.mjs');
@@ -1157,8 +1157,18 @@ export async function runSelftest() {
       agentCount = agentFiles.length;
       for (const af of agentFiles) {
         const raw = readFixture(path.join(agentsDir, af));
-        const fmRes = validateFrontmatterYaml(raw, ['name', 'description'], ['name', 'description']);
+        const fmRes = validateFrontmatterYaml(
+          raw,
+          ['name', 'description', 'subagent', 'mainAgent', 'tools'],
+          ['name', 'description'],
+          { arrayKeys: ['tools'] },
+        );
         if (!fmRes.ok) agentIssues.push(`${af}:yaml=${fmRes.errors.join('|')}`);
+        if (fmRes.fields.subagent !== 'true') agentIssues.push(`${af}:subagent=${fmRes.fields.subagent}`);
+        if (fmRes.fields.mainAgent !== 'false') agentIssues.push(`${af}:mainAgent=${fmRes.fields.mainAgent}`);
+        if (!Array.isArray(fmRes.fields.tools) || fmRes.fields.tools.length < 2) {
+          agentIssues.push(`${af}:tools=${JSON.stringify(fmRes.fields.tools)}`);
+        }
         if (!raw.includes('<antigravity_runtime>')) agentIssues.push(`${af}:no-runtime-tag`);
       }
       const leakRe = /\/(?:Users|home)\/[A-Za-z0-9._-]+\//;
@@ -1178,12 +1188,12 @@ export async function runSelftest() {
     } catch (e) {
       agentIssues.push(e instanceof Error ? e.message : String(e));
     }
-    check('rules/AGENTS.md <24KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 18 agents/*.md valid, and zero personal path leaks',
+    check('rules/AGENTS.md <24KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 14 agents/*.md valid with subagent/mainAgent/tools, and zero personal path leaks',
       rulesSize < 24000
       && hookByteSize < 175000
       && cliByteSize < 100000
       && zeroStaticCliImport
-      && agentCount === 18
+      && agentCount === 14
       && agentIssues.length === 0
       && pathLeaks.length === 0,
       `rules=${rulesSize} hook=${hookByteSize} cli=${cliByteSize} staticFree=${zeroStaticCliImport} agents=${agentCount} issues=${agentIssues.join(';')} leaks=${pathLeaks.join(';')}`);
@@ -1433,13 +1443,21 @@ export async function runSelftest() {
 
     await runColdSelftestChecks({ ws, conv, base, stateFile, now, validReportPath, check });
 
-    // T34: Repo-wide prompt, skill & provenance hygiene (zero Default effort: in vision/debugger/team-worker, zero foreign tool/agent names, and zero upstream provenance references across plugin files)
-    const effortViolations = ['vision.md', 'debugger.md', 'team-worker.md'].filter((f) => /Default effort:/i.test(rTxt(`agents/${f}`)));
+    // T34: Repo-wide prompt, skill & provenance hygiene (dynamic agents/*.md scan, zero retired/phantom subagents, zero clashes, and zero upstream provenance references across plugin files)
+    const dynamicAgentFiles = fs.readdirSync(path.join(pluginRoot, 'agents')).filter((f) => f.endsWith('.md')).sort();
+    const effortViolations = dynamicAgentFiles.filter((f) => /Default effort:/i.test(rTxt(`agents/${f}`)));
     const foreignRe = new RegExp(`\\b(?:${['TodoWrite', 'call_o' + 'mo_agent', 'sisyphus-junior', 'momus', 'metis', 'oracle'].join('|')})\\b`, 'i');
+    const retiredRoleWords = ['team-' + 'worker', 'dependency-' + 'expert', 'code-' + 'simplifier', 'style-' + 'reviewer', 'performance-' + 'reviewer'];
+    const retiredSubagentRe = new RegExp(
+      `\\b(?:${retiredRoleWords.join('|')})\\b|\\((?:${'Prom' + 'etheus'}|${'Lib' + 'rarian'})\\)|\`${'ana' + 'lyst'}\`|\\b${'ana' + 'lyst'}\\s+subagent\\b|['"]${'ana' + 'lyst'}['"]\\s*:|"role"\\s*:\\s*"${'ana' + 'lyst'}"`,
+      'i',
+    );
+    const personaWordRe = new RegExp(`\\b(?:${'Prom' + 'etheus'}|${'Lib' + 'rarian'})\\b`, 'i');
     const provWords = ['o' + 'mo', 'o' + 'mx', 'o' + 'mc', 'oh-my-' + 'openagent', 'oh-my-' + 'opencode', 'oh-my-' + 'codex', 'oh-my-' + 'claudecode', 'pon' + 'ytail', 'super' + 'powers', 'kib' + 'itzer', 'addy' + 'osmani', 'agent-' + 'skills'];
     const provenanceRe = new RegExp(`${'ported' + ' from'}|\\b(?:${provWords.join('|')})\\b|${'om' + 'x_wiki'}`, 'i');
     const foreignViolations = [];
     const provenanceViolations = [];
+    const retiredViolations = [];
     const checkProvenanceFile = (relPath, absPath) => {
       if (!fs.existsSync(absPath)) return;
       let content = readFixture(absPath);
@@ -1449,10 +1467,15 @@ export async function runSelftest() {
     for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
       checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
     }
-    for (const af of fs.readdirSync(path.join(pluginRoot, 'agents')).filter((f) => f.endsWith('.md'))) {
+    for (const coreRel of ['rules/AGENTS.md', 'sidecars/hud/main.mjs']) {
+      const coreTxt = rTxt(coreRel);
+      if (retiredSubagentRe.test(coreTxt) || personaWordRe.test(coreTxt)) retiredViolations.push(coreRel);
+    }
+    for (const af of dynamicAgentFiles) {
       const txt = rTxt(`agents/${af}`);
       if (foreignRe.test(txt)) foreignViolations.push(`agents/${af}`);
       if (provenanceRe.test(txt)) provenanceViolations.push(`agents/${af}`);
+      if (retiredSubagentRe.test(txt) || personaWordRe.test(txt)) retiredViolations.push(`agents/${af}`);
     }
     for (const sd of fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
       const sf = path.join(skillsDir, sd, 'SKILL.md');
@@ -1460,9 +1483,17 @@ export async function runSelftest() {
         const sfTxt = readFixture(sf);
         if (foreignRe.test(sfTxt)) foreignViolations.push(`skills/${sd}/SKILL.md`);
         if (provenanceRe.test(sfTxt)) provenanceViolations.push(`skills/${sd}/SKILL.md`);
+        if (retiredSubagentRe.test(sfTxt)) retiredViolations.push(`skills/${sd}/SKILL.md`);
       }
       const refDir = path.join(skillsDir, sd, 'references');
-      if (fs.existsSync(refDir)) for (const rf of fs.readdirSync(refDir).filter((f) => f.endsWith('.md'))) checkProvenanceFile(`skills/${sd}/references/${rf}`, path.join(refDir, rf));
+      if (fs.existsSync(refDir)) {
+        for (const rf of fs.readdirSync(refDir).filter((f) => f.endsWith('.md'))) {
+          const refAbs = path.join(refDir, rf);
+          const refRel = `skills/${sd}/references/${rf}`;
+          checkProvenanceFile(refRel, refAbs);
+          if (retiredSubagentRe.test(readFixture(refAbs))) retiredViolations.push(refRel);
+        }
+      }
     }
     const pluginWikiDir = path.join(pluginRoot, 'omagy_wiki');
     if (fs.existsSync(pluginWikiDir)) {
@@ -1470,9 +1501,30 @@ export async function runSelftest() {
       const archiveDir = path.join(pluginWikiDir, 'archive');
       if (fs.existsSync(archiveDir)) for (const af of fs.readdirSync(archiveDir).filter((f) => f.endsWith('.md'))) checkProvenanceFile(`omagy_wiki/archive/${af}`, path.join(archiveDir, af));
     }
-    check('zero static Default effort: lines, zero foreign tool/agent names, and zero upstream provenance references across plugin files',
-      effortViolations.length === 0 && foreignViolations.length === 0 && provenanceViolations.length === 0,
-      `effort=${effortViolations.join(',')} foreign=${foreignViolations.join(',')} provenance=${provenanceViolations.join(',')}`);
+    const execTxtT34 = rTxt('agents/executor.md');
+    const criticTxtT34 = rTxt('agents/critic.md');
+    const rulesTxtT34 = rTxt('rules/AGENTS.md');
+    const prSkillTxtT34 = rTxt('skills/pr/SKILL.md');
+    const clashHygieneIssues = [];
+    if (!execTxtT34.includes('<team_protocol>') || !execTxtT34.includes('VERIFICATION_VERDICTS') || !execTxtT34.includes('verified_head')) {
+      clashHygieneIssues.push('executor:missing-team-protocol-or-verdicts');
+    }
+    if (!criticTxtT34.includes('APPROVE') || !criticTxtT34.includes('ITERATE') || !criticTxtT34.includes('REJECT') || /\bOKAY\b/.test(criticTxtT34)) {
+      clashHygieneIssues.push('critic:verdict-mismatch');
+    }
+    if (!rulesTxtT34.includes('$swarm') || /and\s+`?swarm`?\s+are\s+deprecated/i.test(rulesTxtT34)) {
+      clashHygieneIssues.push('rules:bare-swarm-clash');
+    }
+    if (prSkillTxtT34.includes('gh run ' + 'rerun')) {
+      clashHygieneIssues.push('pr:gh-run-rerun');
+    }
+    check('zero static Default effort: lines, zero foreign/retired subagent names, clash-free $swarm/critic/pr contracts, and zero upstream provenance references across plugin files',
+      effortViolations.length === 0
+      && foreignViolations.length === 0
+      && provenanceViolations.length === 0
+      && retiredViolations.length === 0
+      && clashHygieneIssues.length === 0,
+      `effort=${effortViolations.join(',')} foreign=${foreignViolations.join(',')} provenance=${provenanceViolations.join(',')} retired=${retiredViolations.join(',')} clash=${clashHygieneIssues.join(',')}`);
 
     runG1SelftestChecks({ ws, conv, pluginRoot, hookSelfPath, check });
 
@@ -1564,6 +1616,119 @@ export async function runSelftest() {
     }
     check('cold-split sizes (<175KB hook, <65KB cli), zero static cold imports, UTF-8 BOM stripping, and domain-split CWD resolution',
       t40Ok, t40Detail);
+
+    // T41: Subagent 14-role consolidation, folded role contracts, and validateFrontmatterYaml array/boolean parser
+    let t41Ok = false;
+    let t41Detail = '';
+    try {
+      const agentAllowed = ['name', 'description', 'subagent', 'mainAgent', 'tools'];
+      const agentOpts = { arrayKeys: ['tools'] };
+      const fmFlowOk = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo agent"\nsubagent: true\nmainAgent: false\ntools: [read_file, edit_file]\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmBlockOk = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo agent"\nsubagent: true\nmainAgent: false\ntools:\n  - read_file\n  - edit_file\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmEmptyFlow = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo"\ntools: []\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmEmptyBlock = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo"\ntools:\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmUnclosed = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo"\ntools: [read_file\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmBadItem = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo"\ntools: [@bad]\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmBadBool = validateFrontmatterYaml(
+        '---\nname: demo-agent\ndescription: "Demo"\nsubagent: maybe\n---\n',
+        agentAllowed,
+        ['name', 'description'],
+        agentOpts,
+      );
+      const fmSkillRejectsTools = validateFrontmatterYaml(
+        '---\nname: demo-skill\ndescription: "Demo"\ntools: [read_file]\n---\n',
+        ['name', 'description'],
+        ['name', 'description'],
+      );
+      const parserOk = fmFlowOk.ok === true
+        && JSON.stringify(fmFlowOk.fields.tools) === JSON.stringify(['read_file', 'edit_file'])
+        && fmFlowOk.fields.subagent === 'true'
+        && fmFlowOk.fields.mainAgent === 'false'
+        && fmBlockOk.ok === true
+        && JSON.stringify(fmBlockOk.fields.tools) === JSON.stringify(['read_file', 'edit_file'])
+        && !fmEmptyFlow.ok && fmEmptyFlow.errors.includes('empty_array:tools')
+        && !fmEmptyBlock.ok && fmEmptyBlock.errors.includes('empty_array:tools')
+        && !fmUnclosed.ok && fmUnclosed.errors.includes('unclosed_flow_array:tools')
+        && !fmBadItem.ok && fmBadItem.errors.includes('invalid_array_item:tools')
+        && !fmBadBool.ok && fmBadBool.errors.includes('invalid_boolean:subagent')
+        && !fmSkillRejectsTools.ok && fmSkillRejectsTools.errors.includes('disallowed_key:tools');
+
+      const deletedAgents = ['team-' + 'worker.md', 'dependency-' + 'expert.md', 'ana' + 'lyst.md', 'code-' + 'simplifier.md'];
+      const deletedAbsent = deletedAgents.every((f) => !fs.existsSync(path.join(pluginRoot, 'agents', f)));
+      const execBody = rTxt('agents/executor.md');
+      const planBody = rTxt('agents/planner.md');
+      const resBody = rTxt('agents/researcher.md');
+      const dbgBody = rTxt('agents/debugger.md');
+      const foldedOk = execBody.includes("Chesterton's Fence")
+        && execBody.includes('Rule of 500')
+        && execBody.includes('Protected-Block Preservation')
+        && execBody.includes('ESCALATE_MODEL')
+        && execBody.includes('Decision:')
+        && execBody.includes('### Noticed (Out of Scope)')
+        && planBody.includes('Capability Map DAG')
+        && planBody.includes('Must Be True')
+        && planBody.includes('Always / Ask First / Never')
+        && planBody.includes('3-Question Predictability Check')
+        && resBody.includes('Candidates')
+        && resBody.includes('Migration Path')
+        && dbgBody.includes('read_file')
+        && !/\bUse (?:Glob|Grep|Read|Bash)\b/.test(dbgBody);
+
+      const { buildPluginCatalog: hudBuildCatalog } = await import('../sidecars/hud/main.mjs');
+      const hudCat = hudBuildCatalog(pluginRoot);
+      const hudSubagentsOk = Array.isArray(hudCat.subagents) && hudCat.subagents.length === 14;
+
+      const writeRoles = ['executor', 'debugger', 'designer', 'test-engineer'];
+      const repoReadRoles = ['architect', 'code-reviewer', 'critic', 'explore', 'planner', 'security-reviewer', 'tracer', 'verifier'];
+      const pureReadRoles = ['researcher', 'vision'];
+      const roleToolsParityOk = writeRoles.every((r) => {
+        const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
+        return fm.ok && fm.fields.tools.includes('edit_file') && fm.fields.tools.includes('write_file') && fm.fields.tools.includes('run_command');
+      }) && repoReadRoles.every((r) => {
+        const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
+        return fm.ok && fm.fields.tools.includes('run_command') && !fm.fields.tools.includes('edit_file') && !fm.fields.tools.includes('write_file');
+      }) && pureReadRoles.every((r) => {
+        const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
+        return fm.ok && JSON.stringify(fm.fields.tools) === JSON.stringify(['read_file', 'search_web']);
+      });
+
+      t41Ok = parserOk && deletedAbsent && foldedOk && hudSubagentsOk && roleToolsParityOk;
+      t41Detail = `parser=${parserOk} deletedAbsent=${deletedAbsent} folded=${foldedOk} hudSubagents=${hudCat.subagents?.length} toolsParity=${roleToolsParityOk}`;
+    } catch (e) { /* fail open: capture T41 error detail */
+      t41Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('validateFrontmatterYaml array/boolean parser, 4 retired agent files unlinked, folded executor/planner/researcher contracts, and 14 HUD subagents',
+      t41Ok, t41Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

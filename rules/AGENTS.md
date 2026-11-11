@@ -56,7 +56,7 @@ Choose the lane before acting:
 - **`$team`** when an approved plan needs coordinated parallel execution across multiple subagent lanes.
 - **`$code-review`**, **`$ultraqa`**, **`$deep-research`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$handoff`** as bounded helpers inside the chosen lane. They do not compete with it.
 - Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$plan --interview`.
-- `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `swarm` are deprecated and unsupported. Do not route there.
+- `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `$swarm` are deprecated and unsupported. Do not route there.
 
 ## Role subagents
 
@@ -65,26 +65,22 @@ This plugin ships role agents under `agents/`. Invoke them with `invoke_subagent
 | Role | Use for |
 |---|---|
 | `explore` | repo-local facts: files, symbols, patterns, current dependency usage |
-| `researcher` | official docs, upstream API behavior, version-aware guidance (technology already chosen) |
-| `dependency-expert` | whether/which package or SDK to adopt, upgrade, replace, or migrate |
-| `analyst` | hidden requirements and edge cases before planning |
-| `planner` | right-sized, evidence-backed plans |
+| `researcher` | official docs, upstream API behavior, version-aware guidance, and package/SDK adoption or migration evaluation |
+| `planner` | pre-planning requirements/assumption analysis and right-sized, evidence-backed plans |
 | `architect` | read-only architecture review, Demolition/ADR tests, antithesis, CLEAR/WATCH/BLOCK |
 | `critic` | APPROVE/ITERATE/REJECT plan gate (always after architect) |
-| `executor` | bounded implementation slices |
+| `executor` | bounded implementation slices, post-modification code simplification, and `$team` task-board execution |
 | `debugger` | root cause, regression isolation |
 | `tracer` | competing-hypothesis causal tracing, 6-tier evidence ranking, rebuttal probes |
-| `code-simplifier` | post-modification clarity and de-abstraction without behavior change |
 | `test-engineer` | test strategy, regression locks, flaky tests |
 | `verifier` | independent completion evidence |
 | `code-reviewer`, `security-reviewer` | independent review lanes |
 | `designer`, `vision` | UI/UX work, screenshot/mockup analysis, visual verdicts |
-| `team-worker` | `$team` task-board workers only |
 
 Routing rules:
-- Mixed routing is deliberate: `explore -> researcher` (local usage, then official confirmation); `explore -> dependency-expert` (current usage, then migration evaluation).
+- Mixed routing is deliberate: `explore -> researcher` (map local repo usage first, then confirm upstream docs or evaluate package/SDK migration options).
 - Specialists report boundary crossings upward instead of silently absorbing adjacent work.
-- **Assignment-scoped role overlays**: read-only/advisory roles (`explore`, `researcher`, `dependency-expert`, `analyst`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `code-simplifier`, `test-engineer`, `designer`, `team-worker`) own code edits and must verify with targeted tests/builds.
+- **Assignment-scoped role overlays**: read-only/advisory roles (`explore`, `researcher`, `planner`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `test-engineer`, `designer`) own code edits and must verify with targeted tests/builds (`verifier` runs independent read-only/test verification).
 - When external evidence materially affects the answer, route to the relevant specialist first. Do not answer from recall alone.
 - If a plugin role agent is not available in this session, invoke the built-in `self` subagent (or `research` for read-only roles). Paste the role's `agents/<role>.md` body at the top of the prompt. Never fake an independent lane by role-playing it in the main lane; if subagent dispatch is refused or exhausted on a required review/verification gate (`architect`, `critic`, `verifier`, `code-reviewer`, `security-reviewer`), fail closed and report the refusal.
 

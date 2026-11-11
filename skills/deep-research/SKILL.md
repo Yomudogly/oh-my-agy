@@ -31,9 +31,9 @@ If no lens flag is provided, classify the primary lens (or combine multiple lens
 | Lens | Flag | Primary Focus | Default Subagent Dispatch |
 |---|---|---|---|
 | **Technical** | `--technical` | System architecture tradeoffs, algorithmic complexity, latency/throughput limits, failure modes, security boundaries, and standards/RFCs. | `researcher` + `architect` (+ `explore` if brownfield) |
-| **Business** | `--business` | Market landscape (TAM/SAM/SOM), ICP & acute pain points, competitive matrix & moats, unit economics/pricing, GTM distribution, and regulatory risk. | `researcher` + `analyst` |
-| **Idea / Product** | `--idea` | First-principles problem validation, jobs-to-be-done, contrarian insights, minimum viable wedge, why-now catalysts, and explicit kill/falsification criteria. | `analyst` + `researcher` |
-| **Implementation** | `--implementation` | Repo integration touchpoints (`file:line`), SDK/package maintenance & license comparison, API version constraints, migration/rollout sequence, and test strategy. | `explore` + `dependency-expert` + `researcher` |
+| **Business** | `--business` | Market landscape (TAM/SAM/SOM), ICP & acute pain points, competitive matrix & moats, unit economics/pricing, GTM distribution, and regulatory risk. | `researcher` + `planner` |
+| **Idea / Product** | `--idea` | First-principles problem validation, jobs-to-be-done, contrarian insights, minimum viable wedge, why-now catalysts, and explicit kill/falsification criteria. | `planner` + `researcher` |
+| **Implementation** | `--implementation` | Repo integration touchpoints (`file:line`), SDK/package maintenance & license comparison, API version constraints, migration/rollout sequence, and test strategy. | `explore` + `researcher` |
 
 Read [lenses-and-rubric.md](./references/lenses-and-rubric.md) for the full per-lens investigation checklists, Boolean operator patterns, Tier A–E source hierarchy, and 0–100 scoring rubric.
 
@@ -77,7 +77,7 @@ PHASE 5: 5-Dimension Self-Assessment (>=85) & Automated Audit (audit-research)
    ```bash
    sh <PLUGIN_DIR>/hooks/run.sh research-matrix "<topic>" <technical|business|idea|implementation|general>
    ```
-2. **Parallel Subagent Dispatch**: For multi-faceted topics, launch bounded parallel subagents (`invoke_subagent`, max 3–4 concurrent lanes) matching the lens table above (`explore` for repo facts, `researcher` for upstream/external evidence, `dependency-expert` for package/SDK comparison, `analyst` for product/market stress-testing).
+2. **Parallel Subagent Dispatch**: For multi-faceted topics, launch bounded parallel subagents (`invoke_subagent`, max 3–4 concurrent lanes) matching the lens table above (`explore` for repo facts, `researcher` for upstream/external evidence and package/SDK comparison, `planner` for product/market assumption stress-testing).
 3. **Tier-Rank All Sources (Tier A–E)**:
    - **Tier A (Gold Standard)**: Official specifications/RFCs, reproducible benchmarks, peer-reviewed systematic reviews, primary regulatory/financial filings, verified repo code/test outputs.
    - **Tier B (High Priority)**: Maintainer documentation, official release notes/changelogs, engineering postmortems, specialized peer-reviewed studies.

@@ -27,7 +27,7 @@ $ralplan --advisory "task description"
     2. `validator` (`test-engineer` or `verifier` subagent): attacks edge-case blast radius, data loss vectors, and untestable assumptions.
     3. `researcher` (`researcher` subagent): attacks uncited API/version claims and stale training-weight assumptions.
     4. `architect` (`architect` subagent): attacks coupling, state ownership, and boundary leaks.
-    5. `creative` (`analyst` subagent): proposes lateral inversions that achieve 80%+ of the outcome with a fraction of the moving parts.
+    5. `creative` (`planner` subagent): proposes lateral inversions that achieve 80%+ of the outcome with a fraction of the moving parts.
   - **Round 2 (Cross-Attack & Survival Distillation)**: evaluate each persona's Round 1 claims against the others, tagging every major design proposal as `SURVIVES`, `WEAKENED (with required mitigation)`, or `KILLED (with reason)` in `.omagy/plans/hyperplan-distillation-{slug}.md`. Feed only `SURVIVES` and mitigated `WEAKENED` proposals into Step 1 (`Planner`).
 - `--advisory`: standalone only. It runs the same review lifecycle and returns the reviewed plan, but never authorizes execution. Terminal state records `consensus_gate.complete:false` and `execution_handoff.authorized:false` explicitly. A later explicit execution request from the user is needed before any implementation. It cannot be combined with Autopilot, Ultragoal, or Team.
 

@@ -91,7 +91,7 @@ const SKILL_GUIDE_META = {
     category: 'Execution & Teams',
     flags: [],
     quickStart: '/team execute the approved plan across parallel backend and frontend workers',
-    howToUse: 'Coordinates up to 6 parallel team-worker subagents on a leader-owned DAG task board (.omagy/state/team/) with verified task-<id>.json evidence.',
+    howToUse: 'Coordinates up to 6 parallel executor (or specialist) subagents on a leader-owned DAG task board (.omagy/state/team/) with verified task-<id>.json evidence.',
   },
   'performance-goal': {
     category: 'Execution & Teams',
@@ -231,26 +231,14 @@ const SUBAGENT_GUIDE_META = {
   researcher: {
     lane: 'Discovery & Research',
     modelTier: 'inherit',
-    defaultPrompt: 'Fetch official documentation and version constraints for the target API',
-    whenToUse: 'External official documentation, upstream API signatures, release notes, RFCs, and Tier A-C evidence for /deep-research and /best-practice-research.',
-  },
-  'dependency-expert': {
-    lane: 'Discovery & Research',
-    modelTier: 'inherit',
-    defaultPrompt: 'Evaluate dependency options, maintenance health, license, and migration risks',
-    whenToUse: 'Evaluate whether/which package or SDK to adopt, upgrade, replace, or migrate (maintenance, bundle size, license, security).',
-  },
-  analyst: {
-    lane: 'Discovery & Research',
-    modelTier: 'inherit',
-    defaultPrompt: 'Identify hidden requirements, product edge cases, and unstated assumptions',
-    whenToUse: 'Surface hidden requirements, product/business edge cases, unstated assumptions, and lateral alternatives before planning.',
+    defaultPrompt: 'Fetch official documentation, version constraints, and dependency tradeoffs for the target API or package',
+    whenToUse: 'External official documentation, upstream API signatures, release notes, RFCs, package/SDK adoption & migration comparison, and Tier A-C evidence for /deep-research and /deep-research --quick.',
   },
   planner: {
     lane: 'Planning & Architecture',
     modelTier: 'inherit',
-    defaultPrompt: 'Draft a right-sized PRD and test spec in .omagy/plans/ for the active task',
-    whenToUse: 'Author right-sized, evidence-backed implementation plans (prd-<slug>.md and test-spec-<slug>.md) with explicit task interfaces.',
+    defaultPrompt: 'Surface hidden requirements and draft a right-sized PRD and test spec in .omagy/plans/',
+    whenToUse: 'Requirements/assumption analysis (Capability Map DAG, Always/Ask/Never boundaries, Must/Should/Might tiers) and right-sized implementation plans (prd-<slug>.md and test-spec-<slug>.md).',
   },
   architect: {
     lane: 'Planning & Architecture',
@@ -266,15 +254,9 @@ const SUBAGENT_GUIDE_META = {
   },
   executor: {
     lane: 'Execution & Debugging',
-    modelTier: 'inherit',
-    defaultPrompt: 'Implement the next bounded task slice and run its verification command',
-    whenToUse: 'Autonomous implementation worker for bounded goal/task slices with explicit owned files, acceptance criteria, and verification commands.',
-  },
-  'team-worker': {
-    lane: 'Execution & Debugging',
     modelTier: 'flash | inherit | pro',
-    defaultPrompt: 'Execute the assigned team task slice and record verification evidence in .omagy/evidence/',
-    whenToUse: 'Dispatched by the /team leader on a shared git worktree/workspace to complete a DAG task and write .omagy/evidence/task-<id>.json.',
+    defaultPrompt: 'Implement the next bounded task slice and run its verification command',
+    whenToUse: 'Autonomous implementation worker for bounded goal/task slices, post-edit code simplification (Chesterton\'s Fence, Rule of 500), and /team DAG tasks writing .omagy/evidence/task-<id>.json.',
   },
   debugger: {
     lane: 'Execution & Debugging',
@@ -287,12 +269,6 @@ const SUBAGENT_GUIDE_META = {
     modelTier: 'pro | inherit',
     defaultPrompt: 'Form competing hypotheses and rank evidence to trace the causal chain of this issue',
     whenToUse: 'Competing-hypothesis causal tracing with 6-tier evidence ranking, disconfirmation probes, and discriminating next-step experiments.',
-  },
-  'code-simplifier': {
-    lane: 'Execution & Debugging',
-    modelTier: 'inherit',
-    defaultPrompt: 'Simplify recently modified code and remove dead abstractions without changing behavior',
-    whenToUse: 'Post-modification cleanup pass to simplify control flow, remove dead wrappers, and tighten naming without changing behavior.',
   },
   'test-engineer': {
     lane: 'Review & Verification',
@@ -380,9 +356,9 @@ const WORKFLOW_BLUEPRINTS = [
     id: 'team',
     title: 'Coordinated Parallel Subagent Team (/team)',
     modeKey: 'team',
-    stages: ['DAG Task Board (tasks.json)', 'Wave Dispatch (Workspace: share)', 'Worker Evidence (task-<id>.json)', 'Leader Verify & Merge'],
-    whenToUse: 'When an approved plan has 2-6 independent module slices that can be implemented in parallel by specialized subagents.',
-    quickStart: '/team run parallel workers on the approved plan',
+    stages: ['DAG Task Board (tasks.json)', 'Wave Dispatch (Workspace: share)', 'Executor Evidence (task-<id>.json)', 'Leader Verify & Merge'],
+    whenToUse: 'When an approved plan has 2-6 independent module slices that can be implemented in parallel by executor or specialist subagents.',
+    quickStart: '/team run parallel executor lanes on the approved plan',
     artifacts: '.omagy/state/team/<slug>/tasks.json, .omagy/evidence/task-<id>.json',
   },
   {
@@ -664,15 +640,46 @@ function parseFrontmatter(md) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(md);
   if (!m) return { meta: null, body: md };
   const meta = {};
+  let currentListKey = null;
   for (const line of m[1].split(/\r?\n/)) {
-    const kv = /^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/.exec(line.trim());
-    if (!kv) continue;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    if (/^[ \t]+/.test(line)) {
+      const lm = /^  -\s*(.*)$/.exec(line);
+      if (lm && currentListKey) {
+        const item = lm[1].replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
+        if (item) {
+          if (!Array.isArray(meta[currentListKey])) meta[currentListKey] = [];
+          meta[currentListKey].push(item);
+        }
+      }
+      continue;
+    }
+    const kv = /^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+    if (!kv) {
+      currentListKey = null;
+      continue;
+    }
     const key = kv[1].toLowerCase();
-    let val = kv[2].trim();
-    if (val.startsWith('[') && val.endsWith(']')) {
+    const val = kv[2].trim();
+    if (!val || val.startsWith('#')) {
+      currentListKey = key;
+      meta[key] = '';
+    } else if (val.startsWith('[') && val.endsWith(']')) {
+      currentListKey = null;
       meta[key] = val.slice(1, -1).split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    } else if (val === 'true' || val === 'false') {
+      currentListKey = null;
+      meta[key] = val === 'true';
     } else {
-      meta[key] = val.replace(/^['"]|['"]$/g, '');
+      currentListKey = null;
+      if (val.startsWith('"') && val.endsWith('"')) {
+        meta[key] = val.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+      } else if (val.startsWith("'") && val.endsWith("'")) {
+        meta[key] = val.slice(1, -1).replace(/''/g, "'");
+      } else {
+        meta[key] = val.replace(/\s+#.*$/, '').trim();
+      }
     }
   }
   return { meta, body: m[2] };
@@ -1088,7 +1095,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
             tasks: tasks.map((t) => ({
               id: String(t.id || ''),
               title: String(t.title || ''),
-              role: String(t.role || 'team-worker'),
+              role: String(t.role || 'executor'),
               model: String(t.model || 'inherit'),
               status: String(t.status || 'pending'),
               dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
@@ -2890,7 +2897,7 @@ async function runSelftest() {
       && Boolean(fg && typeof fg.deletedTests === 'number' && typeof fg.removedAssertions === 'number' && typeof fg.untrackedBlockers === 'number' && typeof fg.suppressions === 'number' && typeof fg.emptyCatches === 'number' && typeof fg.protectedBlocksModified === 'number' && typeof fg.total === 'number')
       && floorCacheOk
       && Boolean(se && se.ok === true && se.rank1Pct >= 90 && se.minRank1 === 90 && se.collisionErrors === 0 && se.negativeSurvivalPct === 100)
-      && snap.catalog?.subagents?.length === 18
+      && snap.catalog?.subagents?.length === 14
       && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
       && Boolean(architectAgent && architectAgent.cliModel === 'pro')
       && snap.catalog?.workflows?.length >= 6

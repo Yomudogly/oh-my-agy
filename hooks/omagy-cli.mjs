@@ -880,7 +880,7 @@ function extractHeadingAnchorSet(markdownRaw) {
   return slugs;
 }
 
-export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'description'], requiredKeys = []) {
+export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'description'], requiredKeys = ['name', 'description'], options = {}) {
   const raw = String(rawMarkdown || '');
   const errors = [];
   const fields = {};
@@ -892,6 +892,8 @@ export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'des
     return { ok: false, fields, errors: ['unclosed_frontmatter'] };
   }
   const allowedSet = allowedKeys ? new Set(allowedKeys) : null;
+  const arraySet = new Set(Array.isArray(options?.arrayKeys) ? options.arrayKeys : []);
+  const booleanKeys = new Set(['subagent', 'mainAgent']);
   const lines = fmMatch[1].split(/\r?\n/);
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -913,12 +915,92 @@ export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'des
     }
     const key = km[1];
     const rawVal = km[2].trim();
-    if (allowedSet && !allowedSet.has(key)) {
+    const isAllowed = !allowedSet || allowedSet.has(key);
+    if (!isAllowed) {
       errors.push(`disallowed_key:${key}`);
     }
     if (Object.prototype.hasOwnProperty.call(fields, key)) {
       errors.push(`duplicate_key:${key}`);
     }
+
+    if (isAllowed && arraySet.has(key)) {
+      if (!rawVal || rawVal.startsWith('#')) {
+        const items = [];
+        while (i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          const nextLineNum = i + 3;
+          const nextTrim = nextLine.trim();
+          if (!nextTrim || nextTrim.startsWith('#')) {
+            if (nextLine.includes('\t')) errors.push(`tab_indentation:line_${nextLineNum}`);
+            i += 1;
+            continue;
+          }
+          if (!/^[ \t]+/.test(nextLine)) break;
+          i += 1;
+          if (nextLine.includes('\t')) {
+            errors.push(`tab_indentation:line_${nextLineNum}`);
+          }
+          const lm = /^  -\s*(.*)$/.exec(nextLine);
+          if (!lm) {
+            errors.push(`unexpected_indentation:line_${nextLineNum}`);
+            continue;
+          }
+          const item = lm[1].replace(/\s+#.*$/, '').trim();
+          if (!/^[A-Za-z0-9_-]+$/.test(item)) {
+            errors.push(`invalid_array_item:${key}`);
+          } else {
+            items.push(item);
+          }
+        }
+        if (items.length === 0) {
+          errors.push(`empty_array:${key}`);
+        }
+        fields[key] = items;
+        continue;
+      }
+      if (rawVal.startsWith('[')) {
+        const closeIdx = rawVal.indexOf(']');
+        if (closeIdx === -1) {
+          errors.push(`unclosed_flow_array:${key}`);
+          fields[key] = [];
+          continue;
+        }
+        const trailing = rawVal.slice(closeIdx + 1).trim();
+        if (trailing && !trailing.startsWith('#')) {
+          errors.push(`trailing_after_array:${key}`);
+        }
+        const inner = rawVal.slice(1, closeIdx).trim();
+        if (!inner) {
+          errors.push(`empty_array:${key}`);
+          fields[key] = [];
+          continue;
+        }
+        const items = [];
+        for (const part of inner.split(',')) {
+          const item = part.trim();
+          if (!/^[A-Za-z0-9_-]+$/.test(item)) {
+            errors.push(`invalid_array_item:${key}`);
+          } else {
+            items.push(item);
+          }
+        }
+        fields[key] = items;
+        continue;
+      }
+      errors.push(`expected_array:${key}`);
+      fields[key] = [];
+      continue;
+    }
+
+    if (isAllowed && booleanKeys.has(key)) {
+      const plainBool = rawVal.replace(/\s+#.*$/, '').trim();
+      if (plainBool !== 'true' && plainBool !== 'false') {
+        errors.push(`invalid_boolean:${key}`);
+      }
+      fields[key] = plainBool;
+      continue;
+    }
+
     if (!rawVal) {
       fields[key] = '';
       errors.push(`empty_scalar:${key}`);
@@ -961,6 +1043,9 @@ export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'des
       }
     } else {
       const plain = rawVal.replace(/\s+#.*$/, '').trim();
+      if (plain === 'true' || plain === 'false') {
+        errors.push(`unexpected_boolean:${key}`);
+      }
       if (/^[\[{!&`@%*,|>?]/.test(plain)) {
         errors.push(`reserved_plain_scalar:${key}`);
       }
@@ -972,7 +1057,9 @@ export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'des
   }
 
   for (const req of requiredKeys || []) {
-    if (!fields[req] || !String(fields[req]).trim()) {
+    const val = fields[req];
+    const missing = Array.isArray(val) ? val.length === 0 : (!val || !String(val).trim());
+    if (missing) {
       errors.push(`missing_required_key:${req}`);
     }
   }

@@ -1,6 +1,9 @@
 ---
 name: architect
 description: "Read-only architecture and debugging advisor. Use for architectural review, steelman antithesis, tradeoff analysis, and CLEAR/WATCH/BLOCK status in code reviews and ralplan consensus."
+subagent: true
+mainAgent: false
+tools: [read_file, run_command, manage_task, search_web]
 ---
 
 <identity>

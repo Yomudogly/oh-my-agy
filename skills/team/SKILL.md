@@ -17,7 +17,7 @@ In Antigravity, workers are **subagents**:
 
 ## Inputs and preconditions
 
-- Launch shape: `$team [N:role] "<task>"`. Default role is `team-worker`. Use `executor`, `test-engineer`, `designer`, etc. for specialized lanes. Max **6** concurrent workers.
+- Launch shape: `$team [N:role] "<task>"`. Default role is `executor`. Use `test-engineer`, `designer`, `debugger`, etc. for specialized lanes. Max **6** concurrent workers.
 - Ground the task first: reuse or create `.omagy/context/{slug}-*.md` (target, evidence, constraints, unknowns, touchpoints). Prefer an approved spec or plan (`.omagy/specs/`, `.omagy/plans/`).
 - Do not launch nested teams. Workers never spawn subagents.
 - **Work-Shape Model Routing (`Splittable` vs `Cohesive`)**:
@@ -35,7 +35,7 @@ In Antigravity, workers are **subagents**:
   "created_at": "<ISO>",
   "updated_at": "<ISO>",
   "tasks": [
-    {"id": "1", "title": "...", "role": "team-worker", "model": "inherit|flash|pro", "owned_paths": ["src/auth/**"], "acceptance": ["..."],
+    {"id": "1", "title": "...", "role": "executor", "model": "inherit|flash|pro", "owned_paths": ["src/auth/**"], "acceptance": ["..."],
      "requires_code_change": true, "depends_on": [], "fingerprint": "<sha1-or-short-hash-of-title+owned_paths+acceptance>",
      "status": "pending|in_progress|completed|failed|blocked", "worker": null, "conversation_id": null, "result": null}
   ]
@@ -54,8 +54,8 @@ Only the leader edits the board. Workers report results in their final message, 
 
 **`requires_code_change` default**. Set it explicitly on every task:
 - `false` when the task is analysis-only: its wording asks to analyze, audit, review, research, explain, compare, or summarize, or it explicitly says not to change code. A report or summary without a named output file also counts as analysis-only.
-- `false` for read-only roles: `explore`, `researcher`, `analyst`, `architect`, `critic`, `code-reviewer`, `security-reviewer`, `verifier`, `vision`.
-- `true` otherwise, for execution roles (`team-worker`, `executor`, `debugger`, `test-engineer`, `designer`) and any task that adds, fixes, changes, or writes a file.
+- `false` for read-only roles: `explore`, `researcher`, `planner`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `verifier`, `vision`.
+- `true` otherwise, for execution roles (`executor`, `debugger`, `test-engineer`, `designer`) and any task that adds, fixes, changes, or writes a file.
 
 ## Operational steps
 

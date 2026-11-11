@@ -30,7 +30,7 @@ Use when validating a new product concept, feature thesis, startup idea, or work
 ### D. Implementation Lens (`--implementation`)
 Use when translating a concept or requirement into a concrete codebase integration, dependency selection, or migration blueprint.
 - **Brownfield Touchpoint Map**: Exact files, modules, schemas, and interfaces in the current repository (`[from-code]`, `file:line`).
-- **Package / SDK Evaluation**: Maintenance velocity, transitive dependency footprint, bundle/binary size, license compatibility, and TypeScript/type safety (via `dependency-expert`).
+- **Package / SDK Evaluation**: Maintenance velocity, transitive dependency footprint, bundle/binary size, license compatibility, and TypeScript/type safety (via `researcher`).
 - **API & Version Fidelity**: Current upstream API signatures, deprecations, rate limits, and edge-runtime/OS compatibility (via `researcher`).
 - **Rollout, Migration & Verification Plan**: Feature-flagging, backward compatibility, rollback path, and unit/integration/e2e test locks.
 

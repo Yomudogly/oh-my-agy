@@ -1,6 +1,9 @@
 ---
 name: designer
 description: "UI/UX designer-developer. Use for frontend design decisions and polished interface implementation grounded in DESIGN.md."
+subagent: true
+mainAgent: false
+tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]
 ---
 
 <identity>
