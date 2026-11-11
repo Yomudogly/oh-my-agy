@@ -68,11 +68,14 @@ import {
   writeJson,
 } from './omagy-hook.mjs';
 import {
+  computeWcagContrast,
   evaluateQualityGate,
   evaluateSkillRouting,
+  flattenTokens,
   githubSlugger,
   runFloorGuard,
   validateArtifactPathParity,
+  validateDesignMd,
   validateFrontmatterYaml,
   validateReferenceLinks,
   validateStagedDiffRedaction,
@@ -1830,6 +1833,240 @@ export async function runSelftest() {
     }
     check('20-skill consolidation unlinks 7 retired dirs, preserves plan/autoresearch mode compatibility, enforces sunset hints ($swarm), reconciles 11 eval negatives, and cleans HUD/docs',
       t42Ok, t42Detail);
+
+    // T43: computeWcagContrast WCAG 2.1 math, 3-level+ flattenTokens ({value, role}), and all 5 canonical starter presets
+    let t43Ok = false;
+    let t43Detail = '';
+    try {
+      const cBlackWhite = computeWcagContrast('#000000', '#FFFFFF');
+      const cSame = computeWcagContrast('#FFFFFF', '#FFFFFF');
+      const cAaOnly = computeWcagContrast('#767676', '#FFFFFF');
+      const cAaa = computeWcagContrast('#595959', '#FFFFFF');
+      const cMinDarkW2 = computeWcagContrast('#090A0F', '#F43F5E');
+      const cLow = computeWcagContrast('#999999', '#FFFFFF');
+      const cShort = computeWcagContrast('#000', '#FFF');
+      const cAlpha = computeWcagContrast('#00000080', '#FFFFFF');
+      const cRgb = computeWcagContrast('rgb(0, 0, 0)', 'rgba(255, 255, 255, 1)');
+      const cBad = computeWcagContrast('not-a-color', '#FFFFFF');
+      const contrastMathOk = cBlackWhite !== null && Math.abs(cBlackWhite - 21) <= 0.01
+        && cSame === 1
+        && cAaOnly !== null && cAaOnly >= 4.54 && cAaOnly < 7.0
+        && cAaa !== null && cAaa >= 7.0
+        && cMinDarkW2 !== null && cMinDarkW2 >= 5.35
+        && cLow !== null && cLow <= 2.86 && cLow < 3.0
+        && cShort === 21
+        && cAlpha !== null && cAlpha > 3.5 && cAlpha < 5.0
+        && cRgb === 21
+        && cBad === null;
+
+      const flatSample = flattenTokens({
+        colors: { primary: { value: '#4F46E5', role: 'Hero brand' } },
+        typography: { fontFamily: { primary: 'Inter' }, fontSize: { '2xl': '32px', '3xl': '40px' } },
+        shapes: { radius: { md: '10px', scale: { inner: '6px' } } },
+      });
+      const flattenOk = flatSample['colors.primary'] === '#4F46E5'
+        && flatSample['colors.primary.value'] === '#4F46E5'
+        && flatSample['colors.primary.role'] === 'Hero brand'
+        && flatSample['typography.fontFamily.primary'] === 'Inter'
+        && flatSample['typography.fontSize.2xl'] === '32px'
+        && flatSample['typography.fontSize.3xl'] === '40px'
+        && flatSample['shapes.radius.md'] === '10px'
+        && flatSample['shapes.radius.scale.inner'] === '6px';
+
+      const stitchRefRaw = rTxt('skills/visual-ralph/references/design-system-stitch.md');
+      const presetJsonMatch = /```json\r?\n(\{\s*"presets"[\s\S]*?\})\r?\n```/.exec(stitchRefRaw);
+      const parsedPresets = presetJsonMatch ? (JSON.parse(presetJsonMatch[1]).presets || []) : [];
+      const expectedPresetIds = [
+        'modern-saas-indigo',
+        'minimal-dark-developer',
+        'high-density-fintech',
+        'editorial-warm-luxury',
+        'neo-brutalist-vibrant',
+      ];
+      const presetIdsOk = parsedPresets.length === 5
+        && expectedPresetIds.every((id, idx) => parsedPresets[idx]?.id === id);
+
+      const toYamlLines = (obj, indent = 0) => {
+        const pad = ' '.repeat(indent);
+        const out = [];
+        for (const [k, v] of Object.entries(obj)) {
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            out.push(`${pad}${k}:`);
+            out.push(...toYamlLines(v, indent + 2));
+          } else {
+            out.push(`${pad}${k}: "${String(v).replace(/"/g, '\\"')}"`);
+          }
+        }
+        return out;
+      };
+      const stitchBodyTemplate = [
+        '## Overview',
+        'Reference tokens via `{category.token}` and `{category.subpath}` without drift.',
+        '## Colors',
+        'Primary `{colors.primary}` with `{colors.primaryForeground}`, canvas `{colors.background}`, surface `{colors.surface}`, border `{colors.surfaceBorder}`, text `{colors.textPrimary}` and `{colors.textMuted}`, destructive `{colors.destructive}`, accent `{colors.accent}`.',
+        '## Typography',
+        'Primary `{typography.fontFamily.primary}` and mono `{typography.fontFamily.mono}` at `{typography.fontSize.3xl}`, `{typography.fontSize.2xl}`, `{typography.fontSize.base}`, and `{typography.fontWeight.semibold}`.',
+        '## Layout',
+        'Layout: AppShell - workspace -> fixed-rail (shell); scroll owner: main[data-scroll-owner]; spacing `{spacing.2xl}`, `{spacing.lg}`, `{spacing.md}`, `{spacing.sm}`.',
+        '## Elevation & Depth',
+        '1px solid `{colors.surfaceBorder}` on `{colors.surface}`.',
+        '## Shapes',
+        'Controls `{shapes.radius.sm}`, cards `{shapes.radius.md}`, modals `{shapes.radius.lg}`, pills `{shapes.radius.full}`.',
+        '## Components',
+        'Buttons (`{colors.primary}` / `{colors.primaryForeground}`), cards (`{shapes.radius.md}`), and Loading / Empty / Error state triad.',
+        "## Do's and Don'ts",
+        '- **Do** maintain WCAG 2.1 AA contrast across `{colors.textPrimary}` and `{colors.background}`.',
+        '- **Don\'t** bypass `{spacing.md}` or `{shapes.radius.sm}` tokens.',
+      ].join('\n\n');
+
+      const t43Dir = path.join(ws, 't43-presets');
+      fs.mkdirSync(t43Dir, { recursive: true });
+      const presetResults = parsedPresets.map((preset) => {
+        const mdPath = path.join(t43Dir, `${preset.id}.md`);
+        const mdContent = `---\n${toYamlLines(preset.tokens).join('\n')}\n---\n\n${stitchBodyTemplate}\n`;
+        fs.writeFileSync(mdPath, mdContent, 'utf8');
+        return validateDesignMd(mdPath);
+      });
+      const allPresetsPass = presetResults.length === 5
+        && presetResults.every((r) => r.ok === true
+          && r.exitCode === 0
+          && r.sectionsFound.length === 8
+          && r.unresolvedRefs.length === 0
+          && r.errors.length === 0
+          && r.contrastChecks.length >= 5
+          && r.contrastChecks.every((c) => c.pass === true));
+
+      const leafObjPath = path.join(t43Dir, 'leaf-value-role.md');
+      const leafYaml = [
+        '\uFEFF---',
+        'colors:',
+        '  primary: { value: "#4F46E5", role: "Brand CTA" }',
+        '  primaryForeground:',
+        '    value: "#FFFFFF"',
+        '    role: "CTA text"',
+        '  secondary: "#475569"',
+        '  background: "#F8FAFC"',
+        '  surface: "#FFFFFF"',
+        '  surfaceBorder: "#E2E8F0"',
+        '  textPrimary: "#0F172A"',
+        '  textMuted: "#475569"',
+        '  destructive: "#DC2626"',
+        '  accent: "#06B6D4"',
+        ...toYamlLines({
+          typography: parsedPresets[0]?.tokens?.typography || {},
+          spacing: parsedPresets[0]?.tokens?.spacing || {},
+          shapes: parsedPresets[0]?.tokens?.shapes || {},
+        }),
+        '---',
+        '',
+        stitchBodyTemplate,
+      ].join('\n');
+      fs.writeFileSync(leafObjPath, leafYaml, 'utf8');
+      const leafRes = validateDesignMd(leafObjPath);
+
+      t43Ok = contrastMathOk && flattenOk && presetIdsOk && allPresetsPass && leafRes.ok === true && leafRes.exitCode === 0;
+      t43Detail = `math=${contrastMathOk}(w2=${cMinDarkW2}) flat=${flattenOk} presets=${presetResults.filter((r) => r.ok).length}/5 leafBom=${leafRes.ok}`;
+    } catch (e) { /* fail open: capture T43 error detail */
+      t43Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('computeWcagContrast WCAG 2.1 math (including W2 5.39:1), 3-level+ flattenTokens ({value, role}), and all 5 canonical starter presets pass validateDesignMd',
+      t43Ok, t43Detail);
+
+    // T44: validate-design-md CLI end-to-end (exit codes 0 | 1 | 2, --strict AAA 7.0:1, missing sections, unresolved 3-level refs, and SKILL.md <15KB)
+    let t44Ok = false;
+    let t44Detail = '';
+    try {
+      const t44Dir = path.join(ws, 't44-design-cli');
+      fs.mkdirSync(t44Dir, { recursive: true });
+      const baseValidMd = readFixture(path.join(ws, 't43-presets', 'modern-saas-indigo.md'));
+      const validPath = path.join(t44Dir, 'DESIGN.md');
+      fs.writeFileSync(validPath, baseValidMd, 'utf8');
+
+      const shBin = process.platform === 'win32' ? 'sh' : '/bin/sh';
+      const runShPath = path.join(pluginRoot, 'hooks', 'run.sh');
+      const cliPassJson = JSON.parse(execFileSync(shBin, [runShPath, 'validate-design-md', 'DESIGN.md', '--json'], {
+        cwd: t44Dir,
+        encoding: 'utf8',
+      }));
+      const cliPassHuman = execFileSync(process.execPath, [hookSelfPath, 'validate-design-md', '-C', t44Dir, 'DESIGN.md'], {
+        cwd: ws,
+        encoding: 'utf8',
+      });
+
+      const runExpectExit = (args) => {
+        try {
+          const out = execFileSync(process.execPath, [hookSelfPath, 'validate-design-md', ...args], {
+            cwd: t44Dir,
+            encoding: 'utf8',
+          });
+          return { code: 0, json: JSON.parse(out) };
+        } catch (err) { /* fail open: capture expected non-zero validate-design-md exit */
+          return { code: err?.status ?? -1, json: JSON.parse(String(err?.stdout || '{}')) };
+        }
+      };
+
+      const aaOnlyPath = path.join(t44Dir, 'aa-only.md');
+      const aaOnlyMd = baseValidMd
+        .replace('background: "#F8FAFC"', 'background: "#FFFFFF"')
+        .replace('textMuted: "#475569"', 'textMuted: "#767676"');
+      fs.writeFileSync(aaOnlyPath, aaOnlyMd, 'utf8');
+      const aaDefault = runExpectExit(['aa-only.md', '--json']);
+      const aaStrict = runExpectExit(['aa-only.md', '--strict', '--json']);
+
+      const missingSecPath = path.join(t44Dir, 'missing-components.md');
+      const missingSecMd = baseValidMd.replace(
+        '## Components',
+        '```markdown\n## Components\nFake fenced heading\n```\n\n### Component Notes',
+      );
+      fs.writeFileSync(missingSecPath, missingSecMd, 'utf8');
+      const missingSecRes = runExpectExit(['missing-components.md', '--json']);
+
+      const badRefPath = path.join(t44Dir, 'bad-refs.md');
+      fs.writeFileSync(
+        badRefPath,
+        `${baseValidMd}\nBroken refs: \`{shapes.radius.nonexistent}\` and \`{colors.bad}\`, while:\n\`\`\`\n{colors.ignoredInFence}\n\`\`\`\nstays ignored.\n`,
+        'utf8',
+      );
+      const badRefRes = runExpectExit(['bad-refs.md', '--json']);
+
+      const missingCatPath = path.join(t44Dir, 'missing-cat.md');
+      fs.writeFileSync(missingCatPath, baseValidMd.replace(/shapes:\n(?:\s+.*\n)+/, ''), 'utf8');
+      const missingCatRes = runExpectExit(['missing-cat.md', '--json']);
+
+      const missingFileRes = runExpectExit(['does-not-exist.md', '--json']);
+      const missingArgRes = runExpectExit(['--json']);
+
+      const vrSkillBytes = Buffer.byteLength(rTxt('skills/visual-ralph/SKILL.md'), 'utf8');
+      const stitchRefPath = path.join(pluginRoot, 'skills', 'visual-ralph', 'references', 'design-system-stitch.md');
+      const stitchRefBody = fs.existsSync(stitchRefPath) ? rTxt('skills/visual-ralph/references/design-system-stitch.md') : '';
+      const docsOk = vrSkillBytes < 15000
+        && stitchRefBody.includes('getComputedStyle')
+        && stitchRefBody.includes('upload_design_md')
+        && stitchRefBody.includes('create_design_system_from_design_md')
+        && stitchRefBody.includes('validate-design-md')
+        && stitchRefBody.includes('scroll owner:');
+
+      t44Ok = cliPassJson.ok === true && cliPassJson.exitCode === 0 && cliPassJson.sectionsFound.length === 8
+        && cliPassHuman.includes('VALIDATE-DESIGN-MD: PASS')
+        && aaDefault.code === 0 && aaDefault.json.ok === true
+        && aaStrict.code === 1 && aaStrict.json.ok === false
+        && Array.isArray(aaStrict.json.errors) && aaStrict.json.errors.some((e) => e.startsWith('contrast_failed:') && e.includes('<7'))
+        && missingSecRes.code === 1 && Array.isArray(missingSecRes.json.errors) && missingSecRes.json.errors.includes('missing_section:Components')
+        && badRefRes.code === 1
+        && Array.isArray(badRefRes.json.unresolvedRefs)
+        && badRefRes.json.unresolvedRefs.includes('{shapes.radius.nonexistent}')
+        && badRefRes.json.unresolvedRefs.includes('{colors.bad}')
+        && !badRefRes.json.unresolvedRefs.includes('{colors.ignoredInFence}')
+        && missingCatRes.code === 1 && Array.isArray(missingCatRes.json.errors) && missingCatRes.json.errors.includes('missing_category:shapes')
+        && missingFileRes.code === 2 && missingFileRes.json.exitCode === 2
+        && missingArgRes.code === 2 && missingArgRes.json.exitCode === 2
+        && docsOk;
+      t44Detail = `pass=${cliPassJson.exitCode} aa=${aaDefault.code}/${aaStrict.code} sec=${missingSecRes.code} ref=${badRefRes.code} cat=${missingCatRes.code} exit2=${missingFileRes.code}/${missingArgRes.code} vrBytes=${vrSkillBytes}`;
+    } catch (e) { /* fail open: capture T44 error detail */
+      t44Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('validate-design-md CLI enforces exit 0|1|2, --strict AAA 7.0:1 floor, fence-aware section/token checks, and visual-ralph SKILL.md <15KB',
+      t44Ok, t44Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

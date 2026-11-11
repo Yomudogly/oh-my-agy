@@ -846,15 +846,12 @@ export function githubSlugger(rawHeading, seenCounts = null) {
   return `${base}-${next}`;
 }
 
-function extractHeadingAnchorSet(markdownRaw) {
-  const withoutFm = String(markdownRaw || '').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
-  const lines = withoutFm.replace(/\r\n/g, '\n').split('\n');
-  const slugs = new Set();
-  const seenCounts = new Map();
+function stripFencedCodeBlocks(markdown) {
+  const kept = [];
   let inFence = false;
   let fenceChar = '';
   let fenceLen = 0;
-  for (const line of lines) {
+  for (const line of String(markdown || '').replace(/\r\n/g, '\n').split('\n')) {
     const fm = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (fm) {
       const marker = fm[1];
@@ -863,14 +860,59 @@ function extractHeadingAnchorSet(markdownRaw) {
         fenceChar = marker[0];
         fenceLen = marker.length;
         continue;
-      } else if (marker[0] === fenceChar && marker.length >= fenceLen && /^ {0,3}(?:`+|~+)\s*$/.test(line)) {
+      }
+      if (marker[0] === fenceChar && marker.length >= fenceLen && /^ {0,3}(?:`+|~+)\s*$/.test(line)) {
         inFence = false;
         fenceChar = '';
         fenceLen = 0;
         continue;
       }
     }
-    if (inFence) continue;
+    if (!inFence) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
+function unquoteYamlScalar(rawVal, errTag, errors) {
+  const quote = rawVal[0];
+  let closedIdx = -1;
+  let unescaped = '';
+  for (let i = 1; i < rawVal.length; i += 1) {
+    const ch = rawVal[i];
+    if (quote === '"' && ch === '\\') {
+      if (i + 1 >= rawVal.length) break;
+      const nxt = rawVal[i + 1];
+      unescaped += nxt === 'n' ? '\n' : (nxt === 't' ? '\t' : nxt);
+      i += 1;
+      continue;
+    }
+    if (ch === quote) {
+      if (quote === "'" && rawVal[i + 1] === "'") {
+        unescaped += "'";
+        i += 1;
+        continue;
+      }
+      closedIdx = i;
+      break;
+    }
+    unescaped += ch;
+  }
+  if (closedIdx === -1) {
+    errors.push(`unclosed_quote:${errTag}`);
+    return { ok: false, value: rawVal.slice(1) };
+  }
+  const trailing = rawVal.slice(closedIdx + 1).trim();
+  if (trailing && !trailing.startsWith('#')) {
+    errors.push(`trailing_after_quote:${errTag}`);
+  }
+  return { ok: true, value: unescaped };
+}
+
+function extractHeadingAnchorSet(markdownRaw) {
+  const withoutFm = String(markdownRaw || '').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
+  const slugs = new Set();
+  const seenCounts = new Map();
+  for (const line of stripFencedCodeBlocks(withoutFm).split('\n')) {
     const hm = /^ {0,3}#{1,6}\s+(.+)$/.exec(line);
     if (hm) {
       const slug = githubSlugger(hm[1], seenCounts);
@@ -1007,40 +1049,8 @@ export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'des
       continue;
     }
     if (rawVal.startsWith('"') || rawVal.startsWith("'")) {
-      const quote = rawVal[0];
-      let closedIdx = -1;
-      let unescaped = '';
-      for (let ci = 1; ci < rawVal.length; ci += 1) {
-        const ch = rawVal[ci];
-        if (quote === '"' && ch === '\\') {
-          if (ci + 1 >= rawVal.length) break;
-          const nxt = rawVal[ci + 1];
-          if (nxt === 'n') unescaped += '\n';
-          else if (nxt === 't') unescaped += '\t';
-          else unescaped += nxt;
-          ci += 1;
-          continue;
-        }
-        if (ch === quote) {
-          if (quote === "'" && rawVal[ci + 1] === "'") {
-            unescaped += "'";
-            ci += 1;
-            continue;
-          }
-          closedIdx = ci;
-          break;
-        }
-        unescaped += ch;
-      }
-      if (closedIdx === -1) {
-        errors.push(`unclosed_quote:${key}`);
-      } else {
-        const trailing = rawVal.slice(closedIdx + 1).trim();
-        if (trailing && !trailing.startsWith('#')) {
-          errors.push(`trailing_after_quote:${key}`);
-        }
-        fields[key] = unescaped;
-      }
+      const qRes = unquoteYamlScalar(rawVal, key, errors);
+      if (qRes.ok) fields[key] = qRes.value;
     } else {
       const plain = rawVal.replace(/\s+#.*$/, '').trim();
       if (plain === 'true' || plain === 'false') {
@@ -1223,6 +1233,296 @@ export function validateStagedDiffRedaction(pluginRoot) {
   return { ok: violations.length === 0, violations };
 }
 
+// ---------- Google Stitch 2-Layer DESIGN.md Validator (WCAG 2.1 + 3-Level YAML Tokens) ----------
+const REQUIRED_DESIGN_CATEGORIES = ['colors', 'typography', 'spacing', 'shapes'];
+const META_TOKEN_PLACEHOLDERS = new Set([
+  'category.token',
+  'category.subpath',
+  'token.name',
+  'category.property',
+  'property.token',
+]);
+const STITCH_SECTIONS = [
+  { name: 'Overview', re: /^ {0,3}##\s+(?:\d+\.\s+)?Overview\b/im },
+  { name: 'Colors', re: /^ {0,3}##\s+(?:\d+\.\s+)?Colors\b/im },
+  { name: 'Typography', re: /^ {0,3}##\s+(?:\d+\.\s+)?Typography\b/im },
+  { name: 'Layout', re: /^ {0,3}##\s+(?:\d+\.\s+)?Layout\b/im },
+  { name: 'Elevation & Depth', re: /^ {0,3}##\s+(?:\d+\.\s+)?Elevation\s*(?:&|and)\s*Depth\b/im },
+  { name: 'Shapes', re: /^ {0,3}##\s+(?:\d+\.\s+)?Shapes\b/im },
+  { name: 'Components', re: /^ {0,3}##\s+(?:\d+\.\s+)?Components\b/im },
+  { name: "Do's and Don'ts", re: /^ {0,3}##\s+(?:\d+\.\s+)?Do['’]s\s+and\s+Don['’]ts\b/im },
+];
+
+function parseCssColor(rawColor) {
+  if (typeof rawColor !== 'string') return null;
+  const s = rawColor.trim();
+  const hexMatch = /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(s);
+  if (hexMatch) {
+    const h = hexMatch[1];
+    if (h.length === 3 || h.length === 4) {
+      return {
+        r: parseInt(h[0] + h[0], 16),
+        g: parseInt(h[1] + h[1], 16),
+        b: parseInt(h[2] + h[2], 16),
+        a: h.length === 4 ? parseInt(h[3] + h[3], 16) / 255 : 1,
+      };
+    }
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16),
+      a: h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1,
+    };
+  }
+  const rgbMatch = /^rgba?\(\s*([+-]?\d+(?:\.\d+)?)\s*(?:,|\s)\s*([+-]?\d+(?:\.\d+)?)\s*(?:,|\s)\s*([+-]?\d+(?:\.\d+)?)(?:\s*[,/]\s*([+-]?\d*(?:\.\d+)?)(%?))?\s*\)$/i.exec(s);
+  if (rgbMatch) {
+    const r = Number(rgbMatch[1]);
+    const g = Number(rgbMatch[2]);
+    const b = Number(rgbMatch[3]);
+    if ([r, g, b].some((v) => !Number.isFinite(v) || v < 0 || v > 255)) return null;
+    let a = 1;
+    if (rgbMatch[4] !== undefined && rgbMatch[4] !== '') {
+      a = rgbMatch[5] === '%' ? Number(rgbMatch[4]) / 100 : Number(rgbMatch[4]);
+      if (!Number.isFinite(a) || a < 0 || a > 1) return null;
+    }
+    return { r, g, b, a };
+  }
+  return null;
+}
+
+export function computeWcagContrast(fgHexOrRgb, bgHexOrRgb) {
+  const fg = parseCssColor(fgHexOrRgb);
+  const bg = parseCssColor(bgHexOrRgb);
+  if (!fg || !bg) return null;
+  const baseBg = bg.a < 1
+    ? { r: bg.r * bg.a + 255 * (1 - bg.a), g: bg.g * bg.a + 255 * (1 - bg.a), b: bg.b * bg.a + 255 * (1 - bg.a) }
+    : bg;
+  const effFg = fg.a < 1
+    ? { r: fg.r * fg.a + baseBg.r * (1 - fg.a), g: fg.g * fg.a + baseBg.g * (1 - fg.a), b: fg.b * fg.a + baseBg.b * (1 - fg.a) }
+    : fg;
+  const lin = (ch) => {
+    const c = ch / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const lum = (rgb) => 0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b);
+  const l1 = lum(effFg);
+  const l2 = lum(baseBg);
+  const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  return Math.round(ratio * 100) / 100;
+}
+
+function parseDesignYamlScalar(rawVal, lineNum, errors) {
+  if (rawVal.startsWith('"') || rawVal.startsWith("'")) {
+    return unquoteYamlScalar(rawVal, `line_${lineNum}`, errors).value;
+  }
+  return rawVal.replace(/\s+#.*$/, '').trim();
+}
+
+function parseInlineFlowObject(rawVal, lineNum, errors) {
+  const inner = rawVal.slice(1, -1).trim();
+  const obj = {};
+  if (!inner) return obj;
+  const parts = [];
+  let cur = '';
+  let quote = '';
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i];
+    if (quote) {
+      cur += ch;
+      if (ch === '\\' && quote === '"' && i + 1 < inner.length) cur += inner[++i];
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; }
+    else if (ch === ',') { parts.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  if (cur.trim()) parts.push(cur);
+  for (const part of parts) {
+    const idx = part.indexOf(':');
+    if (idx === -1) { errors.push(`malformed_flow_entry:line_${lineNum}`); continue; }
+    const k = part.slice(0, idx).trim().replace(/^['"]|['"]$/g, '');
+    if (k) obj[k] = parseDesignYamlScalar(part.slice(idx + 1).trim(), lineNum, errors);
+  }
+  return obj;
+}
+
+function parseDesignYaml(yamlText) {
+  const errors = [];
+  const root = {};
+  const stack = [{ indent: -1, map: root }];
+  const lines = String(yamlText || '').split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const lineNum = i + 2;
+    if (line.includes('\t')) errors.push(`tab_indentation:line_${lineNum}`);
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const indent = line.match(/^ */)[0].length;
+    const km = /^([A-Za-z0-9_][A-Za-z0-9_-]*|['"][^'"]+['"])\s*:(.*)$/.exec(trimmed);
+    if (!km) { errors.push(`malformed_yaml_line:line_${lineNum}`); continue; }
+    const key = km[1].replace(/^['"]|['"]$/g, '');
+    const rawVal = km[2].trim();
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) stack.pop();
+    const parentMap = stack[stack.length - 1].map;
+    const isCommentOnly = rawVal.startsWith('#') && !/^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?:\s+#.*)?$/.test(rawVal);
+    if (!rawVal || isCommentOnly) {
+      const child = {};
+      parentMap[key] = child;
+      stack.push({ indent, map: child });
+    } else if (rawVal.startsWith('{') && rawVal.endsWith('}')) {
+      parentMap[key] = parseInlineFlowObject(rawVal, lineNum, errors);
+    } else {
+      parentMap[key] = parseDesignYamlScalar(rawVal, lineNum, errors);
+    }
+  }
+  return { tree: root, errors };
+}
+
+export function flattenTokens(obj, prefix = '') {
+  const out = {};
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return out;
+  for (const [key, val] of Object.entries(obj)) {
+    const fullKey = prefix ? `${prefix}.${key}` : key;
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      if (Object.prototype.hasOwnProperty.call(val, 'value') && val.value !== null && typeof val.value !== 'object') {
+        out[fullKey] = String(val.value);
+      }
+      Object.assign(out, flattenTokens(val, fullKey));
+    } else if (val !== undefined && val !== null) {
+      out[fullKey] = String(val);
+    }
+  }
+  return out;
+}
+
+export function validateDesignMd(filePath, options = {}) {
+  const rawArg = typeof filePath === 'string' ? filePath.trim() : '';
+  const emptyResult = (exitCode, file, errMsg) => ({
+    ok: false,
+    exitCode,
+    file,
+    categoriesFound: [],
+    sectionsFound: [],
+    tokenCount: 0,
+    contrastChecks: [],
+    unresolvedRefs: [],
+    errors: errMsg ? [errMsg] : [],
+    warnings: [],
+  });
+  if (!rawArg) return emptyResult(2, '', 'missing_file_argument');
+  const absPath = path.resolve(rawArg);
+  if (!fs.existsSync(absPath)) return emptyResult(2, absPath, `missing_file:${rawArg}`);
+  let rawText = '';
+  try {
+    const st = fs.statSync(absPath);
+    if (!st.isFile()) return emptyResult(2, absPath, `not_a_file:${rawArg}`);
+    rawText = fs.readFileSync(absPath, 'utf8');
+  } catch (err) { /* fail open: report unreadable DESIGN.md with exitCode 2 */
+    return emptyResult(2, absPath, `unreadable_file:${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const norm = stripUtf8Bom(rawText).replace(/\r\n/g, '\n');
+  const fmMatch = /^---\n(?:([\s\S]*?)\n)?---(?:\n|$)([\s\S]*)$/.exec(norm);
+  if (!fmMatch) {
+    return emptyResult(1, absPath, 'missing_or_unclosed_frontmatter');
+  }
+
+  const errors = [];
+  const warnings = [];
+  const { tree, errors: yamlErrors } = parseDesignYaml(fmMatch[1] || '');
+  errors.push(...yamlErrors);
+
+  const categoriesFound = Object.keys(tree).filter(
+    (k) => tree[k] && typeof tree[k] === 'object' && !Array.isArray(tree[k]),
+  );
+  for (const cat of REQUIRED_DESIGN_CATEGORIES) {
+    if (!tree[cat] || typeof tree[cat] !== 'object' || Array.isArray(tree[cat]) || Object.keys(tree[cat]).length === 0) {
+      errors.push(`missing_category:${cat}`);
+    }
+  }
+  if (tree.typography && typeof tree.typography === 'object') {
+    if (!tree.typography.fontFamily) warnings.push('missing_recommended_token:typography.fontFamily');
+    if (!tree.typography.fontSize) warnings.push('missing_recommended_token:typography.fontSize');
+  }
+  if (tree.shapes && typeof tree.shapes === 'object' && !tree.shapes.radius) {
+    warnings.push('missing_recommended_token:shapes.radius');
+  }
+
+  const flat = flattenTokens(tree);
+  const tokenCount = Object.keys(flat).length;
+  const proseBody = stripFencedCodeBlocks(fmMatch[2] || '');
+
+  const sectionsFound = [];
+  for (const sec of STITCH_SECTIONS) {
+    if (sec.re.test(proseBody)) {
+      sectionsFound.push(sec.name);
+    } else {
+      errors.push(`missing_section:${sec.name}`);
+    }
+  }
+
+  const missingSet = new Set();
+  const tokenRefRe = /\{([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_-]+)+)\}/g;
+  let tm;
+  while ((tm = tokenRefRe.exec(proseBody)) !== null) {
+    const refPath = tm[1];
+    if (META_TOKEN_PLACEHOLDERS.has(refPath)) continue;
+    if (!Object.prototype.hasOwnProperty.call(flat, refPath)) {
+      missingSet.add(refPath);
+    }
+  }
+  const unresolvedRefs = [...missingSet].sort().map((r) => `{${r}}`);
+  for (const braced of unresolvedRefs) {
+    errors.push(`unresolved_token_ref:${braced}`);
+  }
+
+  const minRequired = options?.strict ? 7.0 : 4.5;
+  const contrastChecks = [];
+  const getColor = (k) => (Object.prototype.hasOwnProperty.call(flat, `colors.${k}`) ? flat[`colors.${k}`] : '');
+  const pairSpecs = [
+    ['textPrimary', 'background'],
+    ['textPrimary', 'surface'],
+    ['foreground', 'background'],
+    ['foreground', 'surface'],
+    ['textSecondary', 'background'],
+    ['textSecondary', 'surface'],
+    ['textMuted', 'background'],
+    ['textMuted', 'surface'],
+    ['primaryForeground', 'primary'],
+    ['secondaryForeground', 'secondary'],
+  ];
+  if (!getColor('textPrimary') && !getColor('foreground') && !getColor('primaryForeground')) {
+    pairSpecs.push(['primary', 'background']);
+  }
+  for (const [fgKey, bgKey] of pairSpecs) {
+    const fg = getColor(fgKey);
+    const bg = getColor(bgKey);
+    if (!fg || !bg) continue;
+    const pair = `${fgKey} vs ${bgKey}`;
+    const ratio = computeWcagContrast(fg, bg);
+    const pass = ratio !== null && ratio >= minRequired;
+    contrastChecks.push({ pair, fg, bg, ratio: ratio ?? 0, minRequired, pass });
+    if (!pass) {
+      errors.push(`contrast_failed:${pair}:${ratio ?? 'invalid'}<${minRequired}`);
+    }
+  }
+
+  const ok = errors.length === 0;
+  return {
+    ok,
+    exitCode: ok ? 0 : 1,
+    file: absPath,
+    categoriesFound,
+    sectionsFound,
+    tokenCount,
+    contrastChecks,
+    unresolvedRefs,
+    errors,
+    warnings,
+  };
+}
+
 export function handleColdCliCommand(event, rawArgs = [], defaultRoot = '') {
   let dashC = '';
   const filteredArgs = [];
@@ -1323,6 +1623,27 @@ export function handleColdCliCommand(event, rawArgs = [], defaultRoot = '') {
       const lines = [`QUALITY-GATE: ${label} (reports=${res.reportsChecked}, blocking=${res.blockingFindings.length}, invalid=${res.invalidReasons.length})`];
       for (const ir of res.invalidReasons) lines.push(`INVALID: ${ir}`);
       for (const bf of res.blockingFindings) lines.push(`BLOCKING [${bf.tool}:${bf.severity}] ${bf.file} (${bf.ruleId}): ${bf.message}`);
+      process.stdout.write(`${lines.join('\n')}\n`);
+    }
+    return res.exitCode;
+  }
+  if (event === 'validate-design-md') {
+    const jsonMode = filteredArgs.includes('--json');
+    const strict = filteredArgs.includes('--strict');
+    const pos = filteredArgs.filter((a) => a !== '--json' && a !== '--strict');
+    const targetFile = pos[0] ? path.resolve(baseDir, pos[0]) : '';
+    const res = validateDesignMd(targetFile, { strict });
+    if (jsonMode) {
+      process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    } else if (res.exitCode === 2) {
+      process.stdout.write(`VALIDATE-DESIGN-MD: ERROR (exit 2) — ${res.errors.join('; ')}\n`);
+    } else {
+      const passedContrast = res.contrastChecks.filter((c) => c.pass).length;
+      const lines = [
+        `VALIDATE-DESIGN-MD: ${res.ok ? 'PASS' : 'FAIL'} (tokens=${res.tokenCount}, sections=${res.sectionsFound.length}/8, contrast=${passedContrast}/${res.contrastChecks.length}, errors=${res.errors.length})`,
+      ];
+      for (const err of res.errors) lines.push(`ERROR: ${err}`);
+      for (const warn of res.warnings) lines.push(`WARN: ${warn}`);
       process.stdout.write(`${lines.join('\n')}\n`);
     }
     return res.exitCode;
