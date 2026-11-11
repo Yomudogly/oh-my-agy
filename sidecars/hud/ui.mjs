@@ -72,7 +72,7 @@ export function renderSafeMarkdown(md) {
 
     safe = safe.replace(/\[\[([a-zA-Z0-9_-]+)(?:\|([^\]]+))?\]\]/g, (_m, slug, label) => {
       const display = label ? label.trim() : slug;
-      return `<button type="button" class="wiki-link-pill" data-wiki-slug="${slug}" onclick="navigateToWikiSlug('${slug}')">[[${display}]]</button>`;
+      return `<button type="button" class="wiki-link-pill" data-wiki-slug="${slug}" onclick="navigateToWikiSlug(this.dataset.wikiSlug)">[[${display}]]</button>`;
     });
 
     safe = safe.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (full, label, rawHref) => {
@@ -322,29 +322,44 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
   const entryDir = dirOfKey(entryKey);
   const closeScriptTag = '</scr' + 'ipt>';
   const safeInlineJs = (js) => String(js || '').replace(/<\/script/gi, '<\\/script');
+  const safeInlineCss = (css) => String(css || '').replace(/<\/style/gi, '<\\/style');
+  const extractHtmlAttr = (attrs, attrName) => {
+    const re = new RegExp(`\\b${attrName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>` + '`' + `]+))`, 'i');
+    const m = re.exec(String(attrs || ''));
+    if (!m) return null;
+    return (m[1] ?? m[2] ?? m[3] ?? '').trim();
+  };
+  const isExternalOrBlockedUrl = (u) => /^(?:https?:\/\/|\/\/|javascript:|vbscript:)/i.test(String(u || '').trim());
 
   let html = String(rawHtml || '');
 
-  // Strip external http/https/protocol-relative script src and stylesheet links
-  html = html.replace(/<script\b[^>]*\bsrc\s*=\s*(['"])(?:https?:\/\/|\/\/)[^'"]*\1[^>]*>[\s\S]*?<\/script>/gi, '<!-- stripped external script -->');
-  html = html.replace(/<link\b[^>]*\bhref\s*=\s*(['"])(?:https?:\/\/|\/\/)[^'"]*\1[^>]*>/gi, '<!-- stripped external link -->');
-
-  // Inline local <link rel="stylesheet" href="./...">
-  html = html.replace(/<link\b([^>]*?)>/gi, (full, attrs) => {
-    if (!/\brel\s*=\s*(['"]?)stylesheet\1/i.test(attrs)) return full;
-    const hrefMatch = /\bhref\s*=\s*(['"])([^'"]+)\1/i.exec(attrs);
-    if (!hrefMatch) return full;
-    const key = normAssetKey(entryDir, hrefMatch[2]);
-    if (!key || !Object.prototype.hasOwnProperty.call(assetMap, key)) return full;
-    return `<style data-inlined-asset="${key}">\n${String(assetMap[key] || '')}\n</style>`;
+  // Strip self-closing external <script src=... /> tags
+  html = html.replace(/<script\b([^>]*?)\/>/gi, (full, attrs) => {
+    const srcVal = extractHtmlAttr(attrs, 'src');
+    return srcVal !== null && isExternalOrBlockedUrl(srcVal) ? '<!-- stripped external script -->' : full;
   });
 
-  // Inline local <script src="./..."> and bundle relative ES module imports inside <script type="module">
+  // Strip external <link href=...> and inline local <link rel="stylesheet" href="./...">
+  html = html.replace(/<link\b([^>]*?)>/gi, (full, attrs) => {
+    const hrefVal = extractHtmlAttr(attrs, 'href');
+    if (hrefVal !== null && isExternalOrBlockedUrl(hrefVal)) {
+      return '<!-- stripped external link -->';
+    }
+    const relVal = extractHtmlAttr(attrs, 'rel') || '';
+    if (!/\bstylesheet\b/i.test(relVal) || !hrefVal) return full;
+    const key = normAssetKey(entryDir, hrefVal);
+    if (!key || !Object.prototype.hasOwnProperty.call(assetMap, key)) return full;
+    return `<style data-inlined-asset="${key}">\n${safeInlineCss(assetMap[key])}\n</style>`;
+  });
+
+  // Strip external <script src=...>, inline local <script src="./...">, and bundle relative ES module imports [W-1]
   html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (full, attrs, inlineBody) => {
-    const isModule = /\btype\s*=\s*(['"]?)module\1/i.test(attrs);
-    const srcMatch = /\bsrc\s*=\s*(['"])([^'"]+)\1/i.exec(attrs);
-    if (srcMatch) {
-      const key = normAssetKey(entryDir, srcMatch[2]);
+    const typeVal = extractHtmlAttr(attrs, 'type') || '';
+    const isModule = /^module$/i.test(typeVal);
+    const srcVal = extractHtmlAttr(attrs, 'src');
+    if (srcVal !== null) {
+      if (isExternalOrBlockedUrl(srcVal)) return '<!-- stripped external script -->';
+      const key = normAssetKey(entryDir, srcVal);
       if (!key || !Object.prototype.hasOwnProperty.call(assetMap, key)) return '<!-- missing local script asset -->';
       const rawJs = String(assetMap[key] || '');
       const bundled = isModule || /\.mjs$/i.test(key) ? bundleModuleSource(rawJs, dirOfKey(key)) : rawJs;
@@ -1351,7 +1366,7 @@ export function renderHudHtml() {
         { id: 'onion-skin', label: 'Onion-Skin' },
       ];
       const modeBtns = modes.map((m) => \`
-        <button type="button" class="chip-btn \${mode === m.id ? 'chip-active' : ''}" data-vr-mode="\${m.id}" aria-pressed="\${mode === m.id ? 'true' : 'false'}" onclick="setVrMode('\${m.id}')">\${m.label}</button>\`).join('');
+        <button type="button" class="chip-btn \${mode === m.id ? 'chip-active' : ''}" data-vr-mode="\${m.id}" aria-pressed="\${mode === m.id ? 'true' : 'false'}" onclick="setVrMode(this.dataset.vrMode)">\${m.label}</button>\`).join('');
       const imgs = item.images || [];
       const selectors = imgs.length >= 2 ? \`
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center;">
@@ -1432,13 +1447,13 @@ export function renderHudHtml() {
       if (!currentLoftState) return;
       const { item, activeEntry, viewVerdict } = currentLoftState;
       const entries = [];
-      const rootSuffix = item.relPath.endsWith('/index.html') && !/\/variant-[a-c]\/index\.html$/.test(item.relPath) ? 'index.html' : null;
+      const rootSuffix = item.relPath.endsWith('/index.html') && !/\\/variant-[a-c]\\/index\\.html$/.test(item.relPath) ? 'index.html' : null;
       if (rootSuffix) entries.push({ sub: 'index.html', label: 'Root Prototype' });
       for (const v of item.variants || []) {
         entries.push({ sub: v, label: v.replace('/index.html', '') });
       }
       const entryBtns = entries.map((e) => \`
-        <button type="button" class="chip-btn \${!viewVerdict && activeEntry === e.sub ? 'chip-active' : ''}" aria-pressed="\${!viewVerdict && activeEntry === e.sub ? 'true' : 'false'}" onclick="selectLoftEntry('\${esc(e.sub)}')">\${esc(e.label)}</button>\`).join('');
+        <button type="button" class="chip-btn \${!viewVerdict && activeEntry === e.sub ? 'chip-active' : ''}" aria-pressed="\${!viewVerdict && activeEntry === e.sub ? 'true' : 'false'}" data-loft-entry="\${esc(e.sub)}" onclick="selectLoftEntry(this.dataset.loftEntry)">\${esc(e.label)}</button>\`).join('');
       const verdictBtn = item.arenaVerdictFile
         ? \`<button type="button" class="chip-btn \${viewVerdict ? 'chip-active' : ''}" aria-pressed="\${viewVerdict ? 'true' : 'false'}" onclick="showLoftArenaVerdict()">Arena Verdict</button>\`
         : '';
@@ -1511,7 +1526,7 @@ export function renderHudHtml() {
         : 'index.html';
       const assetMap = {};
       for (const relAsset of loftItem.localAssets || []) {
-        const cleanSub = relAsset.replace(/^\.\//, '');
+        const cleanSub = relAsset.startsWith('./') ? relAsset.slice(2) : relAsset;
         try {
           const res = await fetchArtifactResponse(baseDir + '/' + cleanSub);
           if (res.ok) assetMap[relAsset] = await res.text();
@@ -1617,27 +1632,29 @@ export function renderHudHtml() {
       if (!document.getElementById('artifact-drawer').hidden) {
         window.closeArtifactDrawer();
       }
-      selectedWikiSlug = slug;
+      selectedWikiSlug = String(slug);
       wikiSearch = '';
       wikiCategory = 'All';
       setTab('wiki');
+      const searchEl = document.getElementById('wiki-search-input');
+      if (searchEl) searchEl.value = '';
       if (latestData) renderWiki(latestData);
     };
 
     window.selectWikiSlug = function(slug) {
-      selectedWikiSlug = slug;
+      selectedWikiSlug = String(slug || '');
       syncUrlState();
-      if (latestData) renderWiki(latestData);
+      if (latestData) renderWikiContentOnly(latestData);
     };
 
     window.setWikiCategory = function(cat) {
-      wikiCategory = cat;
-      if (latestData) renderWiki(latestData);
+      wikiCategory = String(cat || 'All');
+      if (latestData) renderWikiContentOnly(latestData);
     };
 
     window.onWikiSearchInput = function(val) {
       wikiSearch = String(val || '');
-      if (latestData) renderWiki(latestData);
+      if (latestData) renderWikiContentOnly(latestData);
     };
 
     window.setSkillCategory = function(cat) {
@@ -2209,7 +2226,7 @@ export function renderHudHtml() {
       const allSkills = data.catalog?.skills || [];
       const categories = ['All', ...new Set(allSkills.map((s) => s.category))];
       const catBtns = categories.map((c) => \`
-        <button type="button" class="tab-btn \${skillCategory === c ? 'active' : ''}" onclick="setSkillCategory('\${esc(c)}')">\${esc(c)}</button>\`).join('');
+        <button type="button" class="tab-btn \${skillCategory === c ? 'active' : ''}" data-skill-cat="\${esc(c)}" onclick="setSkillCategory(this.dataset.skillCat)">\${esc(c)}</button>\`).join('');
       document.getElementById('view-skills').innerHTML = \`
         <div class="card">
           <div style="font-weight:600;margin-bottom:6px;">Skills Catalog (\${allSkills.length} skills)</div>
@@ -2276,7 +2293,7 @@ export function renderHudHtml() {
       const allSubagents = data.catalog?.subagents || [];
       const lanes = ['All', ...new Set(allSubagents.map((a) => a.lane))];
       const laneBtns = lanes.map((l) => \`
-        <button type="button" class="tab-btn \${subagentLane === l ? 'active' : ''}" onclick="setSubagentLane('\${esc(l)}')">\${esc(l)}</button>\`).join('');
+        <button type="button" class="tab-btn \${subagentLane === l ? 'active' : ''}" data-sa-lane="\${esc(l)}" onclick="setSubagentLane(this.dataset.saLane)">\${esc(l)}</button>\`).join('');
       document.getElementById('view-subagents').innerHTML = \`
         <div class="card">
           <div style="font-weight:600;margin-bottom:4px;">Role Subagents (\${allSubagents.length} specialists)</div>
@@ -2289,15 +2306,11 @@ export function renderHudHtml() {
       renderSubagentsListOnly(data);
     }
 
-    function renderWiki(data) {
-      const agItems = (data.wiki?.agreements || []).map((a) => \`
-        <li style="margin-bottom:6px;\${a.expired ? 'opacity:0.5;text-decoration:line-through;' : ''}">
-          <span class="badge">\${esc(a.author)}</span> \${esc(a.text)}
-        </li>\`).join('');
+    function renderWikiContentOnly(data) {
       const entries = data.wiki?.entries || [];
       const categories = ['All', ...new Set(entries.map((e) => e.category).filter(Boolean))];
       const catBtns = categories.map((c) => \`
-        <button type="button" class="chip-btn \${wikiCategory === c ? 'chip-active' : ''}" aria-pressed="\${wikiCategory === c ? 'true' : 'false'}" onclick="setWikiCategory('\${esc(c)}')">\${esc(c)}</button>\`).join('');
+        <button type="button" class="chip-btn \${wikiCategory === c ? 'chip-active' : ''}" aria-pressed="\${wikiCategory === c ? 'true' : 'false'}" data-wiki-cat="\${esc(c)}" onclick="setWikiCategory(this.dataset.wikiCat)">\${esc(c)}</button>\`).join('');
       const q = wikiSearch.trim().toLowerCase();
       const filteredEntries = entries.filter((e) => {
         if (wikiCategory !== 'All' && e.category !== wikiCategory) return false;
@@ -2312,10 +2325,39 @@ export function renderHudHtml() {
         || entries.find((e) => e.slug === selectedWikiSlug && !q && wikiCategory === 'All')
         || filteredEntries[0]
         || null;
+      const headerEl = document.getElementById('wiki-explorer-header');
+      if (headerEl) {
+        headerEl.innerHTML = \`
+          <div style="font-weight:600;">Wiki Explorer (\${filteredEntries.length}/\${entries.length} pages)</div>
+          \${activeEntry ? \`<code class="muted">omagy_wiki/\${esc(activeEntry.slug)}.md</code>\` : ''}
+        \`;
+      }
+      const resultsEl = document.getElementById('wiki-explorer-results');
+      if (!resultsEl) return;
       const entryBtns = filteredEntries.map((e) => \`
-        <button type="button" class="tab-btn \${activeEntry && activeEntry.slug === e.slug ? 'active' : ''}" onclick="selectWikiSlug('\${esc(e.slug)}')">
+        <button type="button" class="tab-btn \${activeEntry && activeEntry.slug === e.slug ? 'active' : ''}" data-wiki-slug="\${esc(e.slug)}" onclick="selectWikiSlug(this.dataset.wikiSlug)">
           \${esc(e.slug)} <span class="muted">(\${esc(e.category)})</span>
         </button>\`).join('');
+      resultsEl.innerHTML = \`
+        \${catBtns ? \`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">\${catBtns}</div>\` : ''}
+        \${entryBtns ? \`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">\${entryBtns}</div>\` : '<div class="muted">No wiki pages match the current filter.</div>'}
+        \${activeEntry ? \`
+          <div style="border-top:1px solid var(--hud-border);padding-top:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+              <div style="font-weight:600;font-size:14px;">\${esc(activeEntry.title)}</div>
+              <span class="badge">\${esc(activeEntry.category)}</span>
+            </div>
+            \${activeEntry.tags?.length ? \`<div class="muted" style="margin:4px 0;font-size:12px;">Tags: \${activeEntry.tags.map((t) => \`<code>\${esc(t)}</code>\`).join(' ')}</div>\` : ''}
+            <div class="wiki-markdown-body" style="margin-top:8px;">\${renderSafeMarkdown(activeEntry.body || '')}</div>
+          </div>\` : ''}
+      \`;
+    }
+
+    function renderWiki(data) {
+      const agItems = (data.wiki?.agreements || []).map((a) => \`
+        <li style="margin-bottom:6px;\${a.expired ? 'opacity:0.5;text-decoration:line-through;' : ''}">
+          <span class="badge">\${esc(a.author)}</span> \${esc(a.text)}
+        </li>\`).join('');
       const lint = data.wiki?.lint || {};
       const lintIssues = [
         ...(lint.missingFrontmatter || []).map((s) => \`Missing frontmatter: <code>\${esc(s)}</code>\`),
@@ -2330,28 +2372,16 @@ export function renderHudHtml() {
           \${agItems ? \`<ul style="margin:0;padding-left:18px;">\${agItems}</ul>\` : '<div class="muted">No working agreements recorded yet.</div>'}
         </div>
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
-            <div style="font-weight:600;">Wiki Explorer (\${filteredEntries.length}/\${entries.length} pages)</div>
-            \${activeEntry ? \`<code class="muted">omagy_wiki/\${esc(activeEntry.slug)}.md</code>\` : ''}
-          </div>
+          <div id="wiki-explorer-header" style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;"></div>
           <input type="text" id="wiki-search-input" class="search-input" placeholder="Press / to search wiki pages by title, [[slug]], tag, or content..." value="\${esc(wikiSearch)}" oninput="onWikiSearchInput(this.value)" />
-          \${catBtns ? \`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;">\${catBtns}</div>\` : ''}
-          \${entryBtns ? \`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">\${entryBtns}</div>\` : '<div class="muted">No wiki pages match the current filter.</div>'}
-          \${activeEntry ? \`
-            <div style="border-top:1px solid var(--hud-border);padding-top:10px;">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
-                <div style="font-weight:600;font-size:14px;">\${esc(activeEntry.title)}</div>
-                <span class="badge">\${esc(activeEntry.category)}</span>
-              </div>
-              \${activeEntry.tags?.length ? \`<div class="muted" style="margin:4px 0;font-size:12px;">Tags: \${activeEntry.tags.map((t) => \`<code>\${esc(t)}</code>\`).join(' ')}</div>\` : ''}
-              <div class="wiki-markdown-body" style="margin-top:8px;">\${renderSafeMarkdown(activeEntry.body || '')}</div>
-            </div>\` : ''}
+          <div id="wiki-explorer-results"></div>
         </div>
         <div class="card">
           <div style="font-weight:600;margin-bottom:6px;">Read-Only Wiki Lint</div>
           \${lintIssues.length ? \`<ul style="margin:0;padding-left:18px;">\${lintIssues.map((i) => \`<li>\${i}</li>\`).join('')}</ul>\` : '<div class="muted">All wiki pages pass frontmatter, link, and index checks.</div>'}
         </div>
       \`;
+      renderWikiContentOnly(data);
     }
 
     function isEditingInContainer(containerId) {

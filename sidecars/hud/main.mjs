@@ -11,6 +11,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import vm from 'node:vm';
 import {
   analyzeDiffCodeHealth,
   checkVerificationFreshness,
@@ -2788,20 +2789,31 @@ async function runSelftest() {
       fs.rmSync(artWs, { recursive: true, force: true });
     }
 
-    // H16: Slide-Over Drawer (#artifact-drawer), 3-mode Visual Ralph comparator, Loft srcdoc local-asset/module/theme inlining [W-1], & null-source guard
+    // H16: Slide-Over Drawer (#artifact-drawer), vm.Script inline syntax check, 3-mode Visual Ralph comparator, Loft srcdoc local-asset/module/theme inlining [W-1], & null-source guard
+    const inlineScriptMatch = /<script>([\s\S]*?)<\/script>/i.exec(HUD_HTML);
+    let inlineScriptSyntaxOk = false;
+    if (inlineScriptMatch) {
+      try {
+        new vm.Script(inlineScriptMatch[1], { filename: 'hud-inline.js' });
+        inlineScriptSyntaxOk = true;
+      } catch { /* fail open: syntax error surfaced via inlineScriptSyntaxOk === false */ }
+    }
     const sampleLoftHtml = [
       '<!DOCTYPE html><html><head><title>Arena</title>',
       '<link rel="stylesheet" href="https://cdn.example.invalid/evil.css">',
+      '<link rel=stylesheet href=https://cdn.example.invalid/unquoted.css>',
       '<link rel="stylesheet" href="./styles.css">',
       '<script src="https://cdn.example.invalid/evil.js"></script>',
-      '</head><body><script type="module" src="./app.mjs"></script></body></html>',
+      '<script src=https://cdn.example.invalid/unquoted.js></script>',
+      '<script src="  //cdn.example.invalid/proto.js "></script>',
+      '</head><body><script type=module src=./app.mjs></script></body></html>',
     ].join('\n');
     const preparedLoft = prepareLoftSrcdoc(
       sampleLoftHtml,
       'variant-a/index.html',
       {
         './styles.css': '.card { color: var(--hud-primary); }',
-        './variant-a/styles.css': '.box { border: 1px solid var(--hud-border); }',
+        './variant-a/styles.css': '.box { border: 1px solid var(--hud-border); } /* </style><script>evil()</script> */',
         './variant-a/app.mjs': "import { computeScore } from '../logic.mjs';\nglobalThis.__loftAnswer = computeScore(21);\n",
         './logic.mjs': 'export function computeScore(x) { return x * 2; }\n',
       },
@@ -2817,7 +2829,8 @@ async function runSelftest() {
         delete globalThis.__loftAnswer;
       } catch { /* fail open: bundled module eval check failed */ }
     }
-    const h16Ok = HUD_HTML.includes('id="artifact-drawer"')
+    const h16Ok = inlineScriptSyntaxOk
+      && HUD_HTML.includes('id="artifact-drawer"')
       && HUD_HTML.includes('id="artifact-drawer-backdrop"')
       && HUD_HTML.includes('role="dialog"')
       && HUD_HTML.includes('aria-modal="true"')
@@ -2836,13 +2849,14 @@ async function runSelftest() {
       && HUD_HTML.includes('if (!event.source || (event.source !== window.parent && event.source !== window)) return;')
       && !preparedLoft.includes('cdn.example.invalid')
       && preparedLoft.includes('data-inlined-asset="./variant-a/styles.css"')
+      && preparedLoft.includes('<\\/style><script>evil()')
       && preparedLoft.includes("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:")
       && preparedLoft.includes('id="omagy-hud-theme-vars"')
       && preparedLoft.includes('--hud-primary: #60a5fa;')
       && !/\bimport\s+\{\s*computeScore\s*\}/.test(preparedLoft)
       && bundledLoftAnswer === 42;
 
-    // H17: Digest-diffed live SSE reactivity, workspace-change reconnect, 15s poll fallback, stateful DOM preservation, & surfaced telemetry
+    // H17: Digest-diffed live SSE reactivity, workspace-change reconnect, 15s poll fallback, stateful DOM & Wiki focus preservation, & surfaced telemetry
     const h17Ok = HUD_HTML.includes("new EventSource('/api/events?'")
       && HUD_HTML.includes('connectEventStream()')
       && HUD_HTML.includes('activeEventSource.close()')
@@ -2851,6 +2865,8 @@ async function runSelftest() {
       && HUD_HTML.includes('data.digest === lastSnapshotDigest')
       && HUD_HTML.includes('function captureUiState()')
       && HUD_HTML.includes('function restoreUiState(state)')
+      && HUD_HTML.includes('function renderWikiContentOnly(data)')
+      && HUD_HTML.includes('id="wiki-explorer-results"')
       && HUD_HTML.indexOf('id="artifact-drawer"') > HUD_HTML.indexOf('id="view-wiki"')
       && HUD_HTML.includes('data-hud-key="ug-ledger"')
       && HUD_HTML.includes('Recent Ledger Events')
@@ -2896,6 +2912,8 @@ async function runSelftest() {
       && HUD_HTML.includes(renderSafeMarkdown.toString())
       && renderedMd.includes('<h1 class="md-h1">Architecture Note</h1>')
       && renderedMd.includes('data-wiki-slug="target-slug"')
+      && renderedMd.includes('onclick="navigateToWikiSlug(this.dataset.wikiSlug)"')
+      && !/onclick="[^"]*\$\{/.test(HUD_HTML)
       && renderedMd.includes('data-wiki-slug="overview-doc"')
       && !renderedMd.includes('data-wiki-slug="inside-fence"')
       && !renderedMd.includes('data-wiki-slug="inside-code"')
