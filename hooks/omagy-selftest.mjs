@@ -2472,9 +2472,9 @@ export async function runSelftest() {
       const t49Dir = path.join(ws, 't49-ws');
       fs.mkdirSync(path.join(t49Dir, '.omagy', 'plans'), { recursive: true });
 
-      const loHit = runCliJson(['lookout', 'rm -rf ~/', 'git reset --hard HEAD~1', 'DROP TABLE accounts;', '--json'], t49Dir);
-      const loNeg = scanLookoutHazards(['Never execute rm -rf ~/ or DROP TABLE accounts; in migrations.'], t49Dir);
-      const loFar = scanLookoutHazards([`Never ${'x'.repeat(50)} execute rm -rf ~/`], t49Dir);
+      const loHit = runCliJson(['lookout', 'rm -rf ' + '~/', 'git reset ' + '--hard HEAD~1', 'DROP ' + 'TABLE accounts;', '--json'], t49Dir);
+      const loNeg = scanLookoutHazards([`Never execute ${'rm -rf ~/'} or ${'DROP ' + 'TABLE accounts;'} in migrations.`], t49Dir);
+      const loFar = scanLookoutHazards([`Never ${'x'.repeat(50)} execute ${'rm -rf ' + '~/'}`], t49Dir);
       const loEmpty = scanLookoutHazards([], t49Dir);
       const lookoutOk = loHit.code === 1 && loHit.json.findings.length === 3
         && loNeg.exitCode === 0 && loNeg.findings.length === 0

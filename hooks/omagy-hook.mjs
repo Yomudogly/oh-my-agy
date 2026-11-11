@@ -2183,7 +2183,7 @@ export function auditResearchReport(reportPath) {
 }
 
 // ---------- watch-pr verdict policy, failure signature normalizer, session compare & wiki link repair ----------
-// shortcut: legacy CLI helpers remain in omagy-hook.mjs while newer evaluators live in lazy-imported hooks/omagy-cli.mjs, migrate remaining CLI helpers if omagy-hook.mjs exceeds 235KB
+// shortcut: legacy CLI helpers remain in omagy-hook.mjs while newer evaluators live in lazy-imported hooks/omagy-cli.mjs, migrate remaining CLI helpers if omagy-hook.mjs exceeds 175KB
 export const DEFAULT_NO_CHECKS_CONFIRM_MS = 60_000;
 export function decideWatchVerdict(rawFacts = {}, options = {}) {
   const f = rawFacts && typeof rawFacts === 'object' ? rawFacts : {};
