@@ -266,7 +266,10 @@
         "List, add, edit, validate, and scan Antigravity SKILL.md files in user or project scope",
         "Capture this durable codebase-specific release workflow as a reusable validated SKILL.md file",
         "Search, sync, and validate custom SKILL.md frontmatter descriptions in project scope",
-        "Manage project skills by scanning and validating SKILL.md files and removing an obsolete skill"
+        "Manage project skills by scanning and validating SKILL.md files and removing an obsolete skill",
+        "Scaffold a new project SKILL.md directory with bundled references and deterministic helper scripts",
+        "Validate a custom skill folder frontmatter description, progressive-disclosure links, and 20KB byte budget",
+        "Share team skills in version control with .agents/skills.json entries and inherits filters"
       ],
       "negative": [
         {
@@ -276,6 +279,10 @@
         {
           "prompt": "Record persistent project architecture and debugging notes in the omagy_wiki markdown wiki",
           "owner": "wiki"
+        },
+        {
+          "prompt": "Audit broken hook wiring, Node availability, and stale workflow state files",
+          "owner": "doctor"
         }
       ]
     },

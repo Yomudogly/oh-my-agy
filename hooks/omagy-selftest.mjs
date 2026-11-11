@@ -2844,6 +2844,23 @@ export async function runSelftest() {
       const shippedPrRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'pr'), { strict: true });
       const shippedVrRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'visual-ralph'), { strict: true });
       const shippedUqaRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'ultraqa'), { strict: true });
+      const shippedSkillRes = await validateSkillDirectory(path.join(pluginRoot, 'skills', 'skill'), { strict: true });
+      const skillPlaybookTxt = rTxt('skills/skill/SKILL.md');
+      const skillRefTxt = rTxt('skills/skill/references/testing-and-sdo.md');
+      const skillPlaybookBytes = Buffer.byteLength(skillPlaybookTxt, 'utf8');
+      const skillRefBytes = Buffer.byteLength(skillRefTxt, 'utf8');
+      const playbookConceptsOk = skillPlaybookBytes <= 19_000
+        && skillRefBytes < 40_000
+        && /Progressive Disclosure/i.test(skillPlaybookTxt)
+        && /Degrees-of-Freedom/i.test(skillPlaybookTxt)
+        && /Anti-Clutter/i.test(skillPlaybookTxt)
+        && skillPlaybookTxt.includes('.agents/skills.json')
+        && skillPlaybookTxt.includes('skill-init')
+        && skillPlaybookTxt.includes('skill-validate')
+        && /Conditional Workflow/i.test(skillRefTxt)
+        && /Strict Output Template/i.test(skillRefTxt)
+        && skillRefTxt.includes('entries')
+        && skillRefTxt.includes('inherits');
 
       const shippedOk = dsColRes.ok === true && dsColRes.skillCount === 1
         && shippedColRes.ok === true && shippedColRes.exitCode === 0
@@ -2851,7 +2868,9 @@ export async function runSelftest() {
         && shippedColRes.errors.length === 0 && shippedColRes.warnings.length === 0
         && shippedPrRes.ok === true && shippedPrRes.errors.length === 0
         && shippedVrRes.ok === true && shippedVrRes.errors.length === 0
-        && shippedUqaRes.ok === true && shippedUqaRes.errors.length === 0;
+        && shippedUqaRes.ok === true && shippedUqaRes.errors.length === 0
+        && shippedSkillRes.ok === true && shippedSkillRes.errors.length === 0 && shippedSkillRes.warnings.length === 0
+        && playbookConceptsOk;
 
       t51Ok = byteAndDispatchOk && scaffoldOk && adversarialOk && shippedOk;
       t51Detail = `hook=${hookBytesT51} cli=${cliBytesT51} skill=${skillBytesT51} dispatch=${byteAndDispatchOk} scaffold=${scaffoldOk} adv=${adversarialOk} shipped=${shippedOk}`;
