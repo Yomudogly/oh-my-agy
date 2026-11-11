@@ -10,9 +10,13 @@ import { execFileSync } from 'node:child_process';
 import {
   COLD_CLI_EVENTS,
   CONFIRMATION_MTIME_TOLERANCE_MS,
+  CONTINUATION_MODES,
   MAX_WIKI_CONTEXT_CHARS,
+  PLANNING_MODES,
+  RESERVED_GATE_SKILLS,
   SKILLS,
   STALE_MS,
+  SUNSET_GATE_SKILLS,
   activeStates,
   analyzeDiffCodeHealth,
   appendJsonlRecord,
@@ -566,7 +570,7 @@ export function runG1SelftestChecks(ctx) {
   let t37Ok = false;
   let t37Detail = '';
   try {
-    const liveEval = evaluateSkillRouting(pluginRoot, { minRank1: 90 });
+    const liveEval = evaluateSkillRouting(pluginRoot, { minRank1: 95 });
     const miniPlugin = path.join(ws, 't37-mini-plugin');
     const writeSkill = (sName, sDesc) => {
       const d = path.join(miniPlugin, 'skills', sName);
@@ -599,9 +603,9 @@ export function runG1SelftestChecks(ctx) {
     });
     const miniRatchetFail = evaluateSkillRouting(miniPlugin, { minRank1: 100 });
 
-    t37Ok = liveEval.ok === true && liveEval.exitCode === 0 && liveEval.skillCount === 27
+    t37Ok = liveEval.ok === true && liveEval.exitCode === 0 && liveEval.skillCount === 20
       && liveEval.schemaErrors.length === 0 && liveEval.collisionErrors.length === 0
-      && liveEval.negativeSurvivalPct === 100 && liveEval.rank1Pct >= 90
+      && liveEval.negativeSurvivalPct === 100 && liveEval.rank1Pct >= 95
       && miniCollisionAndZeroTie.skillCount === 3
       && miniCollisionAndZeroTie.collisionErrors.length >= 1 && miniCollisionAndZeroTie.collisionErrors[0].cosine >= 0.75
       && miniCollisionAndZeroTie.negativeSurvivalPct < 100 && miniCollisionAndZeroTie.exitCode === 1
@@ -610,7 +614,7 @@ export function runG1SelftestChecks(ctx) {
   } catch (e) { /* fail open: capture T37 error detail */
     t37Detail = e instanceof Error ? e.message : String(e);
   }
-  check('evaluateSkillRouting passes all 27 live skills (>=90% rank-1, 0 collisions, 100% negative survival) and catches collisions, zero-score owner ties, and ratchet misses',
+  check('evaluateSkillRouting passes all 20 live skills (>=95% rank-1, 0 collisions, 100% negative survival) and catches collisions, zero-score owner ties, and ratchet misses',
     t37Ok, t37Detail);
 
   // T38: quality-gate fail-closed scanner report validator & quality-gates CLI disambiguation
@@ -774,13 +778,13 @@ export async function runSelftest() {
     fs.writeFileSync(path.join(subPkg, 'index.ts'), 'export const ok = true;\n');
 
     const transcript = path.join(ws, 'transcript.jsonl');
-    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $handoff on packages/core/index.ts, not /plan or $nonexistent' })}\n`);
+    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $hud --handoff on packages/core/index.ts, plus $handoff $plan $design $omagy-setup /plan $nonexistent' })}\n`);
     const p1 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 1 });
     const stepTexts = (p1.injectSteps || []).map((s) => s.ephemeralMessage || '');
     const routeMsg = stepTexts[0] || '';
     const wikiMsg = stepTexts.find((t) => t.includes('Project Wiki index')) || '';
     const subdirMsg = stepTexts.find((t) => t.includes('Subdirectory AGENTS.md')) || '';
-    check('pre-invocation routes $skills in order (including $handoff)', routeMsg.includes('$autopilot, $code-review, $handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
+    check('pre-invocation routes $skills in order (including $hud --handoff) and ignores retired skills', routeMsg.includes('$autopilot, $code-review, $hud') && !routeMsg.includes('$handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('$design') && !routeMsg.includes('$omagy-setup') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
     check('pre-invocation injects working agreements + bounded wiki index (<=3500 chars)', wikiMsg.includes('Working Agreements') && wikiMsg.length <= MAX_WIKI_CONTEXT_CHARS && wikiMsg.includes('Wiki index truncated'), `len=${wikiMsg.length}`);
     check('pre-invocation discovers subdirectory AGENTS.md on touched path', subdirMsg.includes('packages/core/AGENTS.md') && subdirMsg.includes('Keep core zero-dependency'));
     check('pre-invocation injects once per user message', Object.keys(preInvocation({ ...base, transcriptPath: transcript, invocationNum: 2 })).length === 0);
@@ -921,7 +925,7 @@ export async function runSelftest() {
     check('OMAGY_STATE_ROOT overrides stateRoot and omagyLogsDir', resolvedLogs === path.join(canonicalizePath(customStateRoot), '.omagy', 'logs'));
 
     // detectSkills quote/code/blockquote/URL/negated/help-question suppression
-    const suppressedSkills = detectSkills('What does `$autopilot` or "$ralplan" do?\n> $team\n[a -> b] $ultragoal\ndo not use $ultraqa or https://example.com/$plan');
+    const suppressedSkills = detectSkills('What does `$autopilot` or "$ralplan" do?\n> $team\n[a -> b] $ultragoal\ndo not use $ultraqa or https://example.com/$ralplan');
     const preservedLead = detectSkills('$ralplan: design the API using ```js\nconst s = "$team";\n``` and do not use $autopilot');
     const suppressedLeadHelp = detectSkills('$ralplan: how do I use this skill?');
     check('detectSkills suppresses quoted/code/negated/help mentions while preserving leading invocation',
@@ -1053,13 +1057,13 @@ export async function runSelftest() {
     const rtAfterStart = readJson(runtimeFile(conv, 'routing')) || {};
     preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: 'plain prompt without skills', transcript_path: '/tmp/selftest-t2.jsonl' });
     const rtAfterPlain = readJson(runtimeFile(conv, 'routing')) || {};
-    const pDirectSkill = preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: '$plan update docs' });
+    const pDirectSkill = preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: '$ralplan --light update docs' });
     const rtAfterSkill = readJson(runtimeFile(conv, 'routing')) || {};
     const directSkillText = (pDirectSkill.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
     check('sessionStart and preInvocation persist transcriptPath/artifactDirectoryPath and route lastUserInput fallback',
       rtAfterStart.transcriptPath === '/tmp/selftest-t1.jsonl' && rtAfterStart.artifactDirectoryPath === '/tmp/selftest-artifacts'
       && rtAfterPlain.transcriptPath === '/tmp/selftest-t2.jsonl' && rtAfterSkill.transcriptPath === '/tmp/selftest-t2.jsonl'
-      && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts' && directSkillText.includes('$plan'));
+      && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts' && directSkillText.includes('$ralplan'));
 
     // T5: plugin.json strict JSON, official 10-key Antigravity schema allowlist, <=160 char description, CHANGELOG version sync, and logo PNG dimensions
     let strictPkg = null;
@@ -1080,7 +1084,7 @@ export async function runSelftest() {
         && strictPkg.version && strictPkg.version === topChangelogVer && isPng && logoWidth === logoHeight && logoWidth >= 128),
       `ver=${strictPkg?.version || 'none'} changelog=${topChangelogVer} descLen=${strictPkg?.description?.length || 0} unknownKeys=${unknownPluginKeys.join(',')} logo=${logoWidth}x${logoHeight}`);
 
-    // T6: All 27 skills/*/SKILL.md match SKILLS bidirectionally, <20,000 bytes, valid YAML frontmatter without ->, zero empty subdirs/dev files, and valid relative .md#anchor links
+    // T6: All 20 skills/*/SKILL.md match SKILLS bidirectionally, <20,000 bytes, valid YAML frontmatter without ->, zero empty subdirs/dev files, and valid relative .md#anchor links
     const skillsDir = path.join(pluginRoot, 'skills');
     let skillsParity = false;
     const skillIssues = [];
@@ -1089,7 +1093,7 @@ export async function runSelftest() {
       const diskSkillDirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
       diskSkillCount = diskSkillDirs.length;
       const expectedSkills = [...SKILLS].sort();
-      skillsParity = diskSkillDirs.length === expectedSkills.length && diskSkillDirs.every((d, i) => d === expectedSkills[i]);
+      skillsParity = diskSkillDirs.length === 20 && SKILLS.length === 20 && diskSkillDirs.length === expectedSkills.length && diskSkillDirs.every((d, i) => d === expectedSkills[i]);
       const checkSkillSubdirs = (baseDir, relPrefix) => {
         for (const ent of fs.readdirSync(baseDir, { withFileTypes: true })) {
           const fullEnt = path.join(baseDir, ent.name);
@@ -1127,7 +1131,7 @@ export async function runSelftest() {
     } catch (e) {
       skillIssues.push(e instanceof Error ? e.message : String(e));
     }
-    check('all 27 skills/*/SKILL.md match SKILLS, are <20KB, have valid SDO YAML frontmatter without ->, resolve relative .md#anchor links, and have no empty subdirs or dev files',
+    check('all 20 skills/*/SKILL.md match SKILLS, are <20KB, have valid SDO YAML frontmatter without ->, resolve relative .md#anchor links, and have no empty subdirs or dev files',
       skillsParity && skillIssues.length === 0,
       skillIssues.join(', ') || `count=${diskSkillCount}`);
 
@@ -1252,11 +1256,11 @@ export async function runSelftest() {
       const userRepoWithSkills = path.join(ws, 'user-repo-with-skills');
       fs.mkdirSync(path.join(userRepoWithSkills, 'skills', 'user-local-skill'), { recursive: true });
       fs.writeFileSync(path.join(userRepoWithSkills, 'skills', 'user-local-skill', 'SKILL.md'), '---\nname: user-local-skill\ndescription: "Local skill"\n---\n', 'utf8');
-      const evalFromUserCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'skill-eval', '--min-rank1', '90', '--json'], {
+      const evalFromUserCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'skill-eval', '--min-rank1', '95', '--json'], {
         cwd: userRepoWithSkills,
         encoding: 'utf8',
       }));
-      userSkillsCwdEvalOk = evalFromUserCwd.ok === true && evalFromUserCwd.skillCount === 27;
+      userSkillsCwdEvalOk = evalFromUserCwd.ok === true && evalFromUserCwd.skillCount === 20;
     } catch { /* fail open: flags stay false and fail T8 check */ }
     check('hooks/run.sh and sidecars/hud/run.sh use pure POSIX expansion without dirname or sort -V',
       !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
@@ -1595,7 +1599,7 @@ export async function runSelftest() {
       const fgDashC = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'floor-guard', '-C', t40CwdRepo, '--json'], { cwd: ws, encoding: 'utf8' }));
       const qgFromCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'quality-gate', 'semgrep.json', '--json'], { cwd: t40CwdRepo, encoding: 'utf8' }));
       const junkFromCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'check-test-junk', '--json'], { cwd: t40CwdRepo, encoding: 'utf8' }));
-      const seFromCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'skill-eval', '--min-rank1', '90', '--json'], { cwd: t40CwdRepo, encoding: 'utf8' }));
+      const seFromCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'skill-eval', '--min-rank1', '95', '--json'], { cwd: t40CwdRepo, encoding: 'utf8' }));
       const cwdDomainOk = fgFromCwd.ok === true && fgFromCwd.baseSha === t40Head
         && fgDashC.ok === true && fgDashC.baseSha === t40Head
         && qgFromCwd.ok === true && qgFromCwd.reportsChecked === 1
@@ -1729,6 +1733,103 @@ export async function runSelftest() {
     }
     check('validateFrontmatterYaml array/boolean parser, 4 retired agent files unlinked, folded executor/planner/researcher contracts, and 14 HUD subagents',
       t41Ok, t41Detail);
+
+    // T42: 20-skill clean consolidation, 11-negative eval migration, folded references, and mode-set compatibility
+    let t42Ok = false;
+    let t42Detail = '';
+    try {
+      const retiredSkills = ['omagy-setup', 'configure-notifications', 'best-practice-research', 'autoresearch', 'handoff', 'plan', 'design'];
+      const retiredDirsAbsent = retiredSkills.every((s) => !fs.existsSync(path.join(pluginRoot, 'skills', s)));
+      const hookMod = await import('./omagy-hook.mjs');
+      const zeroAliases = hookMod.SKILL_ALIASES === undefined && SKILLS.length === 20;
+
+      const docSetupRef = path.join(pluginRoot, 'skills', 'doctor', 'references', 'setup-and-init-deep.md');
+      const docNotifRef = path.join(pluginRoot, 'skills', 'doctor', 'references', 'notifications.md');
+      const foldedRefsOk = fs.existsSync(docSetupRef) && fs.existsSync(docNotifRef)
+        && rTxt('skills/doctor/references/setup-and-init-deep.md').includes('--init-deep')
+        && rTxt('skills/doctor/references/notifications.md').includes('.omagy/notifications.json')
+        && rTxt('skills/doctor/SKILL.md').includes('--setup')
+        && rTxt('skills/doctor/SKILL.md').includes('--notifications')
+        && rTxt('skills/deep-research/SKILL.md').includes('--quick')
+        && rTxt('skills/deep-research/SKILL.md').includes('--loop')
+        && rTxt('skills/deep-research/SKILL.md').includes('autoresearch-state.json')
+        && rTxt('skills/hud/SKILL.md').includes('--handoff')
+        && rTxt('skills/hud/SKILL.md').includes('handoff-latest.md')
+        && rTxt('skills/ralplan/SKILL.md').includes('--light')
+        && rTxt('skills/ralplan/SKILL.md').includes('plan-state.json')
+        && rTxt('skills/visual-ralph/SKILL.md').includes('--design')
+        && rTxt('skills/visual-ralph/SKILL.md').includes('DESIGN.md');
+
+      const autoWs = path.join(ws, 't42-autoresearch-ws');
+      writeJson(path.join(autoWs, '.omagy', 'state', 'autoresearch-state.json'), {
+        mode: 'autoresearch',
+        active: true,
+        current_phase: 'iterating',
+        iteration: 1,
+        updated_at: new Date().toISOString(),
+      });
+      const autoStop = await stop({ conversationId: `${conv}-t42-auto`, workspacePaths: [autoWs], terminationReason: 'NO_TOOL_CALL' });
+      const modesCompatOk = PLANNING_MODES.includes('plan')
+        && RESERVED_GATE_SKILLS.has('plan')
+        && CONTINUATION_MODES.includes('autoresearch')
+        && autoStop.decision === 'continue';
+
+      const sunsetWs = path.join(ws, 't42-sunset-ws');
+      writeJson(path.join(sunsetWs, '.omagy', 'config.json'), {
+        qualityGates: { ralplan: [...retiredSkills, 'swarm'] },
+      });
+      const sunsetGateRes = validateQualityGates(sunsetWs, 'ralplan');
+      const allSunsetRegistered = [...retiredSkills, 'swarm'].every((s) => SUNSET_GATE_SKILLS.has(s));
+      const joinedGateErrors = sunsetGateRes.errors.join('\n');
+      const sunsetHintsOk = sunsetGateRes.ok === false
+        && sunsetGateRes.errors.length === 8
+        && allSunsetRegistered
+        && ['$doctor --setup', '$doctor --notifications', '$deep-research --quick', '$deep-research --loop', '$hud --handoff', '$ralplan --light', '$visual-ralph --design', "'$swarm'"].every((h) => joinedGateErrors.includes(h));
+
+      const evalCasesObj = readJson(path.join(pluginRoot, 'hooks', 'skill-eval-cases.json')) || {};
+      const evalSkillsMap = evalCasesObj.skills || {};
+      const evalKeys = Object.keys(evalSkillsMap).sort();
+      const evalSchemaClean = evalKeys.length === 20
+        && evalKeys.every((sName) => {
+          const negs = evalSkillsMap[sName]?.negative || [];
+          return negs.length >= 2 && negs.every((n) => n && n.owner !== sName && SKILLS.includes(n.owner));
+        });
+
+      const retiredInvokeRe = new RegExp(`(?:^|[\\s(\`"'])[$/](?:${retiredSkills.join('|')})\\b`, 'm');
+      const staleSkillRefs = [];
+      const scanCleanFile = (relP) => {
+        const absP = path.join(pluginRoot, relP);
+        if (fs.existsSync(absP) && retiredInvokeRe.test(rTxt(relP))) staleSkillRefs.push(relP);
+      };
+      scanCleanFile('rules/AGENTS.md');
+      scanCleanFile('sidecars/hud/main.mjs');
+      for (const af of fs.readdirSync(path.join(pluginRoot, 'agents')).filter((f) => f.endsWith('.md'))) {
+        scanCleanFile(`agents/${af}`);
+      }
+      for (const sd of SKILLS) {
+        scanCleanFile(`skills/${sd}/SKILL.md`);
+        const refD = path.join(pluginRoot, 'skills', sd, 'references');
+        if (fs.existsSync(refD)) {
+          for (const rf of fs.readdirSync(refD).filter((f) => f.endsWith('.md'))) {
+            scanCleanFile(`skills/${sd}/references/${rf}`);
+          }
+        }
+      }
+
+      const { buildPluginCatalog: hudBuildCatT42 } = await import('../sidecars/hud/main.mjs');
+      const hudCatT42 = hudBuildCatT42(pluginRoot);
+      const cancelHud = (hudCatT42.skills || []).find((s) => s.name === 'cancel');
+      const hudSkillsOk = Array.isArray(hudCatT42.skills)
+        && hudCatT42.skills.length === 20
+        && Boolean(cancelHud && Array.isArray(cancelHud.flags) && !cancelHud.flags.includes('--all'));
+
+      t42Ok = retiredDirsAbsent && zeroAliases && foldedRefsOk && modesCompatOk && sunsetHintsOk && evalSchemaClean && staleSkillRefs.length === 0 && hudSkillsOk;
+      t42Detail = `retiredAbsent=${retiredDirsAbsent} zeroAliases=${zeroAliases} folded=${foldedRefsOk} modes=${modesCompatOk} sunset=${sunsetHintsOk} eval=${evalSchemaClean} staleRefs=${staleSkillRefs.join(',') || '0'} hudSkills=${hudCatT42.skills?.length}`;
+    } catch (e) { /* fail open: capture T42 error detail */
+      t42Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('20-skill consolidation unlinks 7 retired dirs, preserves plan/autoresearch mode compatibility, enforces sunset hints ($swarm), reconciles 11 eval negatives, and cleans HUD/docs',
+      t42Ok, t42Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

@@ -1,16 +1,19 @@
 ---
 name: ralplan
-description: "[oh-my-agy] Multi-agent consensus planning with independent architectural and critic review (plus --hyperplan 5-persona hostile cross-critique) producing an execution-ready plan. Use for $ralplan, for high-stakes plans that need architectural review, or as the Autopilot planning stage. Flags: --interactive, --deliberate, --hyperplan, --advisory."
+description: "[oh-my-agy] Multi-agent consensus planning with independent architectural and critic review (plus --hyperplan 5-persona hostile cross-critique), or lightweight evidence-backed single-lane planning (--light, --interview, --review) when full consensus review is unnecessary. Use for $ralplan, 'plan this', 'let's plan', lightweight feature scoping, reviewing an existing plan, high-stakes architectural plans, or the Autopilot planning stage. Flags: --light, --interview, --review, --interactive, --deliberate, --hyperplan, --advisory."
 ---
 
-# Ralplan (Consensus Planning)
+# Ralplan (Consensus & Lightweight Planning)
 
-Ralplan is the consensus-planning stage that Autopilot runs between `$deep-interview` and `$ultragoal`. It drives Planner, Architect, and Critic review with **RALPLAN-DR structured deliberation**: short mode by default, deliberate mode for high-risk work, and `--hyperplan` for 5-persona hostile cross-critique before formal planning. Review evidence is local lifecycle evidence, not a security authority. Once the plan and sequential approvals are durable, progression to Ultragoal must stay reachable, and cancel/recovery must never be blocked.
+Ralplan owns both **multi-agent consensus planning** (the stage Autopilot runs between `$deep-interview` and `$ultragoal` driving Planner, Architect, and Critic review with **RALPLAN-DR structured deliberation**) and **lightweight single-lane planning** (`--light`, `--interview`, `--review`) for bounded features when full consensus review is unnecessary. Review evidence is local lifecycle evidence, not a security authority. Once the plan and sequential approvals are durable, progression to Ultragoal must stay reachable, and cancel/recovery must never be blocked.
 
 ## Usage
 
 ```text
 $ralplan "task description"
+$ralplan --light "task description"
+$ralplan --interview "task description"
+$ralplan --review ".omagy/plans/plan-<slug>.md"
 $ralplan --interactive "task description"
 $ralplan --deliberate "task description"
 $ralplan --hyperplan "task description"
@@ -19,6 +22,9 @@ $ralplan --advisory "task description"
 
 ## Flags
 
+- `--light`: lightweight, explore-first single-lane planning without the multi-agent Architect + Critic consensus loop. Standalone `--light` writes `.omagy/state/plan-state.json` (`{"mode":"plan","active":true,"current_phase":"interview|drafting|review"}`) so the planning write guard stays active while drafting, applies Intent Classification (`CLEAR` vs `UNCLEAR` autonomous defaults with `Adopted Defaults`), the **Two-Filter + Owner-Decision Survival Gate** (open "why" first; process steps as proposals), and the **4-Item Brief Sharpener (`sharpen`)** (`consumer`, `cheapest done-check`, `non-goals`, `outside verification check`), saves `.omagy/plans/plan-<slug>.md` (`>= 80%` claims citing `file:line`, `>= 90%` testable acceptance criteria, `Affected User Ideal State & Gap Table`, `Review Focus (Top 5 Silent Edge Cases)`, `Interfaces: Consumes / Produces`), and terminalizes `plan-state.json` on delivery (or transitions to direct execution if the user says `"just do it"` / `"skip planning"`).
+- `--interview`: lightweight Socratic scoping before planning — gather repo facts first (`explore` or direct reads), then ask one surviving owner-decision fork per turn via `ask_question` (`(Recommended)` option first) before generating the plan in `.omagy/plans/`.
+- `--review`: evaluate an existing plan in `.omagy/plans/` (or a specified path) via an independent `critic` subagent (`APPROVE` / `ITERATE` / `REJECT`; never self-approve; report the gap if an independent lane is unavailable).
 - `--interactive`: pause at key decision points (draft review in step 2, final approval in step 6) using `ask_question`. Without it, the Planner -> Architect -> Critic loop runs fully automated.
 - `--deliberate`: force deliberate mode. It adds a pre-mortem (3 scenarios) and an expanded test plan (unit/integration/e2e/observability). Deliberate mode also turns on automatically when the request signals high risk: auth/security, migrations, destructive changes, production incidents, compliance/PII, public API breakage.
 - `--hyperplan`: run a 2-round, 5-persona hostile cross-critique tournament before the Planner drafts the PRD:
@@ -38,12 +44,12 @@ Before consensus planning:
 2. Otherwise create `.omagy/context/{slug}-{YYYYMMDDTHHMMSSZ}.md` with task statement, desired outcome, known facts/evidence, constraints, unknowns, and likely touchpoints.
 3. If a deep-interview spec exists (`.omagy/specs/deep-interview-{slug}.md`), treat it as the requirements source of truth and do not re-interview.
 4. If ambiguity is still high, gather brownfield facts first (directly or via the `explore` subagent), then run `$deep-interview --quick`.
-5. If the plan depends on official docs, version-aware guidance, or external dependency behavior, run `$best-practice-research` (delegating to the `researcher` subagent) before finalizing.
-6. Treat an approved prior `$autoresearch` artifact as evidence. Do not make Autoresearch a runtime component unless the user asked for ongoing research automation.
+5. If the plan depends on official docs, version-aware guidance, or external dependency behavior, run `$deep-research --quick` (delegating to the `researcher` subagent) before finalizing.
+6. Treat an approved prior `$deep-research --loop` artifact (`.omagy/specs/autoresearch-<slug>/`) as evidence. Do not make ongoing research automation a runtime component unless the user asked for it.
 
 ## State
 
-Standalone: write `.omagy/state/ralplan-state.json` (`mode:"ralplan"`, `active:true`, `current_phase` in `planner|user-feedback|architect-review|critic-review|revise|handoff|complete`, `iteration`, `updated_at`). Inside Autopilot, store the same fields under `state.ralplan` in `autopilot-state.json` instead, and keep Autopilot's `current_phase:"ralplan"`.
+Standalone consensus mode: write `.omagy/state/ralplan-state.json` (`mode:"ralplan"`, `active:true`, `current_phase` in `planner|user-feedback|architect-review|critic-review|revise|handoff|complete`, `iteration`, `updated_at`). Standalone lightweight mode (`--light` / `--interview` / `--review`): write `.omagy/state/plan-state.json` (`mode:"plan"`, `active:true`, `current_phase` in `interview|drafting|review`) and terminalize it when the plan or review is delivered. Inside Autopilot, store the consensus fields under `state.ralplan` in `autopilot-state.json` instead, and keep Autopilot's `current_phase:"ralplan"`.
 
 ## Consensus workflow
 
@@ -99,7 +105,7 @@ Existing `prd-*.md` / `test-spec-*.md` files alone are never consensus evidence 
 When the handoff permits execution, suggest the following, recording the chosen lane in the handoff:
 - `$ultragoal`: the default durable goal-mode follow-up.
 - `$team`: coordinated parallel implementation, with Ultragoal owning the ledger.
-- `$autoresearch`: when the plan centers on a research question with an evaluator.
+- `$deep-research --loop`: when the plan centers on a research question with an evaluator.
 - `$performance-goal`: when the plan centers on measurable performance.
 
 For team-worthy plans, include explicit staffing: lanes, role per lane (`executor`, `test-engineer`, `designer`, ...), owned files per lane, and verification responsibilities.

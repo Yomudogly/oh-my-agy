@@ -17,7 +17,7 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 <Do_Not_Use_When>
 - The request already has concrete file/symbol targets and clear acceptance criteria.
 - The user explicitly asks to skip planning/interview and execute immediately.
-- The user only wants lightweight brainstorming (use `$plan`).
+- The user only wants lightweight scoping or planning (use `$ralplan --light`).
 - A complete PRD/plan already exists and execution should start.
 </Do_Not_Use_When>
 
@@ -26,7 +26,7 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
 - **Standard (`--standard`, default)**: full requirement interview; threshold `<= 0.20`; max 12 rounds.
 - **Deep (`--deep`)**: high-rigor exploration; threshold `<= 0.15`; max 20 rounds.
 - **Ideate (`--ideate`, profile or modifier)**: pre-Phase-2 divergent/convergent concept shaping (`How Might We` reframing, `5–8` variations across 7 lenses, `Painkiller vs Vitamin` + 6-Tier Differentiation, `Must/Should/Might Be True` audit) saved to `.omagy/artifacts/ideas/{slug}.md` with a single-answer `ask_question` bridge into Phase 2 Socratic convergence; see [ideation-lenses.md](./references/ideation-lenses.md#ideation-lenses-and-concept-shaping).
-- **Autoresearch (`--autoresearch`)**: Standard rigor, specialized for `$autoresearch` mission readiness (see below).
+- **Autoresearch (`--autoresearch`)**: Standard rigor, specialized for `$deep-research --loop` mission readiness (see below).
 
 `max rounds` is a hard cap, not a target. Do not continue only to reach a round count. If no flag is given, use Standard. Optional per-repo overrides may live in `.omagy/config.json` under `deepInterview` (`defaultProfile`, `quickThreshold`, `standardThreshold`, `deepThreshold`, `quickMaxRounds`, `standardMaxRounds`, `deepMaxRounds`, `enableChallengeModes`). Ignore a malformed config. Explicit flags win.
 </Depth_Profiles>
@@ -51,7 +51,7 @@ Deep Interview is an intent-first Socratic clarification loop that runs before p
   - **Filter 2 (Unresolvable by Repo/Docs)**: Can this be answered by inspecting the repo or official docs? If yes, inspect—do not ask.
   - **Owner-Decision Survival**: Unless the user explicitly asked for a deep Socratic grilling ("interview me", "ask me everything"), ask only decisions that are irreversible, destructive, spend-bearing, scope-defining, or change a public/external contract. For reversible engineering defaults, propose the recommended default and record it under `[adopted-default]` if the user says "you decide" / "use best practices".
   - **Open "Why" First, Outcome-vs-How Attribution & Anti-Goals**: when the user hasn't stated *why* they want something, ask an open question first without steering option menus (`ask_question` with concrete choices is used once intent/"why" is known and a named fork exists). Process steps (where files go, doing recon, writing docs) are agent calls stated as proposals rather than questions. Separate **outcome-talk** from **how-talk**: if the user only described desired outcomes, any implementation/`how` choices proposed by the agent must be tagged `[adopted-default]` (never `[from-user]`). Capture explicit **anti-goals** (*"what would make this a failure even if it technically works"*) alongside `Non-goals`, and play back multi-part design understanding in incremental 200–300 word chunks. When nothing material is open on the first turn, present a short design/spec for approval immediately.
-- When ambiguity depends on current external best practices or version-aware behavior, use `$best-practice-research` before crystallizing.
+- When ambiguity depends on current external best practices or version-aware behavior, use `$deep-research --quick` before crystallizing.
 - Transcript/spec labels:
   - `[from-code][auto-confirmed]`: exact, high-confidence codebase facts with no prescription attached. Record them as context, not interview rounds.
   - `[from-code]`: inferred or pattern-based findings that need a confirmation-style round.
@@ -168,7 +168,7 @@ Present handoff options with `ask_question` (single-answer, recommended option f
 4. **`$team`**: coordinated parallel execution against the shared spec.
 5. **Refine further**: continue the interview loop.
 
-Context-sensitive goal-mode suggestions: `$autoresearch` for research projects, `$performance-goal` for measurable optimization work.
+Context-sensitive goal-mode suggestions: `$deep-research --loop` for validator-gated research projects, `$performance-goal` for measurable optimization work.
 
 Optional stride contract: when the downstream workflow needs an explicit stop condition, store it as structured data under `handoff_artifacts.deep_interview.execution_contract` in Autopilot state, e.g. `{"version":1,"execution_stride":"task|deliverable|milestone","selected_by":"user","completion_unit":"...","stop_condition":"..."}`. Do not infer stride from task length.
 

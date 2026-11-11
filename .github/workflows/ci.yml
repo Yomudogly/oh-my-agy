@@ -46,7 +46,7 @@ jobs:
 
       - name: Run skill routing evaluation ratchet
         shell: bash
-        run: sh ./hooks/run.sh skill-eval --min-rank1 90
+        run: sh ./hooks/run.sh skill-eval --min-rank1 95
 
       - name: Run HUD sidecar selftest
         shell: bash

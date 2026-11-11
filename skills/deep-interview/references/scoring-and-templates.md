@@ -117,4 +117,4 @@ When `--autoresearch` is active:
   - `derived numbers`: `allowed` or `none` (when `none`, only direct measured/quoted figures are permitted).
 - Launch bundle under `.omagy/specs/autoresearch-{slug}/`: `mission.md`, `sandbox.md`, `result.json` (`topic`, `evaluatorCommand`, `keepPolicy`, `slug`, `fidelity`, `launchReady`, `blockedReasons`).
 - Mark the draft **not launch-ready** while the evaluator command contains placeholders (`<...>`, `TODO`, `TBD`, `REPLACE_ME`, `CHANGEME`, `your-command-here`) or any required `## Fidelity` field is undecided.
-- After generating artifacts, offer `refine further` vs `launch` via `ask_question`. Hand off to `$autoresearch` only after explicit confirmation.
+- After generating artifacts, offer `refine further` vs `launch` via `ask_question`. Hand off to `$deep-research --loop` only after explicit confirmation.

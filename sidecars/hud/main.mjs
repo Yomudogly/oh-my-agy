@@ -71,15 +71,9 @@ const SKILL_GUIDE_META = {
   },
   ralplan: {
     category: 'Orchestration & Planning',
-    flags: ['--interactive', '--deliberate', '--hyperplan', '--advisory'],
+    flags: ['--interactive', '--deliberate', '--hyperplan', '--advisory', '--light', '--interview', '--review'],
     quickStart: '/ralplan --deliberate "redesign the token refresh pipeline"',
-    howToUse: 'Generates a PRD + test spec in .omagy/plans/ and runs sequential Architect then Critic subagent consensus reviews.',
-  },
-  plan: {
-    category: 'Orchestration & Planning',
-    flags: ['--interview', '--direct', '--review'],
-    quickStart: '$plan --direct "refactor the webhook retry queue"',
-    howToUse: 'Explore-first lightweight planning for bounded features when a full Socratic deep-interview is not needed.',
+    howToUse: 'Generates a PRD + test spec in .omagy/plans/ with sequential Architect then Critic consensus reviews, or scopes bounded features via --light, --interview, and --review.',
   },
   ultragoal: {
     category: 'Execution & Teams',
@@ -99,29 +93,17 @@ const SKILL_GUIDE_META = {
     quickStart: '/performance-goal reduce cold-start latency by 25% using npm run bench',
     howToUse: 'Evaluator-gated optimization loop that records baseline and small reversible patch checkpoints under .omagy/goals/performance/.',
   },
-  autoresearch: {
-    category: 'Execution & Teams',
-    flags: [],
-    quickStart: '/autoresearch run the mission in .omagy/specs/autoresearch-cache/',
-    howToUse: 'Validator-gated research loop that continues until a validator script or architect review passes.',
-  },
   'deep-research': {
     category: 'Research & Analysis',
-    flags: ['--technical', '--business', '--idea', '--implementation'],
+    flags: ['--technical', '--business', '--idea', '--implementation', '--quick', '--loop'],
     quickStart: '/deep-research --technical "HNSW vs DiskANN vector indexing tradeoffs at 50M vectors"',
-    howToUse: 'Runs a 5-phase investigation (Boolean query matrix, parallel subagents, Tier A-E sources with [VERIFIED]/[DERIVED]/[ASSUMED] tags, and >=85 scorecard audit) into .omagy/artifacts/research/.',
+    howToUse: 'Runs a 5-phase investigation into .omagy/artifacts/research/, fast official-docs lookups (--quick), or validator-gated research loops (--loop) using .omagy/state/autoresearch-state.json.',
   },
   analyze: {
     category: 'Research & Analysis',
     flags: ['--audit'],
     quickStart: '/analyze why the session middleware drops cookies on redirect',
     howToUse: 'Read-only cross-file repository analysis with 6-tier evidence ranking, competing hypothesis tracing, Intent-vs-Reality diffs, and --audit whole-repo quality/lean audits.',
-  },
-  'best-practice-research': {
-    category: 'Research & Analysis',
-    flags: [],
-    quickStart: '/best-practice-research current Next.js App Router caching and revalidation rules',
-    howToUse: 'Fast, read-only official-documentation and upstream version check for an already-chosen technology.',
   },
   ask: {
     category: 'Research & Analysis',
@@ -153,17 +135,11 @@ const SKILL_GUIDE_META = {
     quickStart: '/pr draft a pull request body for this branch',
     howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail, runs pre-ship readiness gates (--ship), and triages/watches open PRs (--watch) across CI, review threads, and merge state.',
   },
-  design: {
-    category: 'Design & Prototyping',
-    flags: [],
-    quickStart: '/design create DESIGN.md for our developer dashboard',
-    howToUse: 'Creates or refreshes repo-local DESIGN.md with typography, color tokens, layout scroll-owner rules, and the Impeccable Craft Floor.',
-  },
   'visual-ralph': {
     category: 'Design & Prototyping',
-    flags: [],
+    flags: ['--design'],
     quickStart: '/visual-ralph match the hero section to reference.png',
-    howToUse: 'Iterative frontend implementation loop driven by vision subagent verdicts and pixel/overlay comparison under .omagy/artifacts/visual-ralph/.',
+    howToUse: 'Iterative frontend implementation loop driven by vision subagent verdicts and pixel/overlay comparison under .omagy/artifacts/visual-ralph/, or DESIGN.md governance (--design).',
   },
   loft: {
     category: 'Design & Prototyping',
@@ -177,47 +153,29 @@ const SKILL_GUIDE_META = {
     quickStart: '/wiki query architecture',
     howToUse: 'Manages persistent repo knowledge in omagy_wiki/ (architecture, decisions, debugging notes, and [by:human] working agreements).',
   },
-  handoff: {
-    category: 'Knowledge, Control & Setup',
-    flags: [],
-    quickStart: '/handoff save session context before /compact',
-    howToUse: 'Writes a self-contained continuation packet to .omagy/artifacts/handoff-latest.md with state pointers, verified work, and a copy-paste resume prompt.',
-  },
   hud: {
     category: 'Knowledge, Control & Setup',
-    flags: ['--preset=minimal', '--preset=focused', '--preset=full'],
+    flags: ['--preset=minimal', '--preset=focused', '--preset=full', '--handoff'],
     quickStart: '/hud --preset=full',
-    howToUse: 'Renders a read-only chat status table of active .omagy/ modes, Ultragoal progress, and team boards, plus a link to this Aux Pane HUD.',
+    howToUse: 'Renders a read-only chat status table of active .omagy/ modes, Ultragoal progress, and team boards, or writes a session continuation packet to .omagy/artifacts/handoff-latest.md (--handoff).',
   },
   cancel: {
     category: 'Knowledge, Control & Setup',
-    flags: ['--force', '--all'],
+    flags: ['--force'],
     quickStart: '/cancel autopilot',
     howToUse: 'Cleanly terminates active workflow modes, preserves unmerged subagent worktrees, and marks state files cancelled.',
   },
   doctor: {
     category: 'Knowledge, Control & Setup',
-    flags: ['--session', '--session-compare', '--export'],
+    flags: ['--setup', '--notifications', '--init-deep', '--session', '--session-compare', '--session-scan', '--export'],
     quickStart: '/doctor',
-    howToUse: 'Audits plugin manifests, SDO skill compliance, hook selftests, stale states, 7-dimension session transcript forensics (--session), and 2-session regression comparison (--session-compare).',
+    howToUse: 'Audits plugin manifests, SDO skill compliance, hook selftests, and stale states; manages setup/AGENTS.md (--setup, --init-deep), stop/idle notifications in .omagy/notifications.json (--notifications), and session forensics (--session, --session-compare, --session-scan).',
   },
   skill: {
     category: 'Knowledge, Control & Setup',
     flags: ['list', 'add', 'edit', 'remove', 'scan', 'test', 'eval'],
     quickStart: '/skill test deep-research',
     howToUse: 'Creates, validates, evaluates routing accuracy (eval), and pressure-tests Antigravity skills (RED -> GREEN -> REFACTOR behavioral subagent evaluation).',
-  },
-  'omagy-setup': {
-    category: 'Knowledge, Control & Setup',
-    flags: [],
-    quickStart: '/omagy-setup',
-    howToUse: 'Installs or updates oh-my-agy in user or workspace scope, configures .gitignore, and bootstraps project AGENTS.md.',
-  },
-  'configure-notifications': {
-    category: 'Knowledge, Control & Setup',
-    flags: [],
-    quickStart: '/configure-notifications setup macOS notification on stop',
-    howToUse: 'Configures stop/idle webhook or local command notifications in .omagy/config.json.',
   },
 };
 
@@ -336,7 +294,7 @@ const WORKFLOW_BLUEPRINTS = [
   },
   {
     id: 'ralplan',
-    title: 'Multi-Agent Consensus Planning (/ralplan & $plan)',
+    title: 'Multi-Agent Consensus Planning (/ralplan & --light)',
     modeKey: 'ralplan',
     stages: ['Optional --hyperplan (5 Personas)', 'Planner (PRD + Test Spec)', 'Architect Review (Steelman + ADR)', 'Critic Gate (APPROVE / ITERATE)'],
     whenToUse: 'When architecture, cross-module interfaces, or silent edge cases need independent Architect and Critic review before implementation begins.',
@@ -585,11 +543,11 @@ function getCachedSkillEval(pluginRoot = PLUGIN_ROOT) {
   if (skillEvalCache.value && skillEvalCache.key === sig) {
     return skillEvalCache.value;
   }
-  const evalRes = evaluateSkillRouting(pluginRoot, { minRank1: 90 });
+  const evalRes = evaluateSkillRouting(pluginRoot, { minRank1: 95 });
   const value = {
     ok: Boolean(evalRes.ok),
     rank1Pct: Number(evalRes.rank1Pct || 0),
-    minRank1: Number(evalRes.minRank1 ?? 90),
+    minRank1: Number(evalRes.minRank1 ?? 95),
     collisionErrors: evalRes.collisionErrors.length,
     negativeSurvivalPct: Number(evalRes.negativeSurvivalPct || 0),
   };
@@ -749,11 +707,16 @@ export function buildPluginCatalog(pluginRoot = PLUGIN_ROOT, activeModes = []) {
     }
   }
 
-  const workflows = WORKFLOW_BLUEPRINTS.map((wf) => ({
-    ...wf,
-    active: activeByMode.has(wf.modeKey),
-    currentPhase: activeByMode.get(wf.modeKey) || null,
-  }));
+  const workflows = WORKFLOW_BLUEPRINTS.map((wf) => {
+    const altPhase = wf.modeKey === 'ralplan'
+      ? activeByMode.get('plan')
+      : (wf.modeKey === 'deep-research' ? activeByMode.get('autoresearch') : null);
+    return {
+      ...wf,
+      active: activeByMode.has(wf.modeKey) || Boolean(altPhase),
+      currentPhase: activeByMode.get(wf.modeKey) || altPhase || null,
+    };
+  });
 
   return { skills, subagents, workflows };
 }
@@ -1239,7 +1202,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
         for (const name of fs.readdirSync(researchDir)) {
           if (!name.endsWith('.md')) continue;
           const fullPath = path.join(researchDir, name);
-          const text = readTextSafe(fullPath, 32 * 1024);
+          const text = readTextSafe(fullPath, 64 * 1024);
           if (!text) continue;
           const titleMatch = /^#\s+([^\r\n]+)/m.exec(text);
           const lensMatch = /Lens(?:\(es\))?:\**\s*`?([a-zA-Z0-9_, /|-]+)`?/i.exec(text);
@@ -2880,14 +2843,14 @@ async function runSelftest() {
       && !HUD_HTML.includes('copySubagentFromInput')
       && snap.statusLine.includes('autopilot:ultragoal')
       && snap.statusLine.includes('ultragoal:1/1')
-      && snap.catalog?.skills?.length === 27
+      && snap.catalog?.skills?.length === 20
       && Boolean(deepInterviewSkill && deepInterviewSkill.flags.includes('--ideate'))
-      && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.quickStart.includes('/deep-research'))
+      && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.flags.includes('--quick') && deepResearchSkill.flags.includes('--loop') && deepResearchSkill.quickStart.includes('/deep-research'))
       && Boolean(analyzeSkill && analyzeSkill.flags.includes('--audit'))
       && Boolean(askSkill && askSkill.flags.includes('--doubt'))
       && Boolean(codeReviewSkill && codeReviewSkill.flags.includes('--audit') && codeReviewSkill.flags.includes('--ship'))
       && Boolean(prSkill && prSkill.flags.includes('--watch') && prSkill.flags.includes('--ship'))
-      && Boolean(doctorSkill && doctorSkill.flags.includes('--session-compare'))
+      && Boolean(doctorSkill && doctorSkill.flags.includes('--setup') && doctorSkill.flags.includes('--notifications') && doctorSkill.flags.includes('--session-compare'))
       && Boolean(skillSkill && skillSkill.flags.includes('eval'))
       && snap.modes.every((m) => typeof m.awaitingConfirmation === 'boolean')
       && HUD_HTML.includes('WAITING CONFIRMATION')
@@ -2896,7 +2859,7 @@ async function runSelftest() {
       && snap.codeHealth?.debtItems?.[0]?.upgrade === 'upgrade to streaming parser'
       && Boolean(fg && typeof fg.deletedTests === 'number' && typeof fg.removedAssertions === 'number' && typeof fg.untrackedBlockers === 'number' && typeof fg.suppressions === 'number' && typeof fg.emptyCatches === 'number' && typeof fg.protectedBlocksModified === 'number' && typeof fg.total === 'number')
       && floorCacheOk
-      && Boolean(se && se.ok === true && se.rank1Pct >= 90 && se.minRank1 === 90 && se.collisionErrors === 0 && se.negativeSurvivalPct === 100)
+      && Boolean(se && se.ok === true && se.rank1Pct >= 95 && se.minRank1 === 95 && se.collisionErrors === 0 && se.negativeSurvivalPct === 100)
       && snap.catalog?.subagents?.length === 14
       && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
       && Boolean(architectAgent && architectAgent.cliModel === 'pro')

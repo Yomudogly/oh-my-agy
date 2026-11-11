@@ -1,6 +1,6 @@
 ---
 name: hud
-description: "[oh-my-agy] Show an on-demand status board of active oh-my-agy workflows (autopilot phase, ultragoal progress, team tasks, QA cycle) from .omagy/ state. Use for $hud, 'what modes are active', 'workflow status', or before resuming work."
+description: "[oh-my-agy] Show an on-demand status board of active oh-my-agy workflows (autopilot phase, ultragoal progress, team tasks, QA cycle) from .omagy/ state, or create a structured, self-contained session handoff artifact under .omagy/artifacts/handoff-<slug>-<UTC>.md (--handoff) so work resumes cleanly after /compact or in a fresh conversation. Use for $hud, 'what modes are active', 'workflow status', 'create a handoff', 'save context for next session', or before context compaction."
 ---
 
 # HUD (Status Board)
@@ -49,3 +49,47 @@ Flag problems:
 If nothing is active, print `[OMA] No active modes` and suggest `$autopilot` or `$ultragoal`.
 
 For a live view, the user can ask you to `schedule` a recurring refresh (e.g. every 5 minutes while a long run is active).
+
+## Structured Session Handoff (`$hud --handoff`)
+
+While default `$hud` status rendering is strictly observational, explicit `$hud --handoff` writes a self-contained continuation artifact before `/compact` or switching to a fresh conversation:
+
+1. **Inspect active state & git status** (redacting any secrets via `redactSecrets` or running `sh <plugin>/hooks/run.sh handoff` when available):
+   - Active state files in `.omagy/state/` and `.omagy/state/sessions/<conversationId>/`.
+   - `.omagy/ultragoal/goals.json` and the tail of `.omagy/ultragoal/ledger.jsonl` if present.
+   - `git status --short` and `git diff --stat` to capture modified and untracked files.
+2. **Write the handoff artifact**:
+   - Derive `<slug>` and UTC timestamp (`YYYYMMDDTHHMMSSZ`), write `.omagy/artifacts/handoff-<slug>-<UTC>.md`, and update `.omagy/artifacts/handoff-latest.md`:
+
+```markdown
+# Session Handoff: <title>
+
+- **Created**: `<ISO UTC>`
+- **Conversation ID**: `<conversationId>`
+- **Active Mode / Phase**: `<mode> (<current_phase>) | none`
+- **Branch / Commit**: `<branch> @ <short-sha>`
+
+## 1. Objective & Current Status
+<1-3 sentences stating the target outcome and what percentage/stage is complete>
+
+## 2. Completed Work & Verification Evidence
+- `<file:line>` — <change summary> (Verified by: `<command>` -> exit `<code / output>`)
+
+## 3. Active Durable State & Artifacts
+- State file(s): `.omagy/state/...`
+- Plan / Spec: `.omagy/plans/...` or `.omagy/specs/...`
+- Ultragoal ledger: `.omagy/ultragoal/goals.json` (`<completed>/<total>` goals complete)
+- Working agreements / Wiki updates: `omagy_wiki/...`
+
+## 4. Key Decisions & Adopted Defaults
+- `[from-user]` / `[adopted-default]`: <decision + 1-line rationale>
+
+## 5. Open Blockers, Dirty Files & Residual Risks
+- Uncommitted files: `<list from git status>`
+- Open blockers / next discriminating probe: `<none or exact details>`
+
+## 6. Exact Resume Prompt (Copy-Paste into Next Session)
+> Read `.omagy/artifacts/handoff-latest.md` and resume from `<exact next step or $skill command>`.
+```
+
+3. **Report**: output the clickable link to `.omagy/artifacts/handoff-<slug>-<UTC>.md`, display the **Exact Resume Prompt**, and remind the user they can now run `/compact` or open a new session safely.

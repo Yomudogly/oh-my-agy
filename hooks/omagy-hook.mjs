@@ -36,15 +36,14 @@ export function hardenWindowsExeSearch() {
 hardenWindowsExeSearch();
 
 export const SKILLS = [
-  'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'autoresearch', 'best-practice-research',
-  'cancel', 'code-review', 'configure-notifications', 'deep-interview', 'deep-research', 'design',
-  'doctor', 'handoff', 'hud', 'loft', 'omagy-setup', 'performance-goal', 'plan', 'pr', 'ralplan',
-  'skill', 'team', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
+  'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'cancel', 'code-review',
+  'deep-interview', 'deep-research', 'doctor', 'hud', 'loft', 'performance-goal',
+  'pr', 'ralplan', 'skill', 'team', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
 ];
 // Antigravity built-in slash commands: `/name` belongs to Antigravity, only `$name` routes to us.
 const AGY_SLASH = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork', 'teamwork-preview', 'learn', 'boost', 'plugin', 'automation']);
-const CONTINUATION_MODES = ['autopilot', 'ultragoal', 'ultraqa', 'autoresearch', 'performance-goal'];
-const PLANNING_MODES = ['deep-interview', 'ralplan', 'plan'];
+export const CONTINUATION_MODES = ['autopilot', 'ultragoal', 'ultraqa', 'autoresearch', 'performance-goal'];
+export const PLANNING_MODES = ['deep-interview', 'ralplan', 'plan'];
 const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
 // Antigravity passes "NO_TOOL_CALL" on normal turn completion (ExecutorTerminationReason);
 // also accept "model_stop" and "" for compatibility and offline tests.
@@ -725,11 +724,25 @@ export function validateTeamTasks(cwd, teamName) {
 
 // ---------- configurable custom quality gates ----------
 const QUALITY_GATE_STAGES = new Set(['deep-interview', 'ralplan', 'code-review']);
-const RESERVED_GATE_SKILLS = new Set([
+export const RESERVED_GATE_SKILLS = new Set([
   'deep-interview', 'ralplan', 'code-review', 'ai-slop-cleaner', 'autopilot',
   'ultragoal', 'team', 'plan', 'ultraqa', 'cancel', 'verification',
 ]);
-const SUNSET_GATE_SKILLS = new Set(['ralph', 'ultrawork', 'pipeline', 'ecomode', 'swarm']);
+export const SUNSET_GATE_SKILLS = new Set([
+  'ralph', 'ultrawork', 'pipeline', 'ecomode', 'swarm',
+  'omagy-setup', 'configure-notifications', 'best-practice-research',
+  'autoresearch', 'handoff', 'plan', 'design',
+]);
+const SUNSET_GATE_HINTS = {
+  'omagy-setup': 'Use $doctor --setup instead.',
+  'configure-notifications': 'Use $doctor --notifications instead.',
+  'best-practice-research': 'Use $deep-research --quick instead.',
+  autoresearch: 'Use $deep-research --loop instead.',
+  handoff: 'Use $hud --handoff instead.',
+  plan: 'Use $ralplan --light instead.',
+  design: 'Use $visual-ralph --design instead.',
+  swarm: 'Legacy $swarm is unsupported; use $team instead.',
+};
 const VALID_GATE_MODELS = new Set(['inherit', 'flash', 'pro']);
 export function validateQualityGates(cwd, requestedStage = '') {
   const rawCwd = String(cwd || '').trim();
@@ -783,11 +796,14 @@ export function validateQualityGates(cwd, requestedStage = '') {
         continue;
       }
       if (RESERVED_GATE_SKILLS.has(normalized)) {
-        errors.push(`Workflow-controller skill '${normalized}' is reserved and cannot be configured as a quality gate for stage '${stage}'.`);
+        const hint = SUNSET_GATE_HINTS[normalized] ? ` ${SUNSET_GATE_HINTS[normalized]}` : '';
+        errors.push(`Workflow-controller skill '${normalized}' is reserved and cannot be configured as a quality gate for stage '${stage}'.${hint}`);
         continue;
       }
       if (SUNSET_GATE_SKILLS.has(normalized)) {
-        errors.push(`Sunset skill '${normalized}' cannot be configured as a quality gate for stage '${stage}'.`);
+        const label = normalized === 'swarm' ? '$swarm' : normalized;
+        const hint = SUNSET_GATE_HINTS[normalized] ? ` ${SUNSET_GATE_HINTS[normalized]}` : '';
+        errors.push(`Sunset skill '${label}' cannot be configured as a quality gate for stage '${stage}'.${hint}`);
         continue;
       }
       if (seenInStage.has(normalized)) {

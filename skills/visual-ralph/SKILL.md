@@ -1,25 +1,35 @@
 ---
 name: visual-ralph
-description: "[oh-my-agy] Measured frontend implementation against an approved visual reference (generated mockup, static image, or live URL) via $ultragoal, with a vision verdict before every edit, pixel-diff evidence, and a reusable design system. Use when a UI must be built or restyled to match a visual target, including URL cloning."
+description: "[oh-my-agy] Measured frontend implementation against an approved visual reference (generated mockup, static image, or live URL) via $ultragoal with a vision verdict before every edit and pixel-diff evidence, or repo-local DESIGN.md design-system authoring and refresh (--design) as the durable source of truth for UI, UX, typography, color tokens, and layout rules. Use when a UI must be built or restyled to match a visual target, when cloning a URL, or when creating or refreshing DESIGN.md before frontend implementation."
 ---
 
-# Visual Ralph Skill
+# Visual Ralph & Design System Skill
 
-Use `$visual-ralph` for measured frontend implementation from an approved generated reference, static image, or live-URL baseline. The loop is:
+Use `$visual-ralph` for measured frontend implementation from an approved generated reference, static image, or live-URL baseline, and `$visual-ralph --design` to create, refresh, or audit the repository's durable `DESIGN.md` design-system contract.
 
-`description / URL -> approved reference -> $ultragoal implementation -> Visual Ralph verdict + pixel diff -> reusable design system`.
-
-For URL cloning, this skill owns the migrated `$web-clone` use case. Record the URL, viewport, fidelity, and interaction notes here.
+- **Visual-reference implementation (default `$visual-ralph`)**: `description / URL -> approved reference -> $ultragoal implementation -> Visual Ralph verdict + pixel diff -> reusable design system` (including migrated `$web-clone` URL cloning).
+- **Design-system governance (`$visual-ralph --design`)**: discover product/UI evidence, close missing UX/token context gaps, and create or refresh root `DESIGN.md` (`Source of truth`, `Brand`, `Product goals`, `Personas and jobs`, `Information architecture`, `Design principles`, `Visual language`, `Components`, `Accessibility`, `Responsive behavior`, `Interaction states`, `Content voice`, `Implementation constraints`, `Open questions`).
 
 Shared operating, delegation, state, and verification invariants live in the oh-my-agy rules (`rules/AGENTS.md`).
 
 ## Use when
 
-- The user wants a web/app UI built or restyled against a visual target.
-- A live URL or generated mockup needs measured implementation and pixel-level iteration.
+- The user wants a web/app UI built or restyled against a visual target or live URL.
+- Product, UX, typography, color tokens, or frontend decisions need a repo-local `DESIGN.md` source of truth (`--design`).
 - The result must leave reusable repo-native tokens/components, not just a matching screenshot.
 
-Do not use it for a durable `DESIGN.md` brief (`$design`), non-visual backend work, comparison-only fixes that can be done directly, or deterministic SVG/code-native assets.
+Do not use it for non-visual backend work, comparison-only fixes that can be done directly, deterministic SVG/code-native assets, or throwaway layout-fork exploration (use `$loft`).
+
+## Design-System Governance (`$visual-ralph --design`)
+
+When invoked with `--design` (or before visual implementation when a design brief is requested):
+1. **Discover local evidence**: inspect existing `DESIGN.md`, frontend routes/components/stories, theme/token files, screenshots, and accessibility/responsive constraints. Separate observations from inferences.
+2. **Interview only missing context**: ask concise questions only for gaps the repository cannot resolve (users/jobs, brand personality and forbidden aesthetics, primary flows, accessibility/device targets). Record explicit assumptions and `[ ]` open questions rather than blocking when answers are unavailable.
+3. **Author or refresh `DESIGN.md`**:
+   - Enforce per-screen **Brief & Layout Contract**: one primary action per screen (peers differ by style, never size); priorities 1–3 in reading order; explicit **Left out on purpose** exclusions; **Required content** listed by name (`B7`); lightest native/house component before cards; and mandatory `Layout: <screen or region> - <spatial problem> -> <pattern name> (<reference>); scroll owner: <CSS selector>; anti-patterns: <what to avoid>` (`A12`).
+   - Enforce **Draft Guard & Craft Floor** (`A13`, `B8`, `E7`, `F8`, `F9`): heading steps `>=1.25x`, top space `>=1.5x` bottom, inter-group gap `>=2x` intra-group, desktop measure `65-75ch` (`>=45ch` mobile), display `<=6rem`, tracking `>=-0.04em`; themed `::selection`, `caret-color`, scrollbars, `:focus-visible`, and `tabular-nums` (`F8`); tinted secondary text on coloured surfaces (`E7`); no one-side accent stripes, `>=2px` card accent outlines, decorative state-free badges, vanity marketing stats, emoji icons, kickers above headings, stacked icon-tile card grids, or card-in-card scaffolds (`F9`).
+   - **External design reference hygiene**: fetch only published agent surfaces (`llms.txt`, `llms-full.txt`, same-origin pages linked from that site's `llms.txt`, registry JSON, or `.md` docs); never follow off-site links from `llms.txt`, and `robots.txt` disallow rules always take precedence.
+   - Validate `DESIGN.md` when `validate-design-md` is used, and keep `DESIGN.md` governance distinct from visual-verdict implementation handoffs.
 
 ## Workflow
 

@@ -61,25 +61,25 @@ const SKILL_QUERY_ALIASES = {
   stop: ['cancel', 'abort'],
   abort: ['cancel'],
   merge: ['review', 'approve', 'verdict'],
-  slack: ['notifications', 'webhook', 'notify'],
-  discord: ['notifications', 'webhook', 'notify'],
-  telegram: ['notifications', 'webhook', 'notify'],
+  slack: ['doctor', 'notifications', 'webhook', 'notify'],
+  discord: ['doctor', 'notifications', 'webhook', 'notify'],
+  telegram: ['doctor', 'notifications', 'webhook', 'notify'],
   ambiguous: ['interview', 'socratic', 'ambiguity'],
   requirements: ['interview', 'ambiguity', 'criteria'],
   landscape: ['multidisciplinary', 'research', 'market'],
   market: ['business', 'research', 'landscape'],
-  palette: ['design', 'ui', 'ux', 'frontend'],
+  palette: ['visual', 'ralph', 'tokens', 'ui', 'ux', 'frontend'],
   broken: ['doctor', 'diagnose', 'issues', 'hooks'],
   troubleshoot: ['doctor', 'diagnose', 'issues'],
-  compact: ['handoff', 'compaction', 'resume', 'session'],
+  compact: ['hud', 'compaction', 'resume', 'session'],
   dashboard: ['hud', 'status', 'board'],
   prototype: ['loft', 'variants', 'throwaway', 'switcher'],
-  install: ['setup', 'enable', 'uninstall', 'bootstrap'],
-  uninstall: ['setup', 'install'],
+  install: ['doctor', 'setup', 'enable', 'uninstall', 'bootstrap'],
+  uninstall: ['doctor', 'setup', 'install'],
   latency: ['performance', 'speed', 'throughput', 'benchmark', 'optimize'],
   slow: ['performance', 'speed', 'latency', 'optimize'],
   memory: ['performance', 'benchmark', 'optimize'],
-  lightweight: ['plan', 'scoping'],
+  lightweight: ['ralplan', 'light', 'scoping'],
   pull: ['pr', 'reversibility', 'paper', 'trail'],
   consensus: ['ralplan', 'architectural', 'critic', 'hyperplan'],
   parallel: ['team', 'workers', 'subagent', 'board'],
@@ -447,7 +447,7 @@ function cosineMaps(vecA, vecB) {
 }
 
 export function evaluateSkillRouting(pluginRoot, options = {}) {
-  const minRank1 = Number(options.minRank1 ?? 90);
+  const minRank1 = Number(options.minRank1 ?? 95);
   const minPositive = Number(options.minPositive ?? 3);
   const minNegative = Number(options.minNegative ?? 2);
   const rootDir = path.resolve(String(pluginRoot || process.cwd()));
@@ -1270,7 +1270,7 @@ export function handleColdCliCommand(event, rawArgs = [], defaultRoot = '') {
   if (event === 'skill-eval') {
     const jsonMode = filteredArgs.includes('--json');
     const argBase = dashC ? path.resolve(dashC) : process.cwd();
-    let minRank1 = 90;
+    let minRank1 = 95;
     let casesPath = '';
     const pos = [];
     for (let i = 0; i < filteredArgs.length; i += 1) {

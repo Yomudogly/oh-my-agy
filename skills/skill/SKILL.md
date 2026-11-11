@@ -44,7 +44,7 @@ Name collisions resolve by priority: project > declared > user (global) > built-
 | `$skill scan` | Run setup's inventory without the interactive menu. |
 | `$skill extract [name]` | Extract a repeatable workflow discovered in the current session into a project/user `SKILL.md` after passing the 3-question Skillify quality gate: (1) *"Could someone Google this in 5 minutes?"* -> No; (2) *"Is this specific to this codebase, project, or workflow?"* -> Yes; (3) *"Did this take real debugging, design, or operational effort to discover?"* -> Yes. |
 | `$skill test <name>` | Run the behavioral pressure-testing loop (`RED -> GREEN -> REFACTOR`) with a 3-pressure subagent scenario and 5-rep micro-tests as defined in [testing-and-sdo.md](./references/testing-and-sdo.md), saving evidence to `.omagy/artifacts/skill-test-<name>-<UTC>.md`. |
-| `$skill eval` | Run the deterministic TF-IDF trigger routing, pairwise cosine-collision (`>= 0.75` error), and negative owner-survival evaluator via `sh <plugin>/hooks/run.sh skill-eval --min-rank1 90` (supports `--json` and `--cases <file>`; see [testing-and-sdo.md](./references/testing-and-sdo.md#corpus-routing-evaluation-skill-eval)). |
+| `$skill eval` | Run the deterministic TF-IDF trigger routing, pairwise cosine-collision (`>= 0.75` error), and negative owner-survival evaluator via `sh <plugin>/hooks/run.sh skill-eval --min-rank1 95` (supports `--json` and `--cases <file>`; see [testing-and-sdo.md](./references/testing-and-sdo.md#corpus-routing-evaluation-skill-eval)). |
 | `$skill validate` | Validate every skill in both roots (plus SDO frontmatter and `< 20,000`-byte checks) and report pass/fail per path. Never rewrite files. |
 
 With an argument, use direct command mode. Without one, use the guided setup menu.
@@ -86,7 +86,7 @@ Concrete invocation, edge cases, and failure recovery.
 
 Progressive disclosure: keep `SKILL.md` concise (`< 20,000` bytes). Put bulky reference material in `references/` and helper scripts in `scripts/`, and link to them relatively (`[file.md](./references/file.md)`). Match the instructional form to the failure mode (positive recipes for output-shaping skills vs gate functions + rationalization tables for discipline skills; see [testing-and-sdo.md](./references/testing-and-sdo.md)).
 - **"Write the Procedure, Not the Workaround"**: encode generalizable, repeatable procedures and invariants rather than over-specified single-runtime workarounds or fragmented multi-step diagnostic shell chains ([testing-and-sdo.md](./references/testing-and-sdo.md#write-the-procedure-not-the-workaround)).
-- **Rejected-Change Impact Ledger**: when pruning, merging, or rejecting candidate skill additions during edits or byte-budget trims, log each rejected/removed item, why it was dropped, where it is covered instead, and the regression check (`sh <plugin>/hooks/run.sh skill-eval --min-rank1 90` or `$skill test`) per [testing-and-sdo.md](./references/testing-and-sdo.md#rejected-change-impact-ledger).
+- **Rejected-Change Impact Ledger**: when pruning, merging, or rejecting candidate skill additions during edits or byte-budget trims, log each rejected/removed item, why it was dropped, where it is covered instead, and the regression check (`sh <plugin>/hooks/run.sh skill-eval --min-rank1 95` or `$skill test`) per [testing-and-sdo.md](./references/testing-and-sdo.md#rejected-change-impact-ledger).
 
 ## Validation, symlink boundary, and sync hygiene
 

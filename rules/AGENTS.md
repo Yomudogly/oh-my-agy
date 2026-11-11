@@ -51,11 +51,11 @@ Choose the lane before acting:
 - **Solo (default)** when scope is clear: `understand -> execute -> verify -> report`.
 - **`$autopilot`** for explicit hands-off delivery: supervised chain `$deep-interview -> $ralplan -> $ultragoal`. These stages are mandatory, not hints.
 - **`$deep-interview`** when intent, scope, non-goals, or decision boundaries are materially ambiguous.
-- **`$plan`** for lightweight planning without a deep interview. **`$ralplan`** for Planner -> Architect -> Critic consensus planning.
+- **`$ralplan`** for Planner -> Architect -> Critic consensus planning, or **`$ralplan --light`** for lightweight single-lane planning without a deep interview.
 - **`$ultragoal`** for durable multi-goal execution with a ledger and resume semantics.
 - **`$team`** when an approved plan needs coordinated parallel execution across multiple subagent lanes.
-- **`$code-review`**, **`$ultraqa`**, **`$deep-research`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$handoff`** as bounded helpers inside the chosen lane. They do not compete with it.
-- Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$plan --interview`.
+- **`$code-review`**, **`$ultraqa`**, **`$deep-research`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$hud --handoff`** as bounded helpers inside the chosen lane. They do not compete with it.
+- Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$ralplan --interview`.
 - `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `$swarm` are deprecated and unsupported. Do not route there.
 
 ## Role subagents
