@@ -1492,10 +1492,10 @@ export async function runSelftest() {
       if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
       if (provenanceRe.test(content)) provenanceViolations.push(relPath);
     };
-    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
+    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/ui.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
       checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
     }
-    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs']) {
+    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/ui.mjs']) {
       const coreTxt = rTxt(coreRel);
       if (retiredSubagentRe.test(coreTxt) || personaWordRe.test(coreTxt)) retiredViolations.push(coreRel);
     }
