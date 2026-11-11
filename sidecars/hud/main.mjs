@@ -72,9 +72,9 @@ const SKILL_GUIDE_META = {
   },
   ralplan: {
     category: 'Orchestration & Planning',
-    flags: ['--interactive', '--deliberate', '--hyperplan', '--advisory', '--light', '--interview', '--review'],
+    flags: ['--interactive', '--deliberate', '--hyperplan', '--advisory', '--light', '--interview', '--review', '--migrate'],
     quickStart: '/ralplan --deliberate "redesign the token refresh pipeline"',
-    howToUse: 'Generates a PRD + test spec in .omagy/plans/ with sequential Architect then Critic consensus reviews, or scopes bounded features via --light, --interview, and --review.',
+    howToUse: 'Generates a PRD + test spec in .omagy/plans/ with sequential Architect then Critic consensus reviews, or scopes bounded features and brownfield migrations via --light, --interview, --review, and --migrate.',
   },
   ultragoal: {
     category: 'Execution & Teams',
@@ -84,9 +84,9 @@ const SKILL_GUIDE_META = {
   },
   team: {
     category: 'Execution & Teams',
-    flags: [],
+    flags: ['--amend', '--arena'],
     quickStart: '/team execute the approved plan across parallel backend and frontend workers',
-    howToUse: 'Coordinates up to 6 parallel executor (or specialist) subagents on a leader-owned DAG task board (.omagy/state/team/) with verified task-<id>.json evidence.',
+    howToUse: 'Coordinates up to 6 parallel executor (or specialist) subagents on a leader-owned DAG task board (.omagy/state/team/) with verified task-<id>.json evidence, live DAG amendments (--amend), and candidate bake-offs (--arena).',
   },
   'performance-goal': {
     category: 'Execution & Teams',
@@ -102,9 +102,9 @@ const SKILL_GUIDE_META = {
   },
   analyze: {
     category: 'Research & Analysis',
-    flags: ['--audit'],
+    flags: ['--deep', '--audit', '--blast-radius', '--statechart'],
     quickStart: '/analyze why the session middleware drops cookies on redirect',
-    howToUse: 'Read-only cross-file repository analysis with 6-tier evidence ranking, competing hypothesis tracing, Intent-vs-Reality diffs, and --audit whole-repo quality/lean audits.',
+    howToUse: 'Read-only cross-file repository analysis with 6-tier evidence ranking, competing hypothesis tracing (--deep), blast-radius impact (--blast-radius), Mermaid statecharts (--statechart), and whole-repo lean audits (--audit).',
   },
   ask: {
     category: 'Research & Analysis',
@@ -114,9 +114,9 @@ const SKILL_GUIDE_META = {
   },
   'code-review': {
     category: 'Review, QA & Cleanup',
-    flags: ['--re-review', '--audit', '--ship'],
+    flags: ['--re-review', '--audit', '--ship', '--security'],
     quickStart: '/code-review the changes on my current branch',
-    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict (plus --audit or --ship pre-PR gates).',
+    howToUse: 'Pre-assembles a git review package and dispatches independent code-reviewer and architect subagents for a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict (plus --audit, --ship, or --security STRIDE/OWASP gates).',
   },
   ultraqa: {
     category: 'Review, QA & Cleanup',
@@ -144,9 +144,9 @@ const SKILL_GUIDE_META = {
   },
   loft: {
     category: 'Design & Prototyping',
-    flags: [],
+    flags: ['--arena'],
     quickStart: '/loft prototype 3 layout variants for the timeline switcher',
-    howToUse: 'Builds a throwaway prototype under .omagy/artifacts/loft/<slug>/index.html to settle a UI or pure-logic fork before production coding.',
+    howToUse: 'Builds a throwaway prototype under .omagy/artifacts/loft/<slug>/index.html to settle a UI or pure-logic fork (or runs an isolated candidate bake-off via --arena) before production coding.',
   },
   wiki: {
     category: 'Knowledge, Control & Setup',
@@ -174,9 +174,9 @@ const SKILL_GUIDE_META = {
   },
   skill: {
     category: 'Knowledge, Control & Setup',
-    flags: ['list', 'add', 'edit', 'remove', 'scan', 'test', 'eval'],
+    flags: ['list', 'add', 'edit', 'remove', 'scan', 'validate', 'test', 'eval', 'extract'],
     quickStart: '/skill test deep-research',
-    howToUse: 'Creates, validates, evaluates routing accuracy (eval), and pressure-tests Antigravity skills (RED -> GREEN -> REFACTOR behavioral subagent evaluation).',
+    howToUse: 'Creates, validates, extracts reusable skills (extract), evaluates routing accuracy (eval), and pressure-tests Antigravity skills (RED -> GREEN -> REFACTOR behavioral subagent evaluation).',
   },
 };
 

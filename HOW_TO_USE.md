@@ -130,7 +130,7 @@ Runs an **Explore-First** codebase pass, computes a weighted ambiguity score acr
   ```
 
 #### `/loft` — Shape-Before-Steel Throwaway Prototyping & `--arena` Bake-Offs
-Settles a logic or UI design fork that prose cannot resolve by building a self-contained throwaway prototype under `.omagy/artifacts/loft/<slug>/` (and persisting `loft-verdict.json`).
+Settles a logic or UI design fork that prose cannot resolve by building a self-contained throwaway prototype under `.omagy/artifacts/loft/<slug>/` (`index.html`, plus `arena-verdict.md` under `--arena`).
 - **Shapes & Flags**:
   1. **Logic Fork**: Pure zero-I/O JavaScript module (`logic.mjs`) + interactive browser harness (`index.html`).
   2. **UI Fork**: Single `index.html` rendering **3 structurally distinct variants (`A`, `B`, `C`)** behind one top switcher bar.
@@ -319,7 +319,7 @@ All-in-one operational health, setup, notification, and transcript forensics too
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density and git churn and generates non-duplicative child `AGENTS.md` files where warranted.
-  - `--notifications`: Configures stop/idle notifications in `.omagy/notifications.json` or `~/.gemini/antigravity/oh-my-agy-config.json` (macOS local, Slack, Discord, Telegram, or HTTPS webhook; `references/notifications.md`).
+  - `--notifications`: Configures stop/idle notifications in `.omagy/notifications.json` or `~/.gemini/config/oh-my-agy/notifications.json` (macOS local, Slack, Discord, Telegram, or HTTPS webhook; `references/notifications.md`).
   - `--session [conversationId|path]`: 7-dimension JSONL transcript forensics + scrubbed `--export [skeleton|evidence|full]` (`references/session-forensics.md`).
   - `--session-compare <baseline.jsonl> <candidate.jsonl>`: Privacy-safe A/B transcript regression comparison (`session-compare`, subtracting `> 30m` idle gaps).
   - `--session-scan [dirOrFile]`: Runs `hooks/run.sh session-scan` across up to 100 transcripts to report privacy-safe step totals, compactions, orphan tool calls, and top normalized failure clusters.
