@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.5.0`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.5.1`)** for Google Antigravity.
 
 ---
 
@@ -17,7 +17,7 @@ This guide covers every workflow skill, role subagent, hook, state file, CLI uti
 4. [All 14 Role Subagents & How Delegation Works](#4-all-14-role-subagents--how-delegation-works)
 5. [Durable State (`.omagy/`), Ledgers & Resuming Work](#5-durable-state-omagy-ledgers--resuming-work)
 6. [Project Wiki (`omagy_wiki/`) & Subdirectory `AGENTS.md`](#6-project-wiki-omagy_wiki--subdirectory-agentsmd)
-7. [Lifecycle Hooks & CLI Utilities (30 Total)](#7-lifecycle-hooks--cli-utilities-30-total)
+7. [Lifecycle Hooks & CLI Utilities (32 Total)](#7-lifecycle-hooks--cli-utilities-32-total)
 8. [End-to-End Recipes](#8-end-to-end-recipes)
 
 ---
@@ -295,8 +295,11 @@ Maintains durable project knowledge under `omagy_wiki/` (`index.md`, `agreements
   /wiki lint
   ```
 
-#### `/hud` — Workflow Status Board, Aux Pane UI (`sidecar://oh-my-agy/hud/`) & `--handoff`
-Prints a compact read-only dashboard of active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` agreements, and surfaces `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` to toggle the 5-tab Auxiliary Pane UI (`Overview` with `verificationFreshness` & `Floor Guard` KPIs, `Workflows`, `Skills`, `Subagents`, `Wiki`).
+#### `/hud` — Workflow Status Board, Live Aux Pane UI (`sidecar://oh-my-agy/hud/`) & `--handoff`
+Prints a compact read-only dashboard of active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` agreements, and surfaces `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` to toggle the live 5-tab Auxiliary Pane UI (`sidecars/hud/main.mjs` + `sidecars/hud/ui.mjs`):
+- **Live SSE & Stateful DOM Updates**: Streams `.omagy/` and `omagy_wiki/` changes over `GET /api/events` (`150 ms` debounce + duplicate-digest suppression + `15 s` fallback poll), preserving open `<details>`, input focus/selection, scroll positions, and the sibling `#artifact-drawer`.
+- **Slide-Over `#artifact-drawer`**: Previews symlink-safe `.omagy/{artifacts,plans,specs}` artifacts (`redactSecrets()` on `.md`/`.txt`) via a 3-mode Visual Ralph comparator (`side-by-side`, `split-slider`, `onion-skin`), an opaque-origin `srcdoc` Loft `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer">` (local `.js`/`.mjs`/`.css` & relative ES module imports bundled, active HUD theme CSS tokens injected, `--arena` `variant-a..c` + `arena-verdict.md` switcher), and an XSS-safe Markdown reader.
+- **Interactive Tabs & Shortcuts**: `Overview` quick actions (`Continue`, two-step `Cancel Mode`, `Create Handoff`, `Run /doctor`, `customization://oh-my-agy`) + surfaced `recentLedger`/Interview/Hyperplan/Artifacts/Checkpoints/Code-Health/Doctor cards, `Skills` `--flag` composer chips, `Subagents` `Model` pills (`inherit` | `flash_lite` | `flash` | `pro`), searchable `[[slug]]` Markdown `Wiki` explorer, and `/` / `1`–`5` / `Escape` shortcuts.
 - **Flags**:
   - `--handoff [slug]`: Runs `hooks/run.sh handoff` to generate secret-redacted `.omagy/artifacts/handoff-<slug>-<UTC>.md` and `.omagy/artifacts/handoff-latest.md` (with active modes, ultragoal progress & `notepad.md`, dirty worktree summary, verification status, and copy-paste **Resume Prompt**) before `/compact` or switching sessions.
 - **Examples**:
@@ -315,7 +318,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
 
 #### `/doctor` — Diagnostics, Setup, Notifications, Deep Init & Session Forensics
 All-in-one operational health, setup, notification, and transcript forensics toolkit:
-- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`85/85`), `hooks/run.sh skill-eval --min-rank1 95` (`20` skills), `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest`, hook module byte ceilings (`omagy-hook.mjs < 175 KB`, `omagy-cli.mjs < 93,734 B`, `AGENTS.md < 24 KB`, `SKILL.md < 20 KB`), 14-agent `tools:` YAML frontmatter, `plugin.json` `v0.5.0` parity, and stale/waiting `.omagy/state/` files.
+- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`87/87`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`20` skills), `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest` (`H1`–`H18`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93,734 B`, `sidecars/hud/ui.mjs < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 14-agent `tools:` YAML frontmatter, `plugin.json` `v0.5.1` parity, and stale/waiting `.omagy/state/` files.
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density and git churn and generates non-duplicative child `AGENTS.md` files where warranted.
@@ -334,13 +337,14 @@ All-in-one operational health, setup, notification, and transcript forensics too
   /doctor --session-scan ~/.gemini/antigravity/brain
   ```
 
-#### `/skill` — Manage, Validate, Evaluate (`>=95%`), Test & Extract Skills
-Lists, inspects, adds, edits, scans, validates, benchmarks, pressure-tests, or extracts reusable Antigravity skills (`SKILL.md`), enforcing **"Write the Procedure, Not the Workaround"**.
-- **Subcommands**: `list`, `info`, `search`, `add`, `edit`, `remove`, `validate`, `eval` (`hooks/run.sh skill-eval --min-rank1 95`), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing), `scan`, `sync`, `extract` (requires `>= 2` concrete validations, genericized repo-independent paths, and `T6`/`T39` compliance).
+#### `/skill` — Author, Scaffold (`init`), Validate (`validate`), Share, Evaluate (`>=95%`), Test & Extract Skills
+Self-contained skill authoring, SDO governance, team sharing (`.agents/skills.json`), routing evaluation, pressure-testing, and extraction suite (`skills/skill/SKILL.md` + `references/testing-and-sdo.md`), enforcing 3-level progressive disclosure, degrees-of-freedom calibration, anti-clutter hygiene, and **"Write the Procedure, Not the Workaround"**.
+- **Subcommands**: `list`, `info`, `search`, `init <name> [--scope project|shared|user] [--with-refs] [--with-scripts]` (`hooks/run.sh skill-init`), `add`, `edit`, `remove`, `validate [target] [--strict]` (`hooks/run.sh skill-validate`, including `.agents/skills.json` `entries`/`inherits`), `sync` (materialize `.agents/skills.json` into `.agents/skills/`), `eval` (`hooks/run.sh skill-eval --min-rank1 95`), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing), `scan`, `extract` (requires `>= 2` concrete validations, genericized repo-independent paths, and `skill-validate --strict` compliance).
 - **Examples**:
   ```text
-  /skill list
-  /skill validate
+  /skill init api-contract-audit --scope project --with-refs
+  /skill validate --strict
+  /skill sync
   /skill eval
   /skill test code-review
   /skill extract prisma-migration-check
@@ -423,9 +427,9 @@ Unlike `.omagy/` (transient workflow state), **`omagy_wiki/`** is designed to be
 
 ---
 
-## 7. Lifecycle Hooks & CLI Utilities (30 Total)
+## 7. Lifecycle Hooks & CLI Utilities (32 Total)
 
-`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 175 KB`), dynamically importing [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93,734 B`) for cold CLI evaluators and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
+`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93,734 B`) for the 13 `COLD_CLI_EVENTS` evaluators, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
 
 - **`SessionStart` & `PreInvocation` (Enabled by default)**:
   - Strips UTF-8 BOMs (`stripUtf8Bom`) and sanitizes relayed `[Message ...]` / `<SYSTEM_MESSAGE>` / `<CONTEXT_SUMMARY>` blocks (`sanitizeRelayedText`), fenced/inline code, comments, blockquotes, URLs, quotes, negations, and help queries before `/skill` / `$skill` detection.
@@ -436,10 +440,10 @@ Unlike `.omagy/` (transient workflow state), **`omagy_wiki/`** is designed to be
 - **`PreToolUse` (Opt-in in `hooks.json`)**:
   - Enforces `append-only-guard` (blocking `Overwrite: true` on non-empty `.omagy/ultragoal/ledger.jsonl` and `omagy_wiki/log.md` before planning exemptions), the planning-phase write boundary, `protected-block-guard`, `agreements-guard`, `notifications-guard`, and `write-existing-file-guard`.
 
-### Built-In Hook CLI Commands (30 Total)
+### Built-In Hook CLI Commands (32 Total)
 
 ```bash
-# 1. Run the 85-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
+# 1. Run the 87-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Evaluate TF-IDF skill routing accuracy, owner-negative survival, and cosine collisions across all 20 skills (>=95% default)
@@ -528,6 +532,12 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh session-compare baseline.json
 
 # 30. Repair [[wiki-links]] and [label](slug.md) links outside code spans on move/archive/delete (/wiki)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh wiki-repair omagy_wiki '{"moved":{"old-slug":"new-slug"},"archived":["old-arch"],"deleted":["gone"]}'
+
+# 31. Validate a SKILL.md directory, a skills/ catalog root, or .agents/skills.json under SDO & progressive-disclosure rules (/skill validate)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-validate ~/.gemini/config/plugins/oh-my-agy/skills --strict --json
+
+# 32. Scaffold an SDO-compliant skill across project (.agents/skills), shared (.agents/skills.json), or user scope (/skill init)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-init api-contract-audit --scope project --with-refs --json
 ```
 
 ---
