@@ -19,6 +19,7 @@ import {
   readJsonlRecords,
   scanShortcutDebt,
   stateRoot,
+  stripUtf8Bom,
   validateQualityGates,
 } from '../../hooks/omagy-hook.mjs';
 import {
@@ -413,12 +414,12 @@ const WORKFLOW_BLUEPRINTS = [
   },
 ];
 
-function readJsonSafe(filePath) {
+export function readJsonSafe(filePath) {
   try {
     const st = fs.lstatSync(filePath);
     if (st.isSymbolicLink() || !st.isFile()) return null;
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
+    return JSON.parse(stripUtf8Bom(fs.readFileSync(filePath, 'utf8')));
+  } catch { /* fail open: unreadable or malformed JSON */
     return null;
   }
 }
@@ -2619,9 +2620,9 @@ async function runSelftest() {
     fs.mkdirSync(path.join(ws, '.omagy', 'artifacts', 'ideas'), { recursive: true });
     fs.mkdirSync(path.join(ws, 'omagy_wiki'), { recursive: true });
 
-    fs.writeFileSync(path.join(ws, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
+    fs.writeFileSync(path.join(ws, '.omagy', 'state', 'autopilot-state.json'), `\uFEFF${JSON.stringify({
       mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 2, owner_conversation_id: 'conv-owner-1234', updated_at: new Date().toISOString(),
-    }));
+    })}`);
     fs.writeFileSync(path.join(ws, '.omagy', 'state', 'deep-interview-state.json'), JSON.stringify({
       mode: 'deep-interview',
       active: true,

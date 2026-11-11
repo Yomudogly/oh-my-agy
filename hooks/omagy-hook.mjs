@@ -49,7 +49,22 @@ const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'cancele
 // Antigravity passes "NO_TOOL_CALL" on normal turn completion (ExecutorTerminationReason);
 // also accept "model_stop" and "" for compatibility and offline tests.
 const NORMAL_STOP_REASONS = new Set(['no_tool_call', 'model_stop', '']);
-function intOr(val, fallback, min = 1) {
+export const COLD_CLI_EVENTS = new Set([
+  'floor-guard',
+  'skill-eval',
+  'quality-gate',
+  'validate-design-md',
+  'goal-done',
+  'checkpoint',
+  'handoff',
+  'lookout',
+  'plan-hash',
+  'init-deep-scan',
+  'wiki-query',
+  'wiki-lint',
+  'session-scan',
+]);
+export function intOr(val, fallback, min = 1) {
   if (typeof val === 'number') return Number.isSafeInteger(val) && val >= min ? val : fallback;
   if (typeof val !== 'string') return fallback;
   const trimmed = val.trim();
@@ -57,10 +72,10 @@ function intOr(val, fallback, min = 1) {
   const parsed = Number(trimmed);
   return Number.isSafeInteger(parsed) && parsed >= min ? parsed : fallback;
 }
-const STALE_MS = intOr(process.env.OMAGY_STALE_MS, 6 * 3600 * 1000, 1);
+export const STALE_MS = intOr(process.env.OMAGY_STALE_MS, 6 * 3600 * 1000, 1);
 const MAX_NUDGES = intOr(process.env.OMAGY_MAX_NUDGES, 2, 1);
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
-const MAX_WIKI_CONTEXT_CHARS = 3500;
+export const MAX_WIKI_CONTEXT_CHARS = 3500;
 const MAX_WIKI_CONTEXT_LINES = 60;
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_WALK_DEPTH = 8;
@@ -84,13 +99,16 @@ function runtimeDir() {
 function readStdin() {
   try { return fs.readFileSync(0, 'utf8'); } catch { return ''; }
 }
-function parseJson(text) {
-  try { const v = JSON.parse(text); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
+export function stripUtf8Bom(text) {
+  return String(text ?? '').replace(/^\uFEFF/, '');
 }
-function readJson(p) {
-  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+export function parseJson(text) {
+  try { const v = JSON.parse(stripUtf8Bom(text)); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
 }
-function writeJson(p, obj) {
+export function readJson(p) {
+  try { return JSON.parse(stripUtf8Bom(fs.readFileSync(p, 'utf8'))); } catch { return null; }
+}
+export function writeJson(p, obj) {
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
     const tmp = `${p}.${process.pid}.tmp`;
@@ -101,10 +119,10 @@ function writeJson(p, obj) {
 function safeId(v) {
   return String(v || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128);
 }
-function runtimeFile(conversationId, kind) {
+export function runtimeFile(conversationId, kind) {
   return path.join(runtimeDir(), `${safeId(conversationId)}.${kind}.json`);
 }
-function workspaceRoots(payload) {
+export function workspaceRoots(payload) {
   const list = payload.workspacePaths || payload.workspace_paths || [];
   const raw = (Array.isArray(list) ? list : [list]).filter((p) => typeof p === 'string' && p.trim());
   if (!raw.length && process.env.OMAGY_WORKSPACE) raw.push(process.env.OMAGY_WORKSPACE);
@@ -122,7 +140,7 @@ function nonPlaceholderText(value) {
   return typeof value === 'string' && value.trim().length > 0
     && !/^(?:todo|tbd|placeholder|pending|not run)[.!]?$/i.test(value.trim());
 }
-function canonicalizePath(p, depth = 0) {
+export function canonicalizePath(p, depth = 0) {
   const abs = path.resolve(String(p || ''));
   if (depth > 8) return abs;
   let cur = abs;
@@ -267,7 +285,7 @@ export function discoverOmagyScopes(root, maxDepth = 3, maxDirs = 150) {
   return scopes;
 }
 
-function omagyLogsDir(root) {
+export function omagyLogsDir(root) {
   return path.join(stateRoot(root), '.omagy', 'logs');
 }
 function readStateDir(dir, root, convId, scope = '.') {
@@ -293,7 +311,7 @@ function readStateDir(dir, root, convId, scope = '.') {
   }
   return out;
 }
-function loadModeStates(root, convId = '') {
+export function loadModeStates(root, convId = '') {
   const sRoot = stateRoot(root);
   const byMode = new Map();
   const consider = (s) => {
@@ -352,7 +370,7 @@ function isActive(s, now = Date.now()) {
   if (isAwaitingConfirmation(s)) return true;
   return now - updatedMs(s) <= STALE_MS;
 }
-function activeStates(roots, modes, convId = '') {
+export function activeStates(roots, modes, convId = '') {
   const now = Date.now();
   const seen = new Set();
   const all = [];
@@ -407,7 +425,7 @@ function filterAndRedactWikiLines(raw, maxLines, nowMs = Date.now()) {
   }
   return out;
 }
-function loadWikiSummary(roots, nowMs = Date.now()) {
+export function loadWikiSummary(roots, nowMs = Date.now()) {
   for (const rawRoot of roots) {
     const root = stateRoot(rawRoot);
     const indexPath = path.join(root, 'omagy_wiki', 'index.md');
@@ -443,7 +461,7 @@ function loadWikiSummary(roots, nowMs = Date.now()) {
 }
 
 // ---------- hierarchical subdirectory AGENTS.md discovery ----------
-function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.now()) {
+export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.now()) {
   if (!text || typeof text !== 'string' || !roots.length) return { messages: [], seen: seenList };
   const seen = new Set(Array.isArray(seenList) ? seenList : []);
   const messages = [];
@@ -527,7 +545,7 @@ export function renderLedgerCell(val) {
 }
 const NOOP_VERIFICATION_BINS = new Set(['echo', 'printf', 'true', ':', 'rem', 'noop']);
 const PASSTHROUGH_BINS = new Set(['env', 'time', 'nice', 'nohup', 'command']);
-function isRealVerificationCommand(cmd) {
+export function isRealVerificationCommand(cmd) {
   if (!nonPlaceholderText(cmd)) return false;
   const tokens = String(cmd).trim().split(/\s+/);
   for (const rawTok of tokens) {
@@ -568,7 +586,7 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
   }
   let evidence;
   try {
-    evidence = JSON.parse(fs.readFileSync(target, 'utf8'));
+    evidence = JSON.parse(stripUtf8Bom(fs.readFileSync(target, 'utf8')));
   } catch {
     throw new Error('Evidence file is not valid JSON.');
   }
@@ -667,7 +685,7 @@ export function validateTeamTasks(cwd, teamName) {
         continue;
       }
       let parsed;
-      try { parsed = JSON.parse(fs.readFileSync(full, 'utf8')); } catch {
+      try { parsed = JSON.parse(stripUtf8Bom(fs.readFileSync(full, 'utf8'))); } catch {
         errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
         continue;
       }
@@ -798,7 +816,7 @@ export function appendJsonlRecord(filePath, rawRecord) {
   const resolved = path.resolve(String(filePath || ''));
   let parsed;
   try {
-    parsed = typeof rawRecord === 'string' ? JSON.parse(rawRecord) : rawRecord;
+    parsed = typeof rawRecord === 'string' ? JSON.parse(stripUtf8Bom(rawRecord)) : rawRecord;
   } catch {
     throw new Error('Invalid JSON record for JSONL append.');
   }
@@ -830,11 +848,11 @@ export function readJsonlRecords(filePath) {
   const resolved = path.resolve(String(filePath || ''));
   const st = fs.lstatSync(resolved);
   if (st.isSymbolicLink()) throw new Error('Refusing to read symlinked JSONL file.');
-  const raw = fs.readFileSync(resolved, 'utf8');
+  const raw = stripUtf8Bom(fs.readFileSync(resolved, 'utf8'));
   const records = [];
   let skipped = 0;
   for (const rawLine of raw.split('\n')) {
-    const line = rawLine.trim();
+    const line = stripUtf8Bom(rawLine).trim();
     if (!line) continue;
     try {
       const obj = JSON.parse(line);
@@ -1643,7 +1661,7 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
   const st = fs.lstatSync(resolvedSource);
   if (st.isSymbolicLink()) return { ok: false, exitCode: 1, error: 'Refusing to read symlinked plan/goals file.' };
   if (!st.isFile()) return { ok: false, exitCode: 1, error: 'Source path must be a regular file.' };
-  const raw = fs.readFileSync(resolvedSource, 'utf8');
+  const raw = stripUtf8Bom(fs.readFileSync(resolvedSource, 'utf8'));
   let extracted = '';
   let resolvedId = rawId;
   let title = '';
@@ -2744,7 +2762,7 @@ function isInformationalHelpPrompt(text) {
   return /^\s*(?:what\s+(?:is|does|are)|how\s+(?:do\s+i|to|does|can\s+i)|can\s+you\s+explain|explain|tell\s+me\s+about|describe)\b/i.test(String(text || ''))
     && !/\b(?:and\s+then|then\s+(?:run|execute|use)|please\s+(?:run|execute))\b/i.test(String(text || ''));
 }
-function detectSkills(text) {
+export function detectSkills(text) {
   const raw = String(text || '');
   const found = [];
   const lead = /^\s*([$/])([a-z][a-z0-9-]*)\b/.exec(raw);
@@ -2769,7 +2787,7 @@ function detectSkills(text) {
   }
   return found;
 }
-function buildActiveModeMessage(roots, convId = '') {
+export function buildActiveModeMessage(roots, convId = '') {
   const active = activeStates(roots, null, convId);
   if (!active.length) return null;
   const now = Date.now();
@@ -2782,7 +2800,7 @@ function buildActiveModeMessage(roots, convId = '') {
 }
 
 // ---------- handlers ----------
-function sessionStart(payload) {
+export function sessionStart(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const recordFile = runtimeFile(conv, 'routing');
@@ -2817,7 +2835,7 @@ function sessionStart(payload) {
   return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
-function preInvocation(payload) {
+export function preInvocation(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const rawTx = payload.transcriptPath || payload.transcript_path || payload.logPath;
@@ -2901,7 +2919,7 @@ function extractToolTargets(toolName, args) {
   }
   return out;
 }
-function isPathInsideAllowedOmagy(roots, rawTarget) {
+export function isPathInsideAllowedOmagy(roots, rawTarget) {
   const resolved = canonicalizePath(rawTarget);
   const rawResolved = path.resolve(String(rawTarget));
   if (/(?:^|[/\\])\.omagy[/\\]notifications\.json$/i.test(resolved) || /(?:^|[/\\])\.omagy[/\\]notifications\.json$/i.test(rawResolved)) {
@@ -2929,7 +2947,7 @@ function isPathInsideAllowedOmagy(roots, rawTarget) {
     return false;
   });
 }
-function preToolUse(payload) {
+export function preToolUse(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const call = payload.toolCall || payload.tool_call || {};
@@ -3073,7 +3091,7 @@ function preToolUse(payload) {
   return {};
 }
 
-async function stop(payload) {
+export async function stop(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const rawReason = String(payload.terminationReason ?? payload.termination_reason ?? 'NO_TOOL_CALL').trim().toLowerCase();
@@ -3253,764 +3271,8 @@ async function notify(payload, roots) {
 
 // ---------- selftest ----------
 async function selftest() {
-  const results = [];
-  const check = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail });
-  const defaultTmpRuntime = path.join(os.tmpdir(), 'oh-my-agy');
-  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-selftest-'));
-  const prevRuntimeDir = process.env.OMAGY_RUNTIME_DIR;
-  process.env.OMAGY_RUNTIME_DIR = path.join(ws, 'runtime');
-  const conv = `selftest-${Date.now()}`;
-  const base = { conversationId: conv, workspacePaths: [ws] };
-  const stateFile = path.join(ws, '.omagy', 'state', 'autopilot-state.json');
-  const now = new Date().toISOString();
-
-  try {
-    check('node >= 18', Number(process.versions.node.split('.')[0]) >= 18, process.versions.node);
-    check('fetch available (notifications)', typeof fetch === 'function');
-    check('stop allows with no state', (await stop({ ...base, terminationReason: 'NO_TOOL_CALL' })).decision === 'stop');
-
-    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ralplan', iteration: 1, updated_at: now });
-    const s1 = await stop({ ...base, terminationReason: 'NO_TOOL_CALL' });
-    const s2 = await stop({ ...base, terminationReason: 'model_stop' });
-    const s3 = await stop({ ...base, terminationReason: 'NO_TOOL_CALL' });
-    check('stop nudges active autopilot on NO_TOOL_CALL', s1.decision === 'continue', s1.reason?.slice(0, 80));
-    check('stop nudges at most MAX_NUDGES without progress', s2.decision === 'continue' && s3.decision === 'stop');
-    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 2, updated_at: new Date(Date.now() + 1000).toISOString() });
-    check('progress resets nudge budget', (await stop({ ...base, terminationReason: 'NO_TOOL_CALL' })).decision === 'continue');
-    check('non-normal stop reason is never blocked', (await stop({ ...base, terminationReason: 'MAX_INVOCATIONS' })).decision === 'stop');
-    check('background work pending is never blocked', (await stop({ ...base, terminationReason: 'NO_TOOL_CALL', fullyIdle: false })).decision === 'stop');
-    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ralplan', updated_at: new Date(Date.now() - STALE_MS - 60000).toISOString() });
-    check('stale state is ignored', (await stop({ ...base, terminationReason: 'NO_TOOL_CALL' })).decision === 'stop');
-    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
-    check('terminal state is ignored', (await stop({ ...base, terminationReason: 'NO_TOOL_CALL' })).decision === 'stop');
-
-    // Wiki index + Working Agreements bounded injection + routing test
-    const wikiDir = path.join(ws, 'omagy_wiki');
-    fs.mkdirSync(wikiDir, { recursive: true });
-    const longWiki = Array.from({ length: 80 }, (_, i) => `- [[page-${i}]] — Page ${i} — architecture — ${'x'.repeat(60)}`).join('\n');
-    fs.writeFileSync(path.join(wikiDir, 'index.md'), longWiki);
-    fs.writeFileSync(path.join(wikiDir, 'agreements.md'), '- [v2] Never overwrite existing files without reading them first.\n');
-
-    // Subdirectory AGENTS.md discovery fixture
-    const subPkg = path.join(ws, 'packages', 'core');
-    fs.mkdirSync(subPkg, { recursive: true });
-    fs.writeFileSync(path.join(subPkg, 'AGENTS.md'), '# Core Package Rules\nKeep core zero-dependency.\n');
-    fs.writeFileSync(path.join(subPkg, 'index.ts'), 'export const ok = true;\n');
-
-    const transcript = path.join(ws, 'transcript.jsonl');
-    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $handoff on packages/core/index.ts, not /plan or $nonexistent' })}\n`);
-    const p1 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 1 });
-    const stepTexts = (p1.injectSteps || []).map((s) => s.ephemeralMessage || '');
-    const routeMsg = stepTexts[0] || '';
-    const wikiMsg = stepTexts.find((t) => t.includes('Project Wiki index')) || '';
-    const subdirMsg = stepTexts.find((t) => t.includes('Subdirectory AGENTS.md')) || '';
-    check('pre-invocation routes $skills in order (including $handoff)', routeMsg.includes('$autopilot, $code-review, $handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
-    check('pre-invocation injects working agreements + bounded wiki index (<=3500 chars)', wikiMsg.includes('Working Agreements') && wikiMsg.length <= MAX_WIKI_CONTEXT_CHARS && wikiMsg.includes('Wiki index truncated'), `len=${wikiMsg.length}`);
-    check('pre-invocation discovers subdirectory AGENTS.md on touched path', subdirMsg.includes('packages/core/AGENTS.md') && subdirMsg.includes('Keep core zero-dependency'));
-    check('pre-invocation injects once per user message', Object.keys(preInvocation({ ...base, transcriptPath: transcript, invocationNum: 2 })).length === 0);
-
-    // Next user message should not re-inject wiki index or already-seen subdirectory AGENTS.md in the same session
-    fs.appendFileSync(transcript, `${JSON.stringify({ step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'now $analyze packages/core/index.ts' })}\n`);
-    const p2 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 3 });
-    const p2Texts = (p2.injectSteps || []).map((s) => s.ephemeralMessage || '');
-    check('wiki index and subdirectory AGENTS.md inject at most once per conversation', p2Texts.some((t) => t.includes('$analyze')) && !p2Texts.some((t) => t.includes('Project Wiki index')) && !p2Texts.some((t) => t.includes('Subdirectory AGENTS.md')));
-
-    writeJson(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { mode: 'ralplan', active: true, current_phase: 'architect-review', updated_at: new Date().toISOString() });
-    const g1 = preToolUse({ ...base, toolCall: { name: 'write_to_file', args: { TargetFile: path.join(ws, 'src', 'index.ts') } } });
-    const g1Path = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
-    const g2 = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: path.join(ws, '.omagy', 'plans', 'prd.md') } } });
-    check('planning guard escalates implementation writes (TargetFile & Path)', g1.decision === 'force_ask' && g1Path.decision === 'force_ask');
-    check('planning guard ignores .omagy writes', !g2.decision);
-
-    // Ralplan-first gate inside autopilot
-    fs.rmSync(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { force: true });
-    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', ralplan_gate: true, updated_at: new Date().toISOString() });
-    const gRalplanMissing = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
-    fs.mkdirSync(path.join(ws, '.omagy', 'plans'), { recursive: true });
-    fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'prd-demo.md'), '# PRD\n');
-    fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'test-spec-demo.md'), '# Test Spec\n');
-    const gRalplanPresent = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
-    check('autopilot ralplan_gate blocks writes until prd + test-spec exist', gRalplanMissing.decision === 'force_ask' && !gRalplanPresent.decision);
-
-    // Write-existing-file guard (unread full Overwrite vs read-then-overwrite)
-    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
-    const existingSrc = path.join(ws, 'src', 'existing.ts');
-    fs.mkdirSync(path.dirname(existingSrc), { recursive: true });
-    fs.writeFileSync(existingSrc, 'export const v = 1;\n');
-    const gOverwriteUnread = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: existingSrc, Overwrite: true } } });
-    preToolUse({ ...base, toolCall: { name: 'read_file', args: { Path: existingSrc } } });
-    const gOverwriteAfterRead = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: existingSrc, Overwrite: true } } });
-    check('write-existing-file-guard escalates unread Overwrite and allows after read_file', gOverwriteUnread.decision === 'force_ask' && !gOverwriteAfterRead.decision);
-
-    // Foreign conversation owner isolation
-    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', owner_conversation_id: 'other-conv', updated_at: new Date().toISOString() });
-    const sForeign = await stop({ ...base, terminationReason: 'NO_TOOL_CALL' });
-    check('foreign owner_conversation_id does not hijack stop hook', sForeign.decision === 'stop');
-    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
-
-    // Multi-repo .omagy-workspace parent root resolution
-    const multiParent = path.join(ws, 'multi');
-    const childRepo = path.join(multiParent, 'repo-a');
-    fs.mkdirSync(childRepo, { recursive: true });
-    fs.writeFileSync(path.join(multiParent, '.omagy-workspace'), '{}\n');
-    writeJson(path.join(multiParent, '.omagy', 'state', 'ultragoal-state.json'), { mode: 'ultragoal', active: true, current_phase: 'executing', updated_at: new Date().toISOString() });
-    const sMulti = await stop({ conversationId: `${conv}-multi`, workspacePaths: [childRepo], terminationReason: 'NO_TOOL_CALL' });
-    fs.rmSync(multiParent, { recursive: true, force: true });
-    check('.omagy-workspace anchors state across child repos', sMulti.decision === 'continue');
-
-    const initTestGit = (dir) => {
-      fs.mkdirSync(dir, { recursive: true });
-      execFileSync('git', ['init', '-q'], { cwd: dir });
-      execFileSync('git', ['config', 'user.email', 'selftest@example.com'], { cwd: dir });
-      execFileSync('git', ['config', 'user.name', 'Selftest'], { cwd: dir });
-    };
-
-    // Completion drift guard (git diff blocker scan)
-    const gitRepo = path.join(ws, 'git-repo');
-    try {
-      initTestGit(gitRepo);
-      fs.writeFileSync(path.join(gitRepo, 'app.test.js'), 'test("ok", () => {});\n');
-      execFileSync('git', ['add', 'app.test.js'], { cwd: gitRepo });
-      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: gitRepo });
-      fs.appendFileSync(path.join(gitRepo, 'app.test.js'), `${'test'}.skip("later", () => {});\n`);
-      const driftPayload = { conversationId: `${conv}-drift`, workspacePaths: [gitRepo], terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: 'All done and ready to merge.' };
-      const d1 = await stop(driftPayload);
-      const d2 = await stop(driftPayload);
-      check('completion drift guard catches added test.skip once per diff', d1.decision === 'continue' && d2.decision === 'stop');
-    } catch { /* fail open: skip git drift check if git unavailable */
-      check('completion drift guard catches added test.skip once per diff', true, 'skipped (git unavailable)');
-    }
-
-    // Team completion evidence validator test
-    const evRel = '.omagy/evidence/task-1.json';
-    writeJson(path.join(ws, evRel), { team: 'alpha', taskId: '1', summary: 'Implemented CSV parser and unit tests', verification: [{ command: 'npm test', result: 'passed', output: '12 passing (45ms)' }], unverified: [] });
-    let evOk = false;
-    try { evOk = validateCompletionEvidence(ws, evRel, { team: 'alpha', taskId: '1' }).ok === true; } catch { /* fail open: evOk remains false */ }
-    check('verify-evidence accepts valid team task evidence', evOk);
-
-    const badRel = '.omagy/evidence/task-bad.json';
-    writeJson(path.join(ws, badRel), { team: 'alpha', taskId: '1', summary: 'TODO', verification: [{ command: 'npm test', result: 'failed', output: '1 failing' }], unverified: [] });
-    let badRejected = false;
-    try { validateCompletionEvidence(ws, badRel, { team: 'alpha', taskId: '1' }); } catch { /* fail open: expected validation throw */ badRejected = true; }
-    check('verify-evidence rejects placeholder or failing evidence', badRejected);
-
-    const filteredRoots = workspaceRoots({ workspacePaths: [path.join(ws, 'does-not-exist'), ws] });
-    check('workspaceRoots filters non-existent directories', filteredRoots.length === 1 && filteredRoots[0] === ws);
-
-    // Subagent prompt & hook isolation
-    writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
-    const subTranscript = path.join(ws, 'subagent-transcript.jsonl');
-    fs.writeFileSync(subTranscript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'TEAM alpha — TASK 1: audit $autopilot and $cancel behavior' })}\n`);
-    const subPre = preInvocation({ conversationId: `${conv}-sub`, workspacePaths: [ws], transcriptPath: subTranscript, invocationNum: 1 });
-    const subPreTexts = (subPre.injectSteps || []).map((s) => s.ephemeralMessage || '');
-    const subStop = await stop({ conversationId: `${conv}-sub`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL' });
-    check('subagent prompt suppresses quoted $skill routing and unowned parent stop nudges', !subPreTexts.some((t) => t.includes('Skill routing')) && subStop.decision === 'stop');
-    writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
-
-    // Symlink state & planning-guard escape protection
-    const symTargetState = path.join(ws, 'outside-state.json');
-    writeJson(symTargetState, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
-    const symStateLink = path.join(ws, '.omagy', 'state', 'symlinked-state.json');
-    fs.symlinkSync(symTargetState, symStateLink, 'file');
-    const sSym = await stop({ conversationId: `${conv}-sym`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL' });
-    fs.rmSync(symStateLink, { force: true });
-    check('readStateDir ignores symlinked state files', sSym.decision === 'stop');
-
-    writeJson(path.join(ws, '.omagy', 'state', 'plan-state.json'), { mode: 'plan', active: true, current_phase: 'drafting', updated_at: new Date().toISOString() });
-    const symInsideOmagy = path.join(ws, '.omagy', 'plans', 'escape-link.ts');
-    fs.symlinkSync(path.join(ws, 'src', 'secret.ts'), symInsideOmagy, 'file');
-    const gSymEscape = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: symInsideOmagy } } });
-    fs.rmSync(symInsideOmagy, { force: true });
-    fs.rmSync(path.join(ws, '.omagy', 'state', 'plan-state.json'), { force: true });
-    check('preToolUse refuses symlink inside .omagy/ escaping to source file during planning', gSymEscape.decision === 'force_ask');
-
-    // Crash-resilient newline-isolated JSONL append & tolerant reader
-    const ledgerPath = path.join(ws, '.omagy', 'ultragoal', 'ledger.jsonl');
-    fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-    fs.writeFileSync(ledgerPath, '{"goal_id":"G1","event":"started"}\n{"goal_id":"G1","event":"torn');
-    const appRes = appendJsonlRecord(ledgerPath, { goal_id: 'G1', event: 'checkpoint', status: 'complete' });
-    const readRes = readJsonlRecords(ledgerPath);
-    check('appendJsonlRecord isolates torn tail with newline and readJsonlRecords recovers valid entries', appRes.isolatedNewline === true && readRes.records.length === 2 && readRes.skipped === 1);
-
-    // Whole-integer env/config parser
-    check('intOr validates whole safe integers and falls back on empty/negative/float/Infinity/NaN',
-      intOr('120', 60) === 120 && intOr('0', 60, 0) === 0 && ['0', '', '-5', '1.5', 'Infinity', '60s'].every((v, idx) => intOr(v, 60, idx === 0 ? 1 : 0) === 60));
-
-    // OMAGY_ROOT / OMAGY_STATE_ROOT override & omagyLogsDir
-    const customStateRoot = path.join(ws, 'custom-omagy-root');
-    fs.mkdirSync(customStateRoot, { recursive: true });
-    process.env.OMAGY_STATE_ROOT = path.join(customStateRoot, '.omagy');
-    const resolvedLogs = omagyLogsDir(ws);
-    delete process.env.OMAGY_STATE_ROOT;
-    check('OMAGY_STATE_ROOT overrides stateRoot and omagyLogsDir', resolvedLogs === path.join(canonicalizePath(customStateRoot), '.omagy', 'logs'));
-
-    // detectSkills quote/code/blockquote/URL/negated/help-question suppression
-    const suppressedSkills = detectSkills('What does `$autopilot` or "$ralplan" do?\n> $team\n[a -> b] $ultragoal\ndo not use $ultraqa or https://example.com/$plan');
-    const preservedLead = detectSkills('$ralplan: design the API using ```js\nconst s = "$team";\n``` and do not use $autopilot');
-    const suppressedLeadHelp = detectSkills('$ralplan: how do I use this skill?');
-    check('detectSkills suppresses quoted/code/negated/help mentions while preserving leading invocation',
-      suppressedSkills.length === 0 && preservedLead.length === 1 && preservedLead[0] === 'ralplan' && suppressedLeadHelp.length === 0);
-
-    // Child-project omagy_wiki discovery
-    const childPkgWiki = path.join(ws, 'packages', 'billing', 'omagy_wiki');
-    fs.mkdirSync(childPkgWiki, { recursive: true });
-    fs.writeFileSync(path.join(childPkgWiki, 'agreements.md'), '- [by:human] All billing amounts use integer cents.\n');
-    const childDisc = discoverSubdirAgents([ws], 'inspect packages/billing/src/charge.ts', []);
-    check('discoverSubdirAgents surfaces child-project omagy_wiki once', childDisc.messages.some((m) => m.includes('Child-project Wiki') && m.includes('integer cents')));
-
-    // Planning guard multi-target (rename / apply_patch) & fail-closed on missing target
-    writeJson(path.join(ws, '.omagy', 'state', 'plan-state.json'), { mode: 'plan', active: true, current_phase: 'drafting', updated_at: new Date().toISOString() });
-    const gRenameEscape = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, '.omagy', 'plans', 'draft.md'), rename: path.join(ws, 'src', 'escaped.ts') } } });
-    const gPatchEscape = preToolUse({ ...base, toolCall: { name: 'apply_patch', args: { patchText: `*** Update File: ${path.join(ws, 'src', 'index.ts')}\n@@\n` } } });
-    const gMissingTarget = preToolUse({ ...base, toolCall: { name: 'write_file', args: {} } });
-    fs.rmSync(path.join(ws, '.omagy', 'state', 'plan-state.json'), { force: true });
-    check('planning guard catches rename/apply_patch escapes and fails closed on targetless write_file',
-      gRenameEscape.decision === 'force_ask' && gPatchEscape.decision === 'force_ask' && gMissingTarget.decision === 'force_ask');
-
-    // Working Agreements [by:human] overwrite protection
-    const agFile = path.join(ws, 'omagy_wiki', 'agreements.md');
-    fs.writeFileSync(agFile, '- [by:human] Never mutate production tables directly.\n');
-    const gDropHuman = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: agFile, Overwrite: true, Content: '- [v2] Only automated rule.\n' } } });
-    const gKeepHuman = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: agFile, Overwrite: true, Content: '- [by:human] Never mutate production tables directly.\n- [v2] Added rule.\n' } } });
-    check('agreements-guard blocks Overwrite dropping [by:human] line and allows preserving it', gDropHuman.decision === 'force_ask' && !gKeepHuman.decision);
-
-    // Stop continuation includes refusal-is-final rule
-    check('stop continuation prompt includes refusal-is-final rule', typeof s1.reason === 'string' && s1.reason.includes('permission denial or a refusal by the user is final'));
-
-    // Echo / printf / true no-op verification command guard
-    const echoRel = '.omagy/evidence/task-echo.json';
-    writeJson(path.join(ws, echoRel), { team: 'alpha', taskId: '1', summary: 'Implemented feature', verification: [{ command: 'echo "all tests passed"', result: 'passed', output: 'all tests passed' }], unverified: [] });
-    let echoRejected = false;
-    try { validateCompletionEvidence(ws, echoRel, { team: 'alpha', taskId: '1' }); } catch { /* fail open: expected validation throw */ echoRejected = true; }
-    check('verify-evidence rejects echo/printf/true no-op verification commands', echoRejected && !isRealVerificationCommand('env FOO=1 echo ok') && isRealVerificationCommand('env NODE_ENV=test npm test'));
-
-    // Time-boxed wiki/agreement expiry & standalone secret redaction
-    const expWikiRoot = path.join(ws, 'exp-wiki-ws');
-    const expWikiDir = path.join(expWikiRoot, 'omagy_wiki');
-    fs.mkdirSync(expWikiDir, { recursive: true });
-    fs.writeFileSync(path.join(expWikiDir, 'agreements.md'), '- [by:human] Keep active rule [expires: 2099-01-01] with token ghp_1234567890abcdefghij123456.\n- [by:agent] Old temporary freeze [expires: 2020-01-01].');
-    fs.writeFileSync(path.join(expWikiDir, 'index.md'), '---\nexpires: 2020-01-01T00:00:00Z\n---\n- [[old-page]] — Expired index\n');
-    const expSummary = loadWikiSummary([expWikiRoot]) || '';
-    check('loadWikiSummary skips expired frontmatter/inline entries and redacts standalone secrets',
-      expSummary.includes('Keep active rule') && expSummary.includes('[REDACTED_TOKEN]') && !expSummary.includes('ghp_1234567890abcdefghij123456') && !expSummary.includes('Old temporary freeze') && !expSummary.includes('Expired index'));
-
-    // Child-project wiki expiry & secret redaction
-    const childExpDir = path.join(expWikiRoot, 'packages', 'auth', 'omagy_wiki');
-    fs.mkdirSync(childExpDir, { recursive: true });
-    fs.writeFileSync(path.join(childExpDir, 'agreements.md'), '- Active auth rule sk-proj-1234567890abcdefghijklmnop\n- Expired auth rule (expires: 2021-05-01)\n');
-    const childExpMsg = discoverSubdirAgents([expWikiRoot], 'check packages/auth/login.ts', []).messages[0] || '';
-    check('discoverSubdirAgents skips expired child-wiki entries and redacts standalone secrets',
-      childExpMsg.includes('[REDACTED_KEY]') && !childExpMsg.includes('sk-proj-1234567890') && !childExpMsg.includes('Expired auth rule'));
-
-    // Configurable Custom Quality Gates validator
-    const qgRoot = path.join(ws, 'qg-ws');
-    fs.mkdirSync(path.join(qgRoot, '.omagy'), { recursive: true });
-    const qgNoop = validateQualityGates(qgRoot, 'ralplan');
-    writeJson(path.join(qgRoot, '.omagy', 'config.json'), { qualityGates: { ralplan: ['better-interface', { skill: '$security-audit', mode: 'advisory', model: 'pro' }] } });
-    const qgValid = validateQualityGates(qgRoot, 'ralplan');
-    check('validateQualityGates returns strict no-op when unconfigured and normalizes valid gates',
-      qgNoop.ok === true && qgNoop.gates.length === 0 && qgValid.ok === true && qgValid.gates.length === 2
-      && qgValid.gates[0].skill === 'better-interface' && qgValid.gates[0].mode === 'blocking'
-      && qgValid.gates[1].skill === 'security-audit' && qgValid.gates[1].mode === 'advisory' && qgValid.gates[1].model === 'pro');
-
-    writeJson(path.join(qgRoot, '.omagy', 'config.json'), { qualityGates: { ralplan: ['ralplan', 'ralph'], review: ['security-audit'] } });
-    const qgInvalid = validateQualityGates(qgRoot);
-    check('validateQualityGates rejects self-recursive controller skills, sunset skills, and legacy stage keys', qgInvalid.ok === false && qgInvalid.errors.length === 3);
-
-    // Verify hooks.json PreToolUse matcher covers Antigravity 2.0 write/edit/patch/read tools
-    const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-    const hooksCfg = readJson(path.join(pluginRoot, 'hooks.json')) || {};
-    const matcherStr = hooksCfg['oh-my-agy-planning-guard']?.PreToolUse?.[0]?.matcher || '';
-    const matcherRe = matcherStr ? new RegExp(`^(?:${matcherStr})$`) : null;
-    check('hooks.json PreToolUse matcher covers write_file, edit_file, apply_patch, read_file, and legacy tools',
-      Boolean(matcherRe && ['write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'apply_patch', 'patch', 'read_file', 'view_file'].every((t) => matcherRe.test(t))));
-
-    // Verify sidecars/hud/sidecar.json declares a single AUX_PANE web UI view (so Extensions menu shows one HUD item)
-    const sidecarCfg = readJson(path.join(pluginRoot, 'sidecars', 'hud', 'sidecar.json')) || {};
-    const auxViews = (sidecarCfg.ui_config?.views || []).filter((v) => v && v.entrypoint === 'SIDECAR_UI_ENTRYPOINT_AUX_PANE');
-    check('sidecars/hud/sidecar.json declares single AUX_PANE web UI view for sidecar://oh-my-agy/hud/',
-      sidecarCfg.has_web_ui === true && auxViews.length === 1 && auxViews[0].path === '/', `views=${auxViews.length}`);
-
-    // T1 & T2: buildReviewPackage valid commit range and empty/non-ancestor exitCode 3
-    const revRoot = path.join(ws, 'rev-ws');
-    let revValid = { ok: false }; let pkgBody = ''; let revEmpty = { ok: true }; let revNonAncestor = { ok: true }; let revErr = '';
-    try {
-      initTestGit(revRoot);
-      fs.writeFileSync(path.join(revRoot, 'sample.txt'), 'line1\nline2\n', 'utf8');
-      execFileSync('git', ['add', 'sample.txt'], { cwd: revRoot });
-      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'feat: initial commit'], { cwd: revRoot });
-      const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: revRoot, encoding: 'utf8' }).trim();
-      fs.writeFileSync(path.join(revRoot, 'sample.txt'), 'line1\nline2-updated\nline3\n', 'utf8');
-      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-q', '-am', 'fix: update sample'], { cwd: revRoot });
-      const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: revRoot, encoding: 'utf8' }).trim();
-      const pkgOutPath = path.join(revRoot, '.omagy', 'artifacts', 'reviews', 'pkg.md');
-      revValid = buildReviewPackage(revRoot, baseSha, headSha, pkgOutPath);
-      pkgBody = fs.existsSync(pkgOutPath) ? fs.readFileSync(pkgOutPath, 'utf8') : '';
-      revEmpty = buildReviewPackage(revRoot, headSha, headSha, path.join(revRoot, 'empty.md'));
-      revNonAncestor = buildReviewPackage(revRoot, headSha, baseSha, path.join(revRoot, 'nonanc.md'));
-    } catch (e) { /* fail open: capture T1/T2 error */ revErr = e instanceof Error ? e.message : String(e); }
-    check('buildReviewPackage writes commit log, diffstat, and -U10 diff for valid commit range',
-      revValid.ok === true && revValid.exitCode === 0 && revValid.commits === 1
-      && ['=== Commits (', '=== Diffstat ===', '=== Diff (-U10) ===', '+line2-updated'].every((s) => pkgBody.includes(s)), revErr);
-    check('buildReviewPackage rejects 0-commit and non-ancestor ranges with exitCode 3',
-      revEmpty.ok === false && revEmpty.exitCode === 3 && revNonAncestor.ok === false && revNonAncestor.exitCode === 3, revErr);
-
-    // T3: extractGoalBrief on goals.json and fence-aware markdown plans
-    const briefGoalsPath = path.join(ws, 'brief-goals.json');
-    writeJson(briefGoalsPath, { objective: 'Test objective', invariants: ['Invariant A'], goals: [
-      { id: 'G1', title: 'First Goal', objective: 'Do G1', rigor: 'light', acceptance: ['A1'] },
-      { id: 'G2', title: 'Second Goal', objective: 'Do G2', rigor: 'heavy', depends_on: ['G1'], acceptance: ['A2'] },
-    ] });
-    const briefMdPath = path.join(ws, 'brief-plan.md');
-    fs.writeFileSync(briefMdPath, '# Plan\n### Task 1: First Task\nExample inside fence:\n```markdown\n### Task 2: Fake Task Inside Fence\nDo not match this.\n```\nStill in Task 1.\n### Task 2: Real Second Task\n- File: `src/real.js`\n- Verify: `npm test`\n### Task 3: Third Task\nEnd.', 'utf8');
-    const jsonBriefRes = extractGoalBrief(briefGoalsPath, 'G2', path.join(ws, 'out-g2.md'));
-    const jsonBriefText = fs.existsSync(path.join(ws, 'out-g2.md')) ? fs.readFileSync(path.join(ws, 'out-g2.md'), 'utf8') : '';
-    const mdBriefRes = extractGoalBrief(briefMdPath, '2', path.join(ws, 'out-t2.md'));
-    const mdBriefText = fs.existsSync(path.join(ws, 'out-t2.md')) ? fs.readFileSync(path.join(ws, 'out-t2.md'), 'utf8') : '';
-    check('extractGoalBrief extracts goals.json entries and fence-aware markdown Task sections',
-      jsonBriefRes.ok === true && jsonBriefRes.exitCode === 0 && jsonBriefText.includes('Goal G2: Second Goal')
-      && mdBriefRes.ok === true && mdBriefRes.exitCode === 0 && mdBriefText.startsWith('### Task 2: Real Second Task')
-      && !mdBriefText.includes('Fake Task Inside Fence') && !mdBriefText.includes('### Task 3'));
-
-    // T4: sessionStart and preInvocation persist transcriptPath & artifactDirectoryPath and route lastUserInput fallback
-    sessionStart({ conversationId: conv, workspaceUris: [ws], transcriptPath: '/tmp/selftest-t1.jsonl', artifactDirectoryPath: '/tmp/selftest-artifacts' });
-    const rtAfterStart = readJson(runtimeFile(conv, 'routing')) || {};
-    preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: 'plain prompt without skills', transcript_path: '/tmp/selftest-t2.jsonl' });
-    const rtAfterPlain = readJson(runtimeFile(conv, 'routing')) || {};
-    const pDirectSkill = preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: '$plan update docs' });
-    const rtAfterSkill = readJson(runtimeFile(conv, 'routing')) || {};
-    const directSkillText = (pDirectSkill.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
-    check('sessionStart and preInvocation persist transcriptPath/artifactDirectoryPath and route lastUserInput fallback',
-      rtAfterStart.transcriptPath === '/tmp/selftest-t1.jsonl' && rtAfterStart.artifactDirectoryPath === '/tmp/selftest-artifacts'
-      && rtAfterPlain.transcriptPath === '/tmp/selftest-t2.jsonl' && rtAfterSkill.transcriptPath === '/tmp/selftest-t2.jsonl'
-      && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts' && directSkillText.includes('$plan'));
-
-    // T5: plugin.json strict JSON, official 10-key Antigravity schema allowlist, <=160 char description, CHANGELOG version sync, and logo PNG dimensions
-    let strictPkg = null;
-    try { strictPkg = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'plugin.json'), 'utf8')); } catch { /* fail open: strictPkg stays null */ }
-    const ALLOWED_PLUGIN_KEYS = new Set(['name', 'description', 'logo', 'suggestedPrompts', 'displayName', 'version', 'author', 'homepage', 'repository', 'disabled']);
-    const unknownPluginKeys = strictPkg ? Object.keys(strictPkg).filter((k) => !ALLOWED_PLUGIN_KEYS.has(k)) : ['invalid'];
-    const promptsOk = Array.isArray(strictPkg?.suggestedPrompts) && strictPkg.suggestedPrompts.length >= 1 && strictPkg.suggestedPrompts.length <= 3
-      && strictPkg.suggestedPrompts.every((p) => typeof p === 'string' && p.trim().length > 0);
-    const topChangelogVer = (fs.readFileSync(path.join(pluginRoot, 'CHANGELOG.md'), 'utf8').match(/^##\s+([0-9]+\.[0-9]+\.[0-9]+)/m) || [])[1] || '';
-    let logoBuf = Buffer.alloc(0);
-    try { logoBuf = fs.readFileSync(path.join(pluginRoot, 'assets', 'logo.png')); } catch { /* fail open: logoBuf stays empty */ }
-    const isPng = logoBuf.length >= 24 && logoBuf[0] === 0x89 && logoBuf[1] === 0x50 && logoBuf[2] === 0x4e && logoBuf[3] === 0x47 && logoBuf.toString('ascii', 12, 16) === 'IHDR';
-    const logoWidth = isPng ? logoBuf.readUInt32BE(16) : 0;
-    const logoHeight = isPng ? logoBuf.readUInt32BE(20) : 0;
-    check('plugin.json is strict JSON matching official Antigravity schema (<=160 char description, version synced with CHANGELOG) and logo.png is square >=128px',
-      Boolean(strictPkg && strictPkg.name === 'oh-my-agy' && unknownPluginKeys.length === 0 && promptsOk
-        && typeof strictPkg.description === 'string' && strictPkg.description.length > 0 && strictPkg.description.length <= 160
-        && strictPkg.version && strictPkg.version === topChangelogVer && isPng && logoWidth === logoHeight && logoWidth >= 128),
-      `ver=${strictPkg?.version || 'none'} changelog=${topChangelogVer} descLen=${strictPkg?.description?.length || 0} unknownKeys=${unknownPluginKeys.join(',')} logo=${logoWidth}x${logoHeight}`);
-
-    const { validateFrontmatterYaml, validateReferenceLinks, runColdSelftestChecks, runG1SelftestChecks } = await import('./omagy-cli.mjs');
-
-    // T6: All 27 skills/*/SKILL.md match SKILLS bidirectionally, <20,000 bytes, valid YAML frontmatter without ->, zero empty subdirs/dev files, and valid relative .md#anchor links
-    const skillsDir = path.join(pluginRoot, 'skills');
-    let skillsParity = false;
-    const skillIssues = [];
-    let diskSkillCount = 0;
-    try {
-      const diskSkillDirs = fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
-      diskSkillCount = diskSkillDirs.length;
-      const expectedSkills = [...SKILLS].sort();
-      skillsParity = diskSkillDirs.length === expectedSkills.length && diskSkillDirs.every((d, i) => d === expectedSkills[i]);
-      const checkSkillSubdirs = (baseDir, relPrefix) => {
-        for (const ent of fs.readdirSync(baseDir, { withFileTypes: true })) {
-          const fullEnt = path.join(baseDir, ent.name);
-          const relEnt = relPrefix ? `${relPrefix}/${ent.name}` : ent.name;
-          if (ent.name === 'CREATION-LOG.md' || /^test-.*\.md$/i.test(ent.name)) {
-            skillIssues.push(`${relEnt}:dev-file`);
-          }
-          if (ent.isDirectory()) {
-            const subItems = fs.readdirSync(fullEnt);
-            if (subItems.length === 0) skillIssues.push(`${relEnt}:empty-subdir`);
-            else checkSkillSubdirs(fullEnt, relEnt);
-          }
-        }
-      };
-      for (const dirName of diskSkillDirs) {
-        const skillDirFull = path.join(skillsDir, dirName);
-        const skillFile = path.join(skillDirFull, 'SKILL.md');
-        if (!fs.existsSync(skillFile)) { skillIssues.push(`${dirName}:missing`); continue; }
-        const stat = fs.statSync(skillFile);
-        if (stat.size >= 20000) skillIssues.push(`${dirName}:size=${stat.size}`);
-        const raw = fs.readFileSync(skillFile, 'utf8');
-        const fmRes = validateFrontmatterYaml(raw, ['name', 'description'], ['name', 'description']);
-        if (!fmRes.ok) {
-          skillIssues.push(`${dirName}:yaml=${fmRes.errors.join('|')}`);
-          continue;
-        }
-        const fmName = fmRes.fields.name || '';
-        const fmDesc = fmRes.fields.description || '';
-        if (fmName !== dirName) skillIssues.push(`${dirName}:name=${fmName}`);
-        if (!fmDesc || fmDesc.includes('->')) skillIssues.push(`${dirName}:sdo-arrow`);
-        checkSkillSubdirs(skillDirFull, dirName);
-      }
-      const refLinkRes = validateReferenceLinks(skillsDir);
-      if (!refLinkRes.ok) skillIssues.push(...refLinkRes.errors);
-    } catch (e) {
-      skillIssues.push(e instanceof Error ? e.message : String(e));
-    }
-    check('all 27 skills/*/SKILL.md match SKILLS, are <20KB, have valid SDO YAML frontmatter without ->, resolve relative .md#anchor links, and have no empty subdirs or dev files',
-      skillsParity && skillIssues.length === 0,
-      skillIssues.join(', ') || `count=${diskSkillCount}`);
-
-    // T7: rules/AGENTS.md <24KB, omagy-hook.mjs <235KB (zero static omagy-cli import), omagy-cli.mjs <100KB, all 18 agents/*.md valid YAML frontmatter + <antigravity_runtime>, and zero personal path leaks
-    const rulesPath = path.join(pluginRoot, 'rules', 'AGENTS.md');
-    const hookSelfPath = path.join(pluginRoot, 'hooks', 'omagy-hook.mjs');
-    const cliSelfPath = path.join(pluginRoot, 'hooks', 'omagy-cli.mjs');
-    let rulesSize = Infinity;
-    let hookByteSize = Infinity;
-    let cliByteSize = Infinity;
-    let zeroStaticCliImport = false;
-    let agentCount = 0;
-    const agentIssues = [];
-    const pathLeaks = [];
-    try {
-      const rulesRaw = fs.readFileSync(rulesPath, 'utf8');
-      rulesSize = Buffer.byteLength(rulesRaw, 'utf8');
-      if (/^---\r?\n/.test(rulesRaw)) agentIssues.push('AGENTS.md:unexpected-frontmatter');
-      const hookSelfRaw = fs.readFileSync(hookSelfPath, 'utf8');
-      hookByteSize = Buffer.byteLength(hookSelfRaw, 'utf8');
-      cliByteSize = fs.statSync(cliSelfPath).size;
-      zeroStaticCliImport = !/^\s*import\s+(?!\()[^;\r\n]*['"]\.\/omagy-cli\.mjs['"]/m.test(hookSelfRaw);
-      const agentsDir = path.join(pluginRoot, 'agents');
-      const agentFiles = fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort();
-      agentCount = agentFiles.length;
-      for (const af of agentFiles) {
-        const raw = fs.readFileSync(path.join(agentsDir, af), 'utf8');
-        const fmRes = validateFrontmatterYaml(raw, ['name', 'description'], ['name', 'description']);
-        if (!fmRes.ok) agentIssues.push(`${af}:yaml=${fmRes.errors.join('|')}`);
-        if (!raw.includes('<antigravity_runtime>')) agentIssues.push(`${af}:no-runtime-tag`);
-      }
-      const leakRe = /\/(?:Users|home)\/[A-Za-z0-9._-]+\//;
-      const scanMarkdownDir = (dir) => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const full = path.join(dir, entry.name);
-          if (entry.isDirectory()) scanMarkdownDir(full);
-          else if (entry.isFile() && entry.name.endsWith('.md')) {
-            const text = fs.readFileSync(full, 'utf8');
-            if (leakRe.test(text)) pathLeaks.push(path.relative(pluginRoot, full));
-          }
-        }
-      };
-      scanMarkdownDir(path.join(pluginRoot, 'rules'));
-      scanMarkdownDir(path.join(pluginRoot, 'skills'));
-      scanMarkdownDir(path.join(pluginRoot, 'agents'));
-    } catch (e) {
-      agentIssues.push(e instanceof Error ? e.message : String(e));
-    }
-    check('rules/AGENTS.md <24KB, omagy-hook.mjs <235KB (zero static cli import), omagy-cli.mjs <100KB, all 18 agents/*.md valid, and zero personal path leaks',
-      rulesSize < 24000
-      && hookByteSize < 235000
-      && cliByteSize < 100000
-      && zeroStaticCliImport
-      && agentCount === 18
-      && agentIssues.length === 0
-      && pathLeaks.length === 0,
-      `rules=${rulesSize} hook=${hookByteSize} cli=${cliByteSize} staticFree=${zeroStaticCliImport} agents=${agentCount} issues=${agentIssues.join(';')} leaks=${pathLeaks.join(';')}`);
-
-    // T8: hooks/run.sh and sidecars/hud/run.sh avoid external dirname and sort -V, fail-closed CLI vs fail-open lifecycle node_not_found, sameModulePath symlink invocation, and skill-eval defaultRoot isolation
-    const hooksRunSh = fs.readFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), 'utf8');
-    const hudRunSh = fs.readFileSync(path.join(pluginRoot, 'sidecars', 'hud', 'run.sh'), 'utf8');
-    let minimalPathOk = false;
-    let runShFailModesOk = false;
-    let symlinkMainOk = false;
-    let userSkillsCwdEvalOk = false;
-    try {
-      const isWin = process.platform === 'win32';
-      const shBin = isWin ? 'sh' : '/bin/sh';
-      const runShPath = path.join(pluginRoot, 'hooks', 'run.sh');
-      const shDir = isWin
-        ? ((process.env.PATH || '').split(path.delimiter).find((d) => d && (fs.existsSync(path.join(d, 'sh.exe')) || fs.existsSync(path.join(d, 'sh')))) || '')
-        : '/bin';
-      const minPath = [path.dirname(process.execPath), shDir].filter(Boolean).join(path.delimiter);
-      const minEnv = isWin
-        ? { PATH: minPath, HOME: ws, USERPROFILE: ws, SYSTEMROOT: process.env.SYSTEMROOT || 'C:\\Windows', TEMP: ws, TMP: ws }
-        : { PATH: minPath, HOME: ws };
-      const minOut = execFileSync(shBin, [runShPath, 'quality-gates', ws, 'ralplan'], {
-        env: minEnv,
-        encoding: 'utf8',
-      });
-      minimalPathOk = JSON.parse(minOut.trim()).ok === true;
-
-      const noNodeEnv = { ...minEnv, OMAGY_NODE: path.join(ws, 'missing-node-binary') };
-      const hookStopNoNode = execFileSync(shBin, [runShPath, 'stop'], { env: noNodeEnv, input: '{}', encoding: 'utf8' });
-      const hookStartNoNode = execFileSync(shBin, [runShPath, 'session-start'], { env: noNodeEnv, input: '{}', encoding: 'utf8' });
-      let cliNoNodeStatus = 0;
-      let cliNoNodeOut = '';
-      try {
-        execFileSync(shBin, [runShPath, 'selftest'], { env: noNodeEnv, encoding: 'utf8' });
-      } catch (noNodeErr) { /* fail open: capture expected exit 2 when node is missing for CLI subcommands */
-        cliNoNodeStatus = noNodeErr?.status ?? 0;
-        cliNoNodeOut = String(noNodeErr?.stdout || '').trim();
-      }
-      runShFailModesOk = JSON.parse(hookStopNoNode.trim()).decision === 'stop'
-        && hookStartNoNode.trim() === '{}'
-        && cliNoNodeStatus === 2
-        && JSON.parse(cliNoNodeOut || '{}').error === 'node_not_found';
-
-      const symDir = path.join(ws, 'sym-bin');
-      fs.mkdirSync(symDir, { recursive: true });
-      const symHook = path.join(symDir, 'omagy-hook-link.mjs');
-      try {
-        fs.symlinkSync(hookSelfPath, symHook, 'file');
-        const symOut = execFileSync(process.execPath, [symHook, 'quality-gates', ws, 'ralplan'], { encoding: 'utf8' });
-        symlinkMainOk = JSON.parse(symOut.trim()).ok === true;
-      } catch { /* fail open: Windows without symlink privilege falls back to direct sameModulePath check */
-        symlinkMainOk = process.platform === 'win32' && sameModulePath(hookSelfPath.toUpperCase(), hookSelfPath.toLowerCase());
-      }
-
-      const userRepoWithSkills = path.join(ws, 'user-repo-with-skills');
-      fs.mkdirSync(path.join(userRepoWithSkills, 'skills', 'user-local-skill'), { recursive: true });
-      fs.writeFileSync(path.join(userRepoWithSkills, 'skills', 'user-local-skill', 'SKILL.md'), '---\nname: user-local-skill\ndescription: "Local skill"\n---\n', 'utf8');
-      const evalFromUserCwd = JSON.parse(execFileSync(process.execPath, [hookSelfPath, 'skill-eval', '--min-rank1', '90', '--json'], {
-        cwd: userRepoWithSkills,
-        encoding: 'utf8',
-      }));
-      userSkillsCwdEvalOk = evalFromUserCwd.ok === true && evalFromUserCwd.skillCount === 27;
-    } catch { /* fail open: flags stay false and fail T8 check */ }
-    check('hooks/run.sh and sidecars/hud/run.sh use pure POSIX expansion without dirname or sort -V',
-      !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
-      && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
-      && minimalPathOk && runShFailModesOk && symlinkMainOk && userSkillsCwdEvalOk,
-      `minPath=${minimalPathOk} noNode=${runShFailModesOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk}`);
-
-    // T9 (T-DR-1): buildResearchMatrix across technical, business, idea, and implementation lenses
-    const rmTech = buildResearchMatrix('Vector Indexing', '--technical');
-    const rmBiz = buildResearchMatrix('AI Code Review', 'business');
-    const rmIdea = buildResearchMatrix('Local-First Sync', 'idea');
-    const rmImpl = buildResearchMatrix('SQLite WASM', 'implementation');
-    check('buildResearchMatrix generates lens-specific Boolean query matrices and terminological clusters across all 4 lenses',
-      rmTech.ok === true && rmTech.lens === 'technical' && rmTech.queryMatrix.facets.length === 5
-      && rmBiz.ok === true && rmBiz.lens === 'business' && rmBiz.markdown.includes('Lens: business')
-      && rmIdea.ok === true && rmIdea.lens === 'idea' && rmIdea.queryMatrix.contradictionAndCritique.length === 3
-      && rmImpl.ok === true && rmImpl.lens === 'implementation' && rmImpl.sourceTierFilters.Tier_A_Primary_Standards_And_Benchmarks.length >= 2);
-
-    // T10 (T-DR-2): auditResearchReport passes >=85 report and fails <85 or missing sections without confusing >=85 target column
-    const validReportPath = path.join(ws, 'valid-research-report.md');
-    fs.writeFileSync(validReportPath, [
-      '# Deep Research Report',
-      '## 1. Executive Summary',
-      'This report evaluates vector indexing [VERIFIED] and cost projections [DERIVED] under explicit assumptions [ASSUMED].',
-      '## 2. Introduction & Context\nContext and scope boundaries.',
-      '## 3. Research Methodology & Source Tiers\nTier A and Tier B sources.',
-      '## 4. Multidimensional Analysis\nTechnical and business analysis.',
-      '## 5. Interpretation, Synthesis & Systemic Modeling\n```mermaid\nflowchart TD\nA --> B\n```',
-      '## 6. Uncertainty, Risks & Limitations\nEpistemic gaps.',
-      '## 7. Conclusions & Strategic Recommendations\nAction matrix.',
-      '## 8. Glossary\nTerms.',
-      '## 9. Research Self-Assessment Scorecard',
-      '| Dimension | Target Score | Actual Score | Justification |',
-      '| :--- | :---: | :---: | :--- |',
-      '| **1. Depth of Analysis** | >= 85 | 92 | Deep first-principles analysis |',
-      '| **2. Systemicity** | \\(\\ge 85\\) | 88 | Causal loops mapped |',
-      '| **3. Critical Thinking** | >= 85 | 90 | Contradictions arbitrated |',
-      '| **4. Interdisciplinarity** | >= 85 | 86 | Multi-lens synthesis |',
-      '| **5. Practical Applicability** | >= 85 | 94 | Concrete builder matrix |',
-    ].join('\n'), 'utf8');
-    const lowScoreReportPath = path.join(ws, 'low-research-report.md');
-    fs.writeFileSync(lowScoreReportPath, fs.readFileSync(validReportPath, 'utf8').replace('| **2. Systemicity** | \\(\\ge 85\\) | 88 |', '| **2. Systemicity** | >= 85 | 78 |'), 'utf8');
-    const auditPass = auditResearchReport(validReportPath);
-    const auditFail = auditResearchReport(lowScoreReportPath);
-    check('auditResearchReport passes valid >=85 report and fails <85 dimension without confusing >=85 target column',
-      auditPass.ok === true && auditPass.exitCode === 0 && auditPass.compositeScore === 90
-      && auditPass.claimCounts.verified === 1 && auditPass.claimCounts.derived === 1 && auditPass.claimCounts.assumed === 1
-      && auditFail.ok === false && auditFail.exitCode === 1 && auditFail.scores.systemicity === 78);
-
-    // T20: Parent-root .omagy anchoring (stateRoot) & inner-folder .omagy discovery (discoverOmagyScopes + loadModeStates + isPathInsideAllowedOmagy)
-    const travelsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-travels-'));
-    let t20Ok = false;
-    try {
-      const summerTripDir = path.join(travelsRoot, 'Summer trip');
-      fs.mkdirSync(summerTripDir, { recursive: true });
-      fs.mkdirSync(path.join(travelsRoot, '.git'), { recursive: true });
-      const anchoredParent = stateRoot(summerTripDir);
-      fs.rmSync(path.join(travelsRoot, '.git'), { recursive: true, force: true });
-      const innerStateDir = path.join(summerTripDir, '.omagy', 'state');
-      fs.mkdirSync(innerStateDir, { recursive: true });
-      writeJson(path.join(innerStateDir, 'autopilot-state.json'), { mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 1, updated_at: new Date().toISOString() });
-      const discScopes = discoverOmagyScopes(travelsRoot);
-      const innerModes = loadModeStates(travelsRoot);
-      t20Ok = anchoredParent === canonicalizePath(travelsRoot)
-        && discScopes.some((s) => s.scope === 'Summer trip')
-        && innerModes.length === 1 && innerModes[0].mode === 'autopilot' && innerModes[0].scope === 'Summer trip'
-        && isPathInsideAllowedOmagy([travelsRoot], path.join(summerTripDir, '.omagy', 'plans', 'trip-plan.md')) === true
-        && isPathInsideAllowedOmagy([travelsRoot], path.join(summerTripDir, 'src', 'app.js')) === false;
-    } finally {
-      fs.rmSync(travelsRoot, { recursive: true, force: true });
-    }
-    check('stateRoot anchors subfolder to parent project root and loadModeStates/discoverOmagyScopes track inner-folder .omagy', t20Ok);
-
-    // T21: extractGoalBrief markdown hardening (unclosed fence exitCode 4, subtask retention 7a/7.1, non-English heading hint)
-    const unclosedFenceMd = path.join(ws, 'unclosed-fence.md');
-    fs.writeFileSync(unclosedFenceMd, '# Plan\n### Task 1: First Task\n```js\nconst x = 1;\n### Task 2: Swallowed Task\nNever closed fence', 'utf8');
-    const unclosedRes1 = extractGoalBrief(unclosedFenceMd, '1', path.join(ws, 'out-unclosed1.md'));
-    const unclosedRes2 = extractGoalBrief(unclosedFenceMd, '2', path.join(ws, 'out-unclosed2.md'));
-    const subtaskMd = path.join(ws, 'subtask-plan.md');
-    fs.writeFileSync(subtaskMd, '# Plan\n### Task 7: Parent Task\nParent step.\n#### Task 7a: Child Subtask A\nSubtask A step.\n### Task 7.1: Child Subtask Dot\nSubtask 7.1 step.\n### Task 8: Next Task\nTask 8 step.', 'utf8');
-    const subBriefRes = extractGoalBrief(subtaskMd, '7', path.join(ws, 'out-t7.md'));
-    const subBriefText = fs.existsSync(path.join(ws, 'out-t7.md')) ? fs.readFileSync(path.join(ws, 'out-t7.md'), 'utf8') : '';
-    const nonEngMd = path.join(ws, 'non-eng-plan.md');
-    fs.writeFileSync(nonEngMd, '# План\n### Задача 1: Инициализация\nШаг 1\n### Задача 2: Тесты\n', 'utf8');
-    const nonEngRes = extractGoalBrief(nonEngMd, '1', path.join(ws, 'out-noneng.md'));
-    check('extractGoalBrief exits 4 on unclosed code fence, retains 7a/7.1 subtasks, and hints non-English task headings',
-      unclosedRes1.ok === false && unclosedRes1.exitCode === 4 && unclosedRes2.ok === false && unclosedRes2.exitCode === 4
-      && subBriefRes.ok === true && subBriefText.includes('Task 7a: Child Subtask A') && subBriefText.includes('Task 7.1: Child Subtask Dot') && !subBriefText.includes('Task 8')
-      && nonEngRes.ok === false && nonEngRes.error.includes('Задача 1'));
-
-    // T22: checkTestJunk 7 regex rules & check-test-junk: ignore suppression
-    const junkTestFile = path.join(ws, 'sample.test.js');
-    fs.writeFileSync(junkTestFile, [
-      "const src = fs.readFileSync('src/index.js', 'utf8');",
-      `expect(err.message).toBe('${'A'.repeat(85)}');`,
-      'await new Promise((resolve) => setTimeout(resolve, 500));',
-      "test.only('focused test', () => {});",
-      "test.skip('skipped test', () => {});",
-      'expect(result).toBe(result);',
-      'expect(items.length).toBeGreaterThanOrEqual(0);',
-      "// check-test-junk: ignore\ntest.skip('intentionally ignored skip', () => {});",
-    ].join('\n'), 'utf8');
-    const junkRes = checkTestJunk([junkTestFile]);
-    const rulesHit = new Set(junkRes.violations.map((v) => v.rule));
-    check('checkTestJunk detects all 7 junk-test rules and honors check-test-junk: ignore',
-      junkRes.ok === false && junkRes.exitCode === 1 && junkRes.violations.length === 7
-      && ['source-grep', 'prose-pin', 'fixed-sleep', 'focused', 'skipped', 'self-compare', 'lower-bound'].every((r) => rulesHit.has(r)));
-
-    // T23 (T-MAP-1): buildCodebaseMap shared-folder priority, adaptive <=2-file symbol sampling, and budget cap
-    const mapWs = path.join(ws, 'map-repo');
-    for (const sub of ['.omagy', 'pages', 'shared']) fs.mkdirSync(path.join(mapWs, sub), { recursive: true });
-    fs.writeFileSync(path.join(mapWs, 'pages', 'home.js'), 'export function renderHome() {}\nexport function renderFooter() {}\n', 'utf8');
-    fs.writeFileSync(path.join(mapWs, 'shared', 'utils.js'), ['s1', 's2', 's3', 's4', 's5', 's6'].map((s) => `export function ${s}() {}`).join('\n'), 'utf8');
-    const fullMap = buildCodebaseMap([mapWs], 1800);
-    const tightMap = buildCodebaseMap([mapWs], 125);
-    check('buildCodebaseMap prioritizes shared folders, samples up to 8 symbols in <=2-file folders, and respects budget',
-      fullMap.includes('shared/: s1, s2, s3, s4, s5, s6') && fullMap.indexOf('shared/:') < fullMap.indexOf('pages/:')
-      && tightMap.includes('shared/:') && !tightMap.includes('pages/:') && tightMap.includes('(1 more folders not listed)'));
-
-    // T24 (T-MAP-2 & T-MAP-3): sessionStart/preInvocation once-per-session codebase-map injection, OMAGY_MAP=0 opt-out, and extractGoalBrief map section
-    const mapConv = `${conv}-map`;
-    const joinSteps = (r) => (r.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
-    const sMap1Text = joinSteps(sessionStart({ conversationId: mapConv, workspacePaths: [mapWs] }));
-    const pMap2Text = joinSteps(preInvocation({ conversationId: mapConv, workspacePaths: [mapWs], lastUserInput: 'check status' }));
-    const prevOmagyMap = process.env.OMAGY_MAP;
-    process.env.OMAGY_MAP = '0';
-    const sOptOutText = joinSteps(sessionStart({ conversationId: `${conv}-nomap`, workspacePaths: [mapWs] }));
-    if (prevOmagyMap === undefined) delete process.env.OMAGY_MAP;
-    else process.env.OMAGY_MAP = prevOmagyMap;
-    const sSubMapText = joinSteps(sessionStart({ conversationId: `${conv}-submap`, workspacePaths: [mapWs], parentConversationId: conv }));
-    const mapPlanGoals = path.join(mapWs, 'goals.json');
-    writeJson(mapPlanGoals, { objective: 'Test map in goal-brief', goals: [{ id: 'G1', title: 'Map Goal', objective: 'Use shared utils', rigor: 'light', acceptance: ['A1'] }] });
-    const mapBriefOut = path.join(mapWs, 'brief-g1.md');
-    extractGoalBrief(mapPlanGoals, 'G1', mapBriefOut);
-    const mapBriefContent = fs.existsSync(mapBriefOut) ? fs.readFileSync(mapBriefOut, 'utf8') : '';
-    check('sessionStart/preInvocation inject codebase-map once per session (honoring OMAGY_MAP=0 and subagent skip) and extractGoalBrief appends Codebase Reuse Map',
-      sMap1Text.includes('[oh-my-agy] Codebase map') && !pMap2Text.includes('[oh-my-agy] Codebase map')
-      && !sOptOutText.includes('[oh-my-agy] Codebase map') && !sSubMapText.includes('[oh-my-agy] Codebase map')
-      && mapBriefContent.includes('## Codebase Reuse Map') && mapBriefContent.includes('shared/: s1'));
-
-    // T25 (T-DEBT-1): scanShortcutDebt parses shortcut:/ceiling:, splits ceiling vs upgrade, tags noTrigger, and ignores <...> placeholders
-    const debtWs = path.join(ws, 'debt-repo');
-    fs.mkdirSync(path.join(debtWs, 'src'), { recursive: true });
-    fs.writeFileSync(path.join(debtWs, 'src', 'worker.js'), '// shortcut: <ceiling>, <when to upgrade>\n// shortcut: 500 items in memory, switch to cursor pagination\n// ceiling: single node only\n# shortcut: 10 req/s -> add token bucket', 'utf8');
-    const debtRes = scanShortcutDebt(debtWs);
-    check('scanShortcutDebt extracts shortcut/ceiling comments, splits ceiling vs upgrade, tags noTrigger, and ignores template placeholders',
-      debtRes.ok === true && debtRes.total === 3 && debtRes.noTriggerCount === 1
-      && debtRes.items[0].ceiling === '500 items in memory' && debtRes.items[0].upgrade === 'switch to cursor pagination' && debtRes.items[0].noTrigger === false
-      && debtRes.items[1].ceiling === 'single node only' && debtRes.items[1].noTrigger === true
-      && debtRes.items[2].ceiling === '10 req/s' && debtRes.items[2].upgrade === 'add token bucket');
-
-    // T26 (T-CALLER-1, T-CALLER-2, T-REUSE-1): analyzeDiffCodeHealth & scanDiffBlockers detect open callers (including $ identifiers), ignore moved/generic/.method calls, and compute reusePct
-    const healthRepo = path.join(ws, 'health-repo');
-    let healthOk = false; let healthErr = '';
-    try {
-      initTestGit(healthRepo);
-      fs.writeFileSync(path.join(healthRepo, 'a.js'), ['deadFn(x) { return x + 1; }', 'movedFn(x) { return x + 2; }', '$dollarFn(x) { return x + 3; }', 'existingHelper(x) { return x * 2; }', 'secondHelper(x) { return x + 10; }', 'get(x) { return x; }'].map((s) => `export function ${s}`).join('\n'), 'utf8');
-      fs.writeFileSync(path.join(healthRepo, 'd.js'), 'export function deletedFileFn(x) { return x - 1; }\n', 'utf8');
-      fs.writeFileSync(path.join(healthRepo, 'b.js'), 'import { deadFn, movedFn, $dollarFn, get } from "./a.js";\nexport function runAll(obj) {\n  const v1 = deadFn(1);\n  const v2 = movedFn(2);\n  const v3 = $dollarFn(3);\n  const v4 = obj.deadFn(4);\n  const v5 = get(5);\n  const v6 = deletedFileFn(6);\n  return v1 + v2 + v3 + v4 + v5 + v6;\n}', 'utf8');
-      execFileSync('git', ['add', 'a.js', 'b.js', 'd.js'], { cwd: healthRepo });
-      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'initial commit'], { cwd: healthRepo });
-      fs.rmSync(path.join(healthRepo, 'd.js'));
-      fs.writeFileSync(path.join(healthRepo, 'a.js'), 'export function existingHelper(x) { return x * 2; }\nexport function secondHelper(x) { return x + 10; }\nexport function brandNewFn(y) {\n  return secondHelper(existingHelper(y));\n}', 'utf8');
-      fs.writeFileSync(path.join(healthRepo, 'c.js'), 'export function movedFn(x) { return x + 2; }\n', 'utf8');
-      const ch = analyzeDiffCodeHealth(healthRepo);
-      const blockers = scanDiffBlockers([healthRepo]);
-      const openSyms = [...new Set(ch.openCallers.map((c) => c.symbol))].sort();
-      const deadEntries = ch.openCallers.filter((c) => c.symbol === 'deadFn');
-      healthOk = JSON.stringify(openSyms) === JSON.stringify(['$dollarFn', 'deadFn', 'deletedFileFn'])
-        && deadEntries.length === 1 && deadEntries[0].file === 'b.js' && deadEntries[0].line === 3
-        && ch.reused.includes('existingHelper') && ch.reused.includes('secondHelper') && ch.created.includes('brandNewFn') && ch.reusePct === 67
-        && ['$dollarFn', 'deadFn', 'deletedFileFn'].every((sym) => blockers.some((b) => b.kind.includes(`removed symbol '${sym}'`)))
-        && !blockers.some((b) => b.kind.includes('movedFn')) && !blockers.some((b) => b.kind.includes("removed symbol 'get'"));
-    } catch (e) { /* fail open: capture T26 error */ healthErr = e instanceof Error ? e.message : String(e); }
-    check('analyzeDiffCodeHealth & scanDiffBlockers detect open callers (including $ symbols), ignore moved/generic/.method calls, and compute reusePct', healthOk, healthErr);
-
-    // T27 (T-RULES-1): Code-reuse and shortcut-debt contract markers across rules/AGENTS.md, agents, and skills
-    const rTxt = (rel) => fs.readFileSync(path.join(pluginRoot, rel), 'utf8');
-    check('rules/AGENTS.md, executor, code-reviewer, code-review, analyze, and hud document 6-Rung Reuse Ladder, shortcut:, caller-grep, Lean:, and --audit',
-      ['rules/AGENTS.md', 'agents/executor.md'].every((p) => rTxt(p).includes('6-Rung Reuse Ladder') && rTxt(p).includes('shortcut:'))
-      && rTxt('agents/code-reviewer.md').includes('Lean:') && rTxt('agents/code-reviewer.md').includes('shortcut:')
-      && rTxt('skills/code-review/SKILL.md').includes('--audit') && rTxt('skills/code-review/SKILL.md').includes('Lean:')
-      && rTxt('skills/analyze/SKILL.md').includes('--audit') && rTxt('skills/hud/SKILL.md').includes('scanShortcutDebt'));
-
-    await runColdSelftestChecks({ ws, conv, base, stateFile, now, validReportPath, STALE_MS, activeStates, buildActiveModeMessage, stop, writeJson, check });
-
-    // T34: Repo-wide prompt, skill & provenance hygiene (zero Default effort: in vision/debugger/team-worker, zero foreign tool/agent names, and zero upstream provenance references across plugin files)
-    const effortViolations = ['vision.md', 'debugger.md', 'team-worker.md'].filter((f) => /Default effort:/i.test(rTxt(`agents/${f}`)));
-    const foreignRe = new RegExp(`\\b(?:${['TodoWrite', 'call_o' + 'mo_agent', 'sisyphus-junior', 'momus', 'metis', 'oracle'].join('|')})\\b`, 'i');
-    const provWords = ['o' + 'mo', 'o' + 'mx', 'o' + 'mc', 'oh-my-' + 'openagent', 'oh-my-' + 'opencode', 'oh-my-' + 'codex', 'oh-my-' + 'claudecode', 'pon' + 'ytail', 'super' + 'powers', 'kib' + 'itzer', 'addy' + 'osmani', 'agent-' + 'skills'];
-    const provenanceRe = new RegExp(`${'ported' + ' from'}|\\b(?:${provWords.join('|')})\\b|${'om' + 'x_wiki'}`, 'i');
-    const foreignViolations = [];
-    const provenanceViolations = [];
-    const checkProvenanceFile = (relPath, absPath) => {
-      if (!fs.existsSync(absPath)) return;
-      let content = fs.readFileSync(absPath, 'utf8');
-      if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
-      if (provenanceRe.test(content)) provenanceViolations.push(relPath);
-    };
-    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
-      checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
-    }
-    for (const af of fs.readdirSync(path.join(pluginRoot, 'agents')).filter((f) => f.endsWith('.md'))) {
-      const txt = rTxt(`agents/${af}`);
-      if (foreignRe.test(txt)) foreignViolations.push(`agents/${af}`);
-      if (provenanceRe.test(txt)) provenanceViolations.push(`agents/${af}`);
-    }
-    for (const sd of fs.readdirSync(skillsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)) {
-      const sf = path.join(skillsDir, sd, 'SKILL.md');
-      if (fs.existsSync(sf)) {
-        const sfTxt = fs.readFileSync(sf, 'utf8');
-        if (foreignRe.test(sfTxt)) foreignViolations.push(`skills/${sd}/SKILL.md`);
-        if (provenanceRe.test(sfTxt)) provenanceViolations.push(`skills/${sd}/SKILL.md`);
-      }
-      const refDir = path.join(skillsDir, sd, 'references');
-      if (fs.existsSync(refDir)) for (const rf of fs.readdirSync(refDir).filter((f) => f.endsWith('.md'))) checkProvenanceFile(`skills/${sd}/references/${rf}`, path.join(refDir, rf));
-    }
-    const pluginWikiDir = path.join(pluginRoot, 'omagy_wiki');
-    if (fs.existsSync(pluginWikiDir)) {
-      for (const wf of fs.readdirSync(pluginWikiDir).filter((f) => f.endsWith('.md'))) checkProvenanceFile(`omagy_wiki/${wf}`, path.join(pluginWikiDir, wf));
-      const archiveDir = path.join(pluginWikiDir, 'archive');
-      if (fs.existsSync(archiveDir)) for (const af of fs.readdirSync(archiveDir).filter((f) => f.endsWith('.md'))) checkProvenanceFile(`omagy_wiki/archive/${af}`, path.join(archiveDir, af));
-    }
-    check('zero static Default effort: lines, zero foreign tool/agent names, and zero upstream provenance references across plugin files',
-      effortViolations.length === 0 && foreignViolations.length === 0 && provenanceViolations.length === 0,
-      `effort=${effortViolations.join(',')} foreign=${foreignViolations.join(',')} provenance=${provenanceViolations.join(',')}`);
-
-    runG1SelftestChecks({ ws, conv, pluginRoot, hookSelfPath, preToolUse, scanDiffBlockers, validateQualityGates, loadNotificationConfig, isSafeNotificationUrl, writeJson, check });
-
-    const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
-    check('selftest isolates runtime files from system tmpdir', !leaked);
-  } finally {
-    if (prevRuntimeDir === undefined) delete process.env.OMAGY_RUNTIME_DIR;
-    else process.env.OMAGY_RUNTIME_DIR = prevRuntimeDir;
-    fs.rmSync(ws, { recursive: true, force: true });
-  }
-
-  const failed = results.filter((r) => !r.ok);
-  for (const r of results) process.stderr.write(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? `  [${r.detail}]` : ''}\n`);
-  return { selftest: failed.length ? 'FAIL' : 'PASS', passed: results.length - failed.length, failed: failed.length };
+  const { runSelftest } = await import('./omagy-selftest.mjs');
+  return runSelftest();
 }
 
 // ---------- main ----------
@@ -4083,8 +3345,12 @@ async function main() {
     return;
   }
   if (event === 'check-test-junk') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
-    const res = checkTestJunk(pos.length ? pos : [process.cwd()]);
+    const { jsonMode, dashC, pos } = parseCliArgs(rawArgs);
+    const baseDir = dashC ? path.resolve(dashC) : process.cwd();
+    const targets = pos.length
+      ? pos.map((p) => (path.isAbsolute(p) ? p : path.resolve(baseDir, p)))
+      : [baseDir];
+    const res = checkTestJunk(targets);
     if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
     else {
       const lines = [`CHECK-TEST-JUNK: ${res.ok ? 'PASS' : 'FAIL'} (${res.filesScanned} file(s) scanned, ${res.violations.length} violation(s))`];
@@ -4158,7 +3424,7 @@ async function main() {
     const inputArg = pos[0] || '{}';
     let facts = {};
     try {
-      facts = JSON.parse(fs.existsSync(inputArg) ? fs.readFileSync(inputArg, 'utf8') : inputArg);
+      facts = JSON.parse(stripUtf8Bom(fs.existsSync(inputArg) ? fs.readFileSync(inputArg, 'utf8') : inputArg));
     } catch { /* fail open: report blocked on malformed watch-pr JSON */
       process.stdout.write(`${JSON.stringify({ verdict: 'blocked', reasons: ['invalid_input_json'] })}\n`);
       process.exitCode = 1;
@@ -4204,7 +3470,7 @@ async function main() {
     const changesArg = pos[1] || '{}';
     let changes = {};
     try {
-      changes = fs.existsSync(changesArg) ? JSON.parse(fs.readFileSync(changesArg, 'utf8')) : JSON.parse(changesArg);
+      changes = JSON.parse(stripUtf8Bom(fs.existsSync(changesArg) ? fs.readFileSync(changesArg, 'utf8') : changesArg));
     } catch { /* fail open: reject malformed wiki-repair JSON */
       process.stdout.write(`${JSON.stringify({ ok: false, error: 'Invalid changes JSON' })}\n`);
       process.exitCode = 1;
@@ -4215,12 +3481,11 @@ async function main() {
     process.exitCode = res.exitCode;
     return;
   }
-  if (event === 'floor-guard' || event === 'skill-eval' || event === 'quality-gate') {
+  if (COLD_CLI_EVENTS.has(event)) {
     const { handleColdCliCommand } = await import('./omagy-cli.mjs');
-    const defaultRoot = (fs.existsSync(path.join(process.cwd(), 'skills')) && fs.existsSync(path.join(process.cwd(), 'hooks', 'skill-eval-cases.json')))
-      ? process.cwd()
-      : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-    process.exitCode = handleColdCliCommand(event, process.argv.slice(3), defaultRoot);
+    const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const defaultRoot = event === 'skill-eval' ? pluginRoot : process.cwd();
+    process.exitCode = handleColdCliCommand(event, rawArgs, defaultRoot);
     return;
   }
   const payload = parseJson(readStdin());
@@ -4245,7 +3510,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-function sameModulePath(a, b) {
+export function sameModulePath(a, b) {
   const ra = path.resolve(a);
   const rb = path.resolve(b);
   if (ra === rb) return true;
