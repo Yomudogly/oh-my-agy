@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   analyzeDiffCodeHealth,
+  checkVerificationFreshness,
   discoverOmagyScopes,
   hardenWindowsExeSearch,
   isAwaitingConfirmation,
@@ -455,9 +456,39 @@ function readGitMetadataSignature(rootDir) {
   return `${indexSig}|${headSig}|${refSig}`;
 }
 
-function getCachedCodeHealth(primaryRoot, nowMs = Date.now()) {
+function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy')) {
+  try {
+    if (!fs.existsSync(runtimeDir) || fs.lstatSync(runtimeDir).isSymbolicLink()) return null;
+    const routingFiles = fs.readdirSync(runtimeDir)
+      .filter((f) => f.endsWith('.routing.json'))
+      .map((f) => {
+        const p = path.join(runtimeDir, f);
+        try {
+          const st = fs.lstatSync(p);
+          return st.isFile() && !st.isSymbolicLink() ? { file: f, path: p, mtimeMs: st.mtimeMs } : null;
+        } catch { /* fail open: skip unreadable routing entry */ return null; }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    if (!routingFiles.length) return null;
+    const data = readJsonSafe(routingFiles[0].path);
+    if (!data) return null;
+    return {
+      conversationId: routingFiles[0].file.replace(/\.routing\.json$/, ''),
+      at: String(data.at || new Date(routingFiles[0].mtimeMs).toISOString()),
+      skills: Array.isArray(data.skills) ? data.skills.map(String) : [],
+      transcriptPath: String(data.transcriptPath || ''),
+    };
+  } catch { /* fail open: runtime directory unavailable */
+    return null;
+  }
+}
+
+export function getCachedCodeHealth(primaryRoot, nowMs = Date.now(), transcriptPath = null) {
   const rootKey = path.resolve(primaryRoot);
-  const gitSig = readGitMetadataSignature(rootKey);
+  const txPath = typeof transcriptPath === 'string' ? transcriptPath.trim() : (readLatestRouting()?.transcriptPath || '');
+  const txSig = txPath ? `${txPath}:${statMtimeToken(txPath)}` : 'notx';
+  const gitSig = `${readGitMetadataSignature(rootKey)}|${txSig}`;
   const cached = codeHealthCache.get(rootKey);
   if (
     cached
@@ -471,6 +502,7 @@ function getCachedCodeHealth(primaryRoot, nowMs = Date.now()) {
   const diffHealth = analyzeDiffCodeHealth([rootKey]);
   const debtScan = scanShortcutDebt([rootKey]);
   const fgRes = runFloorGuard(rootKey, '');
+  const freshness = checkVerificationFreshness(txPath);
   const fgSummary = fgRes?.summary || {};
   const floorGuard = {
     ok: Boolean(fgRes?.ok),
@@ -509,6 +541,9 @@ function getCachedCodeHealth(primaryRoot, nowMs = Date.now()) {
       noTrigger: Boolean(it.noTrigger),
     })),
     floorGuard,
+    verificationFreshness: freshness.status,
+    lastVerifyCmd: redactSecrets(String(freshness.lastVerifyCmd || '')),
+    lastEditedTarget: redactSecrets(String(freshness.lastEditedTarget || '')),
   };
 
   if (codeHealthCache.size >= MAX_CODE_HEALTH_CACHE_ENTRIES && !codeHealthCache.has(rootKey)) {
@@ -1437,32 +1472,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
   // 9. Quality gates & Doctor / Hook Diagnostics
   const qg = validateQualityGates(primaryRoot);
   const runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
-  let latestRouting = null;
-  try {
-    if (fs.existsSync(runtimeDir) && !fs.lstatSync(runtimeDir).isSymbolicLink()) {
-      const routingFiles = fs.readdirSync(runtimeDir)
-        .filter((f) => f.endsWith('.routing.json'))
-        .map((f) => {
-          const p = path.join(runtimeDir, f);
-          try {
-            const st = fs.lstatSync(p);
-            return st.isFile() && !st.isSymbolicLink() ? { file: f, path: p, mtimeMs: st.mtimeMs } : null;
-          } catch { return null; }
-        })
-        .filter(Boolean)
-        .sort((a, b) => b.mtimeMs - a.mtimeMs);
-      if (routingFiles.length) {
-        const data = readJsonSafe(routingFiles[0].path);
-        if (data) {
-          latestRouting = {
-            conversationId: routingFiles[0].file.replace(/\.routing\.json$/, ''),
-            at: String(data.at || new Date(routingFiles[0].mtimeMs).toISOString()),
-            skills: Array.isArray(data.skills) ? data.skills.map(String) : [],
-          };
-        }
-      }
-    }
-  } catch { /* ignore */ }
+  const latestRouting = readLatestRouting(runtimeDir);
 
   const hookErrorsFile = path.join(primaryRoot, '.omagy', 'logs', 'hook-errors.jsonl');
   const hookErrors = fs.existsSync(hookErrorsFile)
@@ -1482,8 +1492,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     skillEval: getCachedSkillEval(PLUGIN_ROOT),
   };
 
-  // 9.5 Code Health & Technical Debt (5s + git-mtime cached symbol reuse, openCallers, shortcut: debt, and floorGuard)
-  const codeHealth = getCachedCodeHealth(primaryRoot, nowMs);
+  // 9.5 Code Health & Technical Debt (5s + git/transcript-mtime cached symbol reuse, openCallers, shortcut: debt, floorGuard, and verificationFreshness)
+  const codeHealth = getCachedCodeHealth(primaryRoot, nowMs, latestRouting?.transcriptPath || '');
 
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
@@ -2064,7 +2074,12 @@ const HUD_HTML = `<!DOCTYPE html>
       }
 
       // Code Health & Technical Debt Card
-      const ch = data.codeHealth || { reused: [], created: [], reusedCount: 0, newCount: 0, reusePct: null, openCallers: [], debtTotal: 0, noTriggerCount: 0, debtItems: [] };
+      const ch = data.codeHealth || { reused: [], created: [], reusedCount: 0, newCount: 0, reusePct: null, openCallers: [], debtTotal: 0, noTriggerCount: 0, debtItems: [], verificationFreshness: 'none', lastVerifyCmd: '', lastEditedTarget: '' };
+      const vfStatus = String(ch.verificationFreshness || 'none');
+      const vfBadgeCls = vfStatus === 'pass' ? 'badge badge-active' : 'badge';
+      const vfDetail = vfStatus === 'stale' && ch.lastEditedTarget
+        ? \`Edited after pass: \${ch.lastEditedTarget}\`
+        : (ch.lastVerifyCmd ? \`Last verify: \${ch.lastVerifyCmd}\` : 'No verification run in transcript tail');
       const reusedSyms = Array.isArray(ch.reused) ? ch.reused : [];
       const createdSyms = Array.isArray(ch.created) ? ch.created : [];
       const hasDiffActivity = ch.reusedCount > 0 || ch.newCount > 0;
@@ -2137,9 +2152,12 @@ const HUD_HTML = `<!DOCTYPE html>
 
       const codeHealthHtml = \`
         <div class="card">
-          <div style="margin-bottom:10px;">
-            <div style="font-weight:600;">Code Health &amp; Technical Debt</div>
-            <div class="muted" style="font-size:11px;margin-top:2px;">Uncommitted git diff symbol reuse, orphaned call sites, floor-guard anti-tampering, and documented code shortcuts</div>
+          <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:600;">Code Health &amp; Technical Debt</div>
+              <div class="muted" style="font-size:11px;margin-top:2px;">Uncommitted git diff symbol reuse, orphaned call sites, floor-guard anti-tampering, verification freshness, and documented code shortcuts</div>
+            </div>
+            <span class="\${vfBadgeCls}" title="\${esc(vfDetail)}">Verification: \${esc(vfStatus.toUpperCase())}</span>
           </div>
           <div class="health-grid">
             <div class="health-stat">
@@ -2578,6 +2596,9 @@ function snapshotTreeDigest(rootDir) {
 
 async function runSelftest() {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-selftest-'));
+  const rtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-rt-'));
+  const origRuntimeDir = process.env.OMAGY_RUNTIME_DIR;
+  process.env.OMAGY_RUNTIME_DIR = rtDir;
   try {
     fs.mkdirSync(path.join(ws, '.omagy', 'state'), { recursive: true });
     fs.mkdirSync(path.join(ws, '.omagy', 'ultragoal'), { recursive: true });
@@ -2648,9 +2669,19 @@ async function runSelftest() {
 
     const wsFileUrl = pathToFileURL(ws).href;
     const baseNowMs = Date.now();
+    const hudTxPath = path.join(rtDir, 'transcript.jsonl');
+    fs.writeFileSync(hudTxPath, [
+      JSON.stringify({ step_index: 0, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command', args: { CommandLine: '"sh hooks/run.sh selftest"' } }] }),
+      JSON.stringify({ step_index: 1, type: 'GENERIC', status: 'DONE', content: 'Command exited with code 0.' }),
+    ].join('\n') + '\n', 'utf8');
+    fs.writeFileSync(path.join(rtDir, 'conv-owner-1234.routing.json'), JSON.stringify({
+      at: new Date(baseNowMs).toISOString(),
+      skills: ['autopilot'],
+      transcriptPath: hudTxPath,
+    }));
     const snap = buildHudSnapshot([wsFileUrl], baseNowMs);
 
-    // Verify 5,000ms TTL memoization & .git/index mtime invalidation on codeHealth.floorGuard
+    // Verify 5,000ms TTL memoization & .git/index + transcript mtime:size invalidation on codeHealth
     fs.writeFileSync(path.join(ws, 'src', 'index.js'), `${origSrcIndex}\ntry { parseRows([]); } ${'ca' + 'tch'} {}\n`);
     const cachedSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 2000);
     const expiredSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 6000);
@@ -2658,15 +2689,23 @@ async function runSelftest() {
     const bumpedGitMtime = new Date(Date.now() + 3000);
     fs.utimesSync(path.join(ws, '.git', 'index'), bumpedGitMtime, bumpedGitMtime);
     const gitInvalidatedSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 7000);
+    fs.appendFileSync(hudTxPath, `${JSON.stringify({ step_index: 2, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'write_file', args: { Path: '"src/index.js"' } }] })}\n`, 'utf8');
+    const txInvalidatedSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 7500);
     const floorCacheOk = snap.codeHealth?.floorGuard?.ok === true
       && snap.codeHealth?.floorGuard?.exitCode === 0
       && snap.codeHealth?.floorGuard?.total === 0
+      && snap.doctor?.latestRouting?.transcriptPath === hudTxPath
+      && snap.codeHealth?.verificationFreshness === 'pass'
       && cachedSnap.codeHealth === snap.codeHealth
       && expiredSnap.codeHealth?.floorGuard?.ok === false
       && expiredSnap.codeHealth?.floorGuard?.emptyCatches === 1
       && expiredSnap.codeHealth?.floorGuard?.total === 1
       && gitInvalidatedSnap.codeHealth?.floorGuard?.ok === true
-      && gitInvalidatedSnap.codeHealth?.floorGuard?.total === 0;
+      && gitInvalidatedSnap.codeHealth?.floorGuard?.total === 0
+      && gitInvalidatedSnap.codeHealth?.verificationFreshness === 'pass'
+      && txInvalidatedSnap.codeHealth !== gitInvalidatedSnap.codeHealth
+      && txInvalidatedSnap.codeHealth?.verificationFreshness === 'stale'
+      && txInvalidatedSnap.codeHealth?.lastEditedTarget === 'src/index.js';
 
     const validArtifact = resolveSafeArtifactFile(ws, '.omagy/artifacts/loft/nav-fork/index.html');
     const validIdeaArtifact = resolveSafeArtifactFile(ws, '.omagy/artifacts/ideas/demo-idea.md');
@@ -2923,6 +2962,9 @@ async function runSelftest() {
     })}\n`);
     process.exitCode = ok ? 0 : 1;
   } finally {
+    if (origRuntimeDir === undefined) delete process.env.OMAGY_RUNTIME_DIR;
+    else process.env.OMAGY_RUNTIME_DIR = origRuntimeDir;
+    fs.rmSync(rtDir, { recursive: true, force: true });
     fs.rmSync(ws, { recursive: true, force: true });
   }
 }

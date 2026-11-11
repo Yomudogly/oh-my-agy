@@ -22,6 +22,7 @@
 //   selftest            : offline verification of the above against an isolated temp workspace
 // Contract: JSON on stdin, JSON on stdout, camelCase keys (Antigravity hook protocol).
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -74,7 +75,11 @@ export function intOr(val, fallback, min = 1) {
 export const STALE_MS = intOr(process.env.OMAGY_STALE_MS, 6 * 3600 * 1000, 1);
 const MAX_NUDGES = intOr(process.env.OMAGY_MAX_NUDGES, 2, 1);
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+const COMPACTION_TAIL_BYTES = 64 * 1024;
 export const MAX_WIKI_CONTEXT_CHARS = 3500;
+export const MAX_EPHEMERAL_CHARS = 6000;
+const MAX_NOTEPAD_CHARS = 2000;
+export const IDLE_GAP_MS = 30 * 60 * 1000;
 const MAX_WIKI_CONTEXT_LINES = 60;
 const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_WALK_DEPTH = 8;
@@ -544,19 +549,19 @@ export function renderLedgerCell(val) {
 }
 const NOOP_VERIFICATION_BINS = new Set(['echo', 'printf', 'true', ':', 'rem', 'noop']);
 const PASSTHROUGH_BINS = new Set(['env', 'time', 'nice', 'nohup', 'command']);
-export function isRealVerificationCommand(cmd) {
-  if (!nonPlaceholderText(cmd)) return false;
-  const tokens = String(cmd).trim().split(/\s+/);
-  for (const rawTok of tokens) {
+function leadCommandBin(cmd) {
+  if (!nonPlaceholderText(cmd)) return '';
+  for (const rawTok of String(cmd).trim().split(/\s+/)) {
     const tok = rawTok.replace(/^['"]|['"]$/g, '');
-    if (!tok) continue;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) continue;
-    if (tok.startsWith('-')) continue;
+    if (!tok || /^[A-Za-z_]\w*=/.test(tok) || tok.startsWith('-')) continue;
     const bin = path.basename(tok).toLowerCase();
-    if (PASSTHROUGH_BINS.has(bin)) continue;
-    return !NOOP_VERIFICATION_BINS.has(bin);
+    if (!PASSTHROUGH_BINS.has(bin)) return bin;
   }
-  return false;
+  return '';
+}
+export function isRealVerificationCommand(cmd) {
+  const bin = leadCommandBin(cmd);
+  return Boolean(bin && !NOOP_VERIFICATION_BINS.has(bin));
 }
 export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
   if (!cwd || !nonPlaceholderText(evidenceRelPath)) {
@@ -2269,18 +2274,14 @@ function summarizeTranscriptMetrics(records) {
   let failedTools = 0;
   let incomplete = 0;
   let compactions = 0;
-  let minTs = Infinity;
-  let maxTs = -Infinity;
+  const timestamps = [];
   const byTool = {};
   const fileReads = {};
 
   for (const rec of records) {
     if (!rec || typeof rec !== 'object') continue;
     const ts = Date.parse(rec.created_at || rec.at || rec.timestamp || '');
-    if (Number.isFinite(ts)) {
-      if (ts < minTs) minTs = ts;
-      if (ts > maxTs) maxTs = ts;
-    }
+    if (Number.isFinite(ts)) timestamps.push(ts);
     const type = String(rec.type || '').toUpperCase();
     const status = String(rec.status || '').toUpperCase();
     if (type === 'USER_INPUT' || rec.role === 'user') turnsStarted += 1;
@@ -2323,12 +2324,21 @@ function summarizeTranscriptMetrics(records) {
   }
   const repeatedWork = Object.values(fileReads).filter((c) => c >= 3).length;
   const stumbles = failedTools + incomplete;
-  const durationMs = (Number.isFinite(minTs) && Number.isFinite(maxTs) && maxTs >= minTs && minTs !== maxTs)
-    ? (maxTs - minTs)
-    : (records.length === 1 && Number.isFinite(minTs) ? 0 : null);
+  timestamps.sort((a, b) => a - b);
+  let rawDurationMs = (records.length === 1 && timestamps.length === 1) ? 0 : null;
+  let durationMs = rawDurationMs;
+  if (timestamps.length >= 2 && timestamps.at(-1) > timestamps[0]) {
+    rawDurationMs = timestamps.at(-1) - timestamps[0];
+    let idleMs = 0;
+    for (let i = 1; i < timestamps.length; i += 1) {
+      if (timestamps[i] - timestamps[i - 1] > IDLE_GAP_MS) idleMs += timestamps[i] - timestamps[i - 1];
+    }
+    durationMs = Math.max(0, rawDurationMs - idleMs);
+  }
   return {
     records: records.length,
     duration_ms: durationMs,
+    raw_duration_ms: rawDurationMs,
     turns: turnsStarted,
     turns_started: turnsStarted,
     turns_completed: turnsCompleted,
@@ -2395,6 +2405,7 @@ export function compareSessions(baselinePath, candidatePath, opts = {}) {
   }
   const pickSummary = (m) => ({
     duration_ms: m.duration_ms,
+    raw_duration_ms: m.raw_duration_ms,
     turns: m.turns,
     turns_started: m.turns_started,
     turns_completed: m.turns_completed,
@@ -2414,6 +2425,7 @@ export function compareSessions(baselinePath, candidatePath, opts = {}) {
     candidate: pickSummary(cand),
     deltas: {
       duration_ms: (base.duration_ms !== null && cand.duration_ms !== null) ? (cand.duration_ms - base.duration_ms) : null,
+      raw_duration_ms: (base.raw_duration_ms !== null && cand.raw_duration_ms !== null) ? (cand.raw_duration_ms - base.raw_duration_ms) : null,
       turns: cand.turns - base.turns,
       tool_calls: cand.tool_calls - base.tool_calls,
       failed_tools: cand.failed_tools - base.failed_tools,
@@ -2565,33 +2577,43 @@ export function nextAvailableWikiSlug(wikiDir, rawSlug) {
 }
 
 // ---------- transcript ----------
-function lastUserMessage(transcriptPath, payload = null) {
-  if (transcriptPath && typeof transcriptPath === 'string') {
-    let text = '';
+function readTranscriptTailSlice(p, maxBytes = TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
+  if (!p || typeof p !== 'string') return { text: '', baseOffset: 0 };
+  try {
+    const fd = fs.openSync(p, 'r');
     try {
-      const fd = fs.openSync(transcriptPath, 'r');
-      try {
-        const size = fs.fstatSync(fd).size;
-        const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
-        const buf = Buffer.alloc(size - start);
-        fs.readSync(fd, buf, 0, buf.length, start);
-        text = buf.toString('utf8');
-      } finally { fs.closeSync(fd); }
-    } catch { text = ''; }
-    if (text) {
-      const lines = text.split('\n');
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        let o;
-        try { o = JSON.parse(line); } catch { continue; }
-        const type = String(o.type || '');
-        const isUser = /USER_INPUT/i.test(type) || o.source === 'USER_EXPLICIT' || o.role === 'user';
-        const content = o.content ?? o.text ?? o.message;
-        if (!isUser || typeof content !== 'string') continue;
-        const key = `${o.step_index ?? o.stepIndex ?? ''}:${o.created_at ?? o.createdAt ?? ''}:${content.length}`;
-        return { key, text: content };
+      const st = fs.fstatSync(fd);
+      if (!st.isFile() || st.size <= 0) return { text: '', baseOffset: 0 };
+      const start = Math.max(0, st.size - (maxBytes > 0 ? Math.floor(maxBytes) : TRANSCRIPT_TAIL_BYTES));
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      const rawStr = buf.toString('utf8');
+      const bomBytes = start === 0 && rawStr.charCodeAt(0) === 0xFEFF ? 3 : 0;
+      const txt = bomBytes ? rawStr.slice(1) : rawStr;
+      const nl = dropPartial && start > 0 ? txt.indexOf('\n') : -1;
+      if (nl >= 0 && nl < txt.length - 1) {
+        return { text: txt.slice(nl + 1), baseOffset: start + bomBytes + Buffer.byteLength(txt.slice(0, nl + 1), 'utf8') };
       }
+      return { text: txt, baseOffset: start + bomBytes };
+    } finally { fs.closeSync(fd); }
+  } catch { /* fail open: unreadable transcript */ return { text: '', baseOffset: 0 }; }
+}
+function readTranscriptTailText(p, maxBytes = TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
+  return readTranscriptTailSlice(p, maxBytes, dropPartial).text;
+}
+function lastUserMessage(transcriptPath, payload = null) {
+  const text = readTranscriptTailText(transcriptPath);
+  if (text) {
+    const lines = text.split('\n');
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      let o;
+      try { o = JSON.parse(line); } catch { /* fail open: partial line */ continue; }
+      const isUser = /USER_INPUT/i.test(String(o.type || '')) || o.source === 'USER_EXPLICIT' || o.role === 'user';
+      const content = o.content ?? o.text ?? o.message;
+      if (!isUser || typeof content !== 'string') continue;
+      return { key: `${o.step_index ?? o.stepIndex ?? ''}:${o.created_at ?? o.createdAt ?? ''}:${content.length}`, text: content };
     }
   }
   const directInput = payload?.lastUserInput ?? payload?.last_user_input ?? payload?.prompt;
@@ -2605,27 +2627,15 @@ function lastAssistantMessage(payload) {
   for (const k of ['lastAssistantMessage', 'last_assistant_message', 'message', 'output', 'response']) {
     if (typeof payload?.[k] === 'string' && payload[k].trim()) return payload[k].trim();
   }
-  const transcriptPath = payload?.transcriptPath || payload?.transcript_path;
-  if (!transcriptPath || typeof transcriptPath !== 'string') return '';
-  let text = '';
-  try {
-    const fd = fs.openSync(transcriptPath, 'r');
-    try {
-      const size = fs.fstatSync(fd).size;
-      const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
-      const buf = Buffer.alloc(size - start);
-      fs.readSync(fd, buf, 0, buf.length, start);
-      text = buf.toString('utf8');
-    } finally { fs.closeSync(fd); }
-  } catch { return ''; }
+  const text = readTranscriptTailText(payload?.transcriptPath || payload?.transcript_path);
+  if (!text) return '';
   const lines = text.split('\n');
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i].trim();
     if (!line) continue;
     let o;
-    try { o = JSON.parse(line); } catch { continue; }
-    const type = String(o.type || '');
-    const isModel = /PLANNER_RESPONSE/i.test(type) || o.source === 'MODEL' || o.role === 'assistant';
+    try { o = JSON.parse(line); } catch { /* fail open: partial line */ continue; }
+    const isModel = /PLANNER_RESPONSE/i.test(String(o.type || '')) || o.source === 'MODEL' || o.role === 'assistant';
     const content = o.content ?? o.text ?? o.message;
     if (isModel && typeof content === 'string' && content.trim()) return content.trim();
   }
@@ -2778,8 +2788,16 @@ function isInformationalHelpPrompt(text) {
   return /^\s*(?:what\s+(?:is|does|are)|how\s+(?:do\s+i|to|does|can\s+i)|can\s+you\s+explain|explain|tell\s+me\s+about|describe)\b/i.test(String(text || ''))
     && !/\b(?:and\s+then|then\s+(?:run|execute|use)|please\s+(?:run|execute))\b/i.test(String(text || ''));
 }
+export function sanitizeRelayedText(text) {
+  const stripped = String(text ?? '')
+    .replace(/<SYSTEM_MESSAGE\b[^>]*>[\s\S]*?<\/SYSTEM_MESSAGE>/gi, '\n')
+    .replace(/<CONTEXT_SUMMARY\b[^>]*>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, '\n');
+  const reqs = [...stripped.matchAll(/<USER_REQUEST\b[^>]*>([\s\S]*?)<\/USER_REQUEST>/gi)].map((m) => m[1]);
+  const body = reqs.length ? reqs.join('\n') : stripped;
+  return body.replace(/^\s*\[Message\b[^\r\n]*$/gim, '').replace(/<\/?USER_REQUEST\b[^>]*>/gi, '\n').trim();
+}
 export function detectSkills(text) {
-  const raw = String(text || '');
+  const raw = sanitizeRelayedText(text);
   const found = [];
   const lead = /^\s*([$/])([a-z][a-z0-9-]*)\b/.exec(raw);
   if (lead) {
@@ -2815,6 +2833,71 @@ export function buildActiveModeMessage(roots, convId = '') {
     'If the user says continue/resume, resume from current_phase; if the user changes direction, update or $cancel the mode.';
 }
 
+const CONTEXT_SUMMARY_BLOCK_RE = /^\s*(<CONTEXT_SUMMARY\b[^>]*>[\s\S]*?<\/CONTEXT_SUMMARY>)/i;
+function detectCompactionEpoch(transcriptPath, payload) {
+  let latest = '';
+  const scan = (s) => {
+    if (typeof s !== 'string' || !/CONTEXT_SUMMARY/i.test(s)) return;
+    const m = CONTEXT_SUMMARY_BLOCK_RE.exec(s);
+    if (m) latest = m[1];
+  };
+  for (const raw of readTranscriptTailText(transcriptPath, COMPACTION_TAIL_BYTES, true).split('\n')) {
+    const line = raw.trim();
+    if (!line || !/CONTEXT_SUMMARY/i.test(line)) continue;
+    try {
+      const o = JSON.parse(line);
+      if (/^(?:PLANNER_RESPONSE|GENERIC|EPHEMERAL_MESSAGE)$/i.test(String(o?.type || ''))
+        || o?.source === 'MODEL' || o?.role === 'assistant' || o?.role === 'tool' || Array.isArray(o?.tool_calls)) continue;
+      scan(String(o?.content ?? o?.text ?? o?.message ?? o?.summary ?? ''));
+    } catch { /* fail open: ignore non-json compaction fragment */ }
+  }
+  for (const k of ['contextSummary', 'context_summary', 'lastUserInput', 'last_user_input', 'prompt']) scan(payload?.[k]);
+  return latest ? crypto.createHash('sha1').update(latest).digest('hex').slice(0, 16) : '';
+}
+export function loadUltragoalNotepad(roots, maxChars = MAX_NOTEPAD_CHARS) {
+  for (const r of roots) {
+    for (const p of [path.join(stateRoot(r), '.omagy', 'ultragoal', 'notepad.md'), path.join(path.resolve(String(r)), '.omagy', 'ultragoal', 'notepad.md')]) {
+      let raw = '';
+      try {
+        const st = fs.lstatSync(p);
+        if (st.isFile() && !st.isSymbolicLink()) raw = stripUtf8Bom(fs.readFileSync(p, 'utf8')).trim();
+      } catch { /* fail open: missing notepad */ }
+      if (!raw) continue;
+      const kept = [];
+      let on = false;
+      for (const line of raw.replace(/\r\n/g, '\n').split('\n')) {
+        const h2 = /^##\s+(.+)$/.exec(line.trim());
+        if (h2) on = /^(?:priority|working)\b/i.test(h2[1].trim());
+        else if (/^#\s+/.test(line.trim())) continue;
+        if (on) kept.push(redactSecrets(line));
+      }
+      const body = kept.join('\n').trim();
+      if (!body) continue;
+      const full = `[oh-my-agy] Ultragoal Notepad (.omagy/ultragoal/notepad.md):\n${body}`;
+      return full.length <= maxChars ? full : `${full.slice(0, Math.max(0, maxChars - 24)).trimEnd()}\n...[notepad truncated]`;
+    }
+  }
+  return null;
+}
+function capEphemeralMessages(messages, maxChars = MAX_EPHEMERAL_CHARS) {
+  const out = [];
+  let used = 0;
+  for (const m of messages) {
+    if (typeof m !== 'string' || !m) continue;
+    const rem = maxChars - used;
+    if (rem <= 0) break;
+    if (m.length <= rem) { out.push(m); used += m.length; continue; }
+    const sfx = '\n...[truncated to 6000-char budget]';
+    if (rem > sfx.length + 32) {
+      const cut = m.slice(0, rem - sfx.length);
+      const nl = cut.lastIndexOf('\n');
+      out.push((nl >= cut.length >> 1 ? cut.slice(0, nl) : cut) + sfx);
+    } else if (!out.length) out.push(m.slice(0, rem));
+    break;
+  }
+  return out;
+}
+
 // ---------- handlers ----------
 export function sessionStart(payload) {
   const roots = workspaceRoots(payload);
@@ -2833,78 +2916,86 @@ export function sessionStart(payload) {
   let wikiInjected = Boolean(record.wikiInjected);
   if (!wikiInjected) {
     const wikiMsg = loadWikiSummary(roots);
-    if (wikiMsg) {
-      messages.push(wikiMsg);
-      wikiInjected = true;
-    }
+    if (wikiMsg) { messages.push(wikiMsg); wikiInjected = true; }
   }
   const isSubagent = Boolean(record.isSubagent) || isSubagentPayload(payload);
   let mapInjected = Boolean(record.mapInjected);
+  let candMap = null;
   if (!isSubagent && !mapInjected && process.env.OMAGY_MAP !== '0') {
-    const mapMsg = buildCodebaseMap(roots);
-    if (mapMsg) {
-      messages.push(mapMsg);
-      mapInjected = true;
-    }
+    candMap = buildCodebaseMap(roots);
+    if (candMap) messages.push(candMap);
   }
+  const capped = capEphemeralMessages(messages);
+  if (candMap && capped.some((m) => m.startsWith('[oh-my-agy] Codebase map'))) mapInjected = true;
   writeJson(recordFile, { ...record, wikiInjected, mapInjected, isSubagent, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
-  return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
+  return capped.length ? { injectSteps: capped.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
 export function preInvocation(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const rawTx = payload.transcriptPath || payload.transcript_path || payload.logPath;
-  const user = lastUserMessage(rawTx, payload);
   const recordFile = runtimeFile(conv, 'routing');
   const record = readJson(recordFile) || {};
   const transcriptPath = (typeof rawTx === 'string' && rawTx.trim()) ? rawTx.trim() : (record.transcriptPath || null);
   const rawArt = payload.artifactDirectoryPath || payload.artifact_directory_path;
   const artifactDirectoryPath = (typeof rawArt === 'string' && rawArt.trim()) ? rawArt.trim() : (record.artifactDirectoryPath || null);
+  const user = lastUserMessage(transcriptPath, payload);
   const userKey = user ? user.key : '';
-  if (userKey && record.lastUserKey === userKey) return {};
-  // No transcript visibility: only remind on the first invocation of a run.
-  if (!userKey && Number(payload.invocationNum ?? payload.invocation_num ?? 0) > 1) return {};
+  const detectedEpoch = detectCompactionEpoch(transcriptPath, payload);
+  const compactionChanged = Boolean(detectedEpoch && detectedEpoch !== (record.compactionEpoch || ''));
+  const isNewUserTurn = userKey
+    ? record.lastUserKey !== userKey
+    : Number(payload.invocationNum ?? payload.invocation_num ?? 0) <= 1;
+  if (!compactionChanged && !isNewUserTurn) return {};
 
-  const isSubagent = Boolean(record.isSubagent) || isSubagentPayload(payload, user ? user.text : '');
+  const cleanText = user ? sanitizeRelayedText(user.text) : '';
+  const isSubagent = Boolean(record.isSubagent) || isSubagentPayload(payload, cleanText);
   const messages = [];
+  let wikiInjected = Boolean(record.wikiInjected);
+  let mapInjected = Boolean(record.mapInjected);
+  let candMap = null;
+  let skills = Array.isArray(record.skills) ? record.skills : [];
   if (!isSubagent) {
-    const skills = user ? detectSkills(user.text) : [];
-    if (skills.length) {
+    const det = isNewUserTurn && user ? detectSkills(user.text) : [];
+    if (det.length) {
+      skills = det;
       messages.push(
-        `[oh-my-agy] Skill routing: the user explicitly invoked ${skills.map((s) => `$${s}`).join(', ')}. ` +
+        `[oh-my-agy] Skill routing: the user explicitly invoked ${det.map((s) => `$${s}`).join(', ')}. ` +
         'Activate these oh-my-agy skills left-to-right: read each SKILL.md from the oh-my-agy plugin before acting, ' +
         'and treat the rest of the user message as the task.',
       );
     }
     const activeMsg = buildActiveModeMessage(roots, conv);
     if (activeMsg) messages.push(activeMsg);
-
-    let wikiInjected = Boolean(record.wikiInjected);
+    if (compactionChanged) {
+      const parts = [`[oh-my-agy] Context compaction recovery (epoch ${detectedEpoch}):`];
+      const w = loadWikiSummary(roots);
+      if (w) { parts.push(w); wikiInjected = true; }
+      const np = loadUltragoalNotepad(roots);
+      if (np) parts.push(np);
+      messages.push(parts.join('\n'));
+    }
     if (!wikiInjected) {
       const wikiMsg = loadWikiSummary(roots);
-      if (wikiMsg) {
-        messages.push(wikiMsg);
-        wikiInjected = true;
-      }
+      if (wikiMsg) { messages.push(wikiMsg); wikiInjected = true; }
     }
-    let mapInjected = Boolean(record.mapInjected);
-    if (!mapInjected && process.env.OMAGY_MAP !== '0') {
-      const mapMsg = buildCodebaseMap(roots);
-      if (mapMsg) {
-        messages.push(mapMsg);
-        mapInjected = true;
-      }
-    }
-    const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
-    for (const m of subdir.messages) messages.push(m);
-    writeJson(recordFile, { lastUserKey: userKey, wikiInjected, mapInjected, isSubagent: false, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
-  } else {
-    const subdir = discoverSubdirAgents(roots, user ? user.text : '', record.seenAgents || []);
-    for (const m of subdir.messages) messages.push(m);
-    writeJson(recordFile, { lastUserKey: userKey, wikiInjected: Boolean(record.wikiInjected), mapInjected: Boolean(record.mapInjected), isSubagent: true, seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   }
-  return messages.length ? { injectSteps: messages.map((m) => ({ ephemeralMessage: m })) } : {};
+  const subdir = discoverSubdirAgents(roots, cleanText, record.seenAgents || []);
+  messages.push(...subdir.messages);
+  if (!isSubagent && !mapInjected && process.env.OMAGY_MAP !== '0') {
+    candMap = buildCodebaseMap(roots);
+    if (candMap) messages.push(candMap);
+  }
+  const capped = capEphemeralMessages(messages);
+  if (candMap && capped.some((m) => m.startsWith('[oh-my-agy] Codebase map'))) mapInjected = true;
+  writeJson(recordFile, {
+    lastUserKey: userKey, wikiInjected, mapInjected, isSubagent,
+    compactionEpoch: detectedEpoch || record.compactionEpoch || '',
+    ...(isSubagent ? {} : { skills }),
+    seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString(),
+  });
+  return capped.length ? { injectSteps: capped.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
 const FILE_MUTATION_TOOLS_RE = /^(?:write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|multiedit|multi_edit|apply_patch|patch|delete_file|move_file|rename_file)$/i;
@@ -3021,6 +3112,13 @@ export function preToolUse(payload) {
           reason: `oh-my-agy: notifications-guard — ${toolName} on ${targetResolved} modifies outbound notification webhooks or command settings. Approve explicitly if intended.`,
         };
       }
+      if (isFullOverwrite && /(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i.test(targetResolved)) {
+        let nonEmpty = false;
+        try { const st = fs.statSync(targetResolved); nonEmpty = st.isFile() && st.size > 0; } catch { /* fail open: new log */ }
+        if (nonEmpty) {
+          return { decision: 'force_ask', reason: `oh-my-agy: append-only-guard — refusing full Overwrite of non-empty append-only log ${targetResolved} (use Append: true or hooks/run.sh append-jsonl).` };
+        }
+      }
       let prevText = null;
       try {
         const st = fs.lstatSync(targetResolved);
@@ -3107,12 +3205,116 @@ export function preToolUse(payload) {
   return {};
 }
 
+const SHELL_EXEC_TOOLS_RE = /^(?:run_command|bash|execute_command)$/i;
+const NON_VERIFY_BINS = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'wc', 'ls', 'cat', 'head', 'tail', 'find', 'stat',
+  'file', 'which', 'whereis', 'pwd', 'cd', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'touch',
+  'sed', 'awk', 'sort', 'uniq', 'tr', 'cut', 'git', 'curl', 'wget',
+]);
+const VERIFY_RUNNER_RE = /(?:^|[\s"'/\\])(?:--)?(?:selftest|skill-eval|floor-guard|check-test-junk|wiki-lint|validate-design-md|quality-gates?|verify-evidence)(?=[\s"']|$)|\b(?:pytest|py\.test|vitest|jest|mocha|ava|tap|uvu|cypress|playwright\s+test|phpunit|rspec|ctest|eslint|biome|tsc|vue-tsc|svelte-check|ruff\s+check|flake8|mypy|pyright|golangci-lint)\b|\b(?:npm|pnpm|yarn|bun|deno|npx|pnpx|bunx)\s+(?:run\s+|exec\s+)?(?:test|tests|unit|e2e|build|lint|typecheck|type-check|check|verify|ci)(?:[:\s]|$)|\b(?:cargo|go|dotnet|swift|zig\s+build|mix|mvn|gradle|gradlew|make|cmake|rake|bazel|blaze)\s+(?:test|check|build|clippy|vet)\b|\bnode\s+(?:--test\b|\S*(?:selftest|\.test\.|\.spec\.)\S*)|\bpython3?\s+-m\s+(?:pytest|unittest)\b|\b(?:sh|bash|zsh)\s+\S*\btest(?:\.sh|s\.sh)?\b/i;
+const FRESHNESS_IMMUNE_RE = /(?:^|\/)(?:\.omagy|omagy_wiki)(?:\/|$)|\/brain\/[0-9a-f-]{8,}(?:\/|$)|\/\.gemini\/antigravity\/brain(?:\/|$)/i;
+const CONTEXT_OVERFLOW_RE = /context[_\s-]*(?:length|window)[_\s-]*exceeded|maximum\s+context\s+length|prompt\s+is\s+too\s+long|token[_\s-]*limit[_\s-]*exceeded|input\s+exceeds\s+maximum\s+token/i;
+
+function unwrapStr(v) {
+  if (typeof v !== 'string') return '';
+  const s = v.trim();
+  if (s.length >= 2 && s[0] === '"' && s.at(-1) === '"') {
+    try { const p = JSON.parse(s); if (typeof p === 'string') return p.trim(); } catch { /* fail open: literal string */ }
+  }
+  return s;
+}
+function parseCallArgs(tc) {
+  let raw = tc?.arguments ?? tc?.args ?? tc?.input ?? tc?.function?.arguments ?? null;
+  if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch { /* fail open: malformed args */ raw = null; } }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string') out[k] = unwrapStr(v);
+    else if (Array.isArray(v)) out[k] = v.map((it) => (it && typeof it === 'object' ? Object.fromEntries(Object.entries(it).map(([ik, iv]) => [ik, typeof iv === 'string' ? unwrapStr(iv) : iv])) : it));
+    else out[k] = v;
+  }
+  return out;
+}
+function isVerifyRunner(cmd) {
+  return isRealVerificationCommand(cmd) && String(cmd).split(/\s*(?:&&|;|\r?\n)\s*/).some((seg) => {
+    const b = leadCommandBin(seg);
+    return b && !NOOP_VERIFICATION_BINS.has(b) && !NON_VERIFY_BINS.has(b) && VERIFY_RUNNER_RE.test(seg);
+  });
+}
+function cmdOutcome(o) {
+  if (!o || typeof o !== 'object') return null;
+  const st = String(o.status || '').trim().toUpperCase();
+  if (st === 'ERROR' || st === 'FAILED' || o.is_error === true || o.isError === true || Boolean(o.error)) return 'fail';
+  const rc = o.exit_code ?? o.exitCode;
+  if (rc !== undefined && rc !== null && String(rc).trim() !== '' && Number.isFinite(Number(rc))) return Number(rc) === 0 ? 'pass' : 'fail';
+  const m = /Command exited with code\s+(-?\d+)/i.exec(String(o.output ?? o.result ?? o.content ?? o.stdout ?? o.text ?? ''));
+  return m ? (Number(m[1]) === 0 ? 'pass' : 'fail') : null;
+}
+export function checkVerificationFreshness(transcriptPath, tailBytes = TRANSCRIPT_TAIL_BYTES) {
+  const empty = { status: 'none', lastVerifyIdx: -1, lastEditIdx: -1, lastVerifyCmd: '', lastEditedTarget: '' };
+  const { text: tail, baseOffset } = readTranscriptTailSlice(transcriptPath, tailBytes, true);
+  if (!tail) return empty;
+  const recs = [];
+  let pos = baseOffset;
+  for (const raw of tail.split('\n')) {
+    const recOffset = pos;
+    pos += Buffer.byteLength(raw, 'utf8') + 1;
+    const line = raw.trim();
+    if (!line) continue;
+    try { const o = JSON.parse(line); if (o && typeof o === 'object' && !Array.isArray(o)) recs.push({ o, recOffset }); } catch { /* fail open: bad jsonl */ }
+  }
+  if (!recs.length) return empty;
+  let lastVerifyIdx = -1, lastOutcome = 'none', lastVerifyCmd = '', lastEditIdx = -1, lastEditedTarget = '';
+  for (let i = 0; i < recs.length; i += 1) {
+    const { o: rec, recOffset } = recs[i];
+    const calls = Array.isArray(rec.tool_calls) ? rec.tool_calls
+      : ((rec.name || rec.toolName) && (rec.arguments || rec.args || rec.input || /TOOL_CALL/i.test(String(rec.type || ''))) ? [rec] : []);
+    for (let j = 0; j < calls.length; j += 1) {
+      const tc = calls[j];
+      if (!tc || typeof tc !== 'object') continue;
+      const idx = recOffset * 64 + j;
+      const name = String(tc.name || tc.toolName || tc.function?.name || '').trim();
+      const args = parseCallArgs(tc);
+      if (SHELL_EXEC_TOOLS_RE.test(name)) {
+        const cmd = String(args.CommandLine ?? args.command ?? args.cmd ?? args.script ?? '').trim();
+        if (!isVerifyRunner(cmd)) continue;
+        let resp = null;
+        if (tc.id) resp = (recs.slice(i + 1, i + 16).find((r) => (r.o.tool_call_id || r.o.toolCallId) === tc.id) || {}).o || null;
+        else {
+          const c = recs[i + 1 + j]?.o;
+          if (c && !Array.isArray(c.tool_calls) && (/^(?:GENERIC|.*TOOL.*)$/i.test(String(c.type || '')) || c.role === 'tool')) resp = c;
+        }
+        const a = cmdOutcome(tc) ?? cmdOutcome(args), b = cmdOutcome(resp);
+        const st = String(tc.status || resp?.status || rec.status || '').trim().toUpperCase();
+        const out = (a === 'fail' || b === 'fail') ? 'fail' : (a === 'pass' || b === 'pass') ? 'pass'
+          : (cmdOutcome(rec) === 'fail' ? 'fail' : (/^(?:RUNNING|PENDING|IN_PROGRESS)$/.test(st) ? null : 'pass'));
+        if (out) { lastVerifyIdx = idx; lastOutcome = out; lastVerifyCmd = cmd; }
+      } else if (FILE_MUTATION_TOOLS_RE.test(name) && String(tc.status || '').trim().toUpperCase() !== 'ERROR') {
+        for (const t of extractToolTargets(name, args)) {
+          const norm = String(t || '').replace(/\\/g, '/').trim();
+          if (norm && !FRESHNESS_IMMUNE_RE.test(norm)) { lastEditIdx = idx; lastEditedTarget = t; }
+        }
+      }
+    }
+  }
+  const status = lastVerifyIdx < 0 ? 'none' : (lastOutcome === 'fail' ? 'fail' : (lastEditIdx > lastVerifyIdx ? 'stale' : 'pass'));
+  return { status, lastVerifyIdx, lastEditIdx, lastVerifyCmd, lastEditedTarget };
+}
+
+export function isContextOverflowStop(payload, rawReason = '') {
+  return [rawReason, payload?.terminationReason, payload?.termination_reason, payload?.stop_reason, payload?.stopReason, payload?.reason,
+    typeof payload?.error === 'string' ? payload.error : JSON.stringify(payload?.error || '')]
+    .some((v) => typeof v === 'string' && v && CONTEXT_OVERFLOW_RE.test(v));
+}
+
 export async function stop(payload) {
+  const rawReasonInput = String(payload?.terminationReason ?? payload?.termination_reason ?? 'NO_TOOL_CALL').trim();
+  const allow = { decision: 'stop' };
+  if (isContextOverflowStop(payload, rawReasonInput)) return allow;
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
-  const rawReason = String(payload.terminationReason ?? payload.termination_reason ?? 'NO_TOOL_CALL').trim().toLowerCase();
+  const rawReason = rawReasonInput.toLowerCase();
   const isNormalStop = NORMAL_STOP_REASONS.has(rawReason);
-  const allow = { decision: 'stop' };
 
   let decision = allow;
   if (isNormalStop && payload.fullyIdle !== false && !payload.error) {
@@ -3143,7 +3345,7 @@ export async function stop(payload) {
         writeJson(nudgeFile, { sig, count, exhausted: true, at: new Date().toISOString() });
       }
     } else {
-      try { fs.rmSync(nudgeFile, { force: true }); } catch { /* ignore */ }
+      try { fs.rmSync(nudgeFile, { force: true }); } catch { /* fail open: ignore missing nudge file */ }
       const msg = lastAssistantMessage(payload);
       const justCompleted = roots.flatMap((r) => loadModeStates(r, conv)).some(
         (s) => !s.foreignOwner && String(s.data.current_phase || '').toLowerCase() === 'complete' && Date.now() - updatedMs(s) < 60 * 1000,
@@ -3162,6 +3364,22 @@ export async function stop(payload) {
               reason: `[oh-my-agy] Completion drift guard: git diff still contains unfinished blocker pattern(s): ${summary}. ` +
                 'Resolve or remove skipped/focused tests, placeholder TODO/stub implementations, unexempted checker suppressions (or document `-- <reason>` / `shortcut: <ceiling>, <upgrade>`), bare empty catches (or document `/* fail open: <reason> */`), and unauthorized protected-block edits before claiming completion.',
             };
+          }
+        }
+        if (decision.decision !== 'continue') {
+          const vf = checkVerificationFreshness(String(payload.transcript_path || payload.transcriptPath || routingRec.transcriptPath || '').trim());
+          const fFile = runtimeFile(conv, 'freshness');
+          if (vf.status === 'stale' || vf.status === 'fail') {
+            const sig = `${vf.status}:${vf.lastVerifyIdx}:${vf.lastEditIdx}:${vf.lastEditedTarget}`;
+            if ((readJson(fFile) || {}).sig !== sig) {
+              writeJson(fFile, { sig, status: vf.status, at: new Date().toISOString() });
+              const why = vf.status === 'stale'
+                ? `${vf.lastEditedTarget || '(modified)'} was edited after ${vf.lastVerifyCmd || 'verification'}`
+                : `${vf.lastVerifyCmd || 'verification'} failed`;
+              decision = { decision: 'continue', reason: `[oh-my-agy] Verification freshness check (${vf.status}): ${why}. Re-run verification before claiming completion.` };
+            }
+          } else if (vf.status === 'pass') {
+            try { fs.rmSync(fFile, { force: true }); } catch { /* fail open: missing latch */ }
           }
         }
       }

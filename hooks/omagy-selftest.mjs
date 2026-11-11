@@ -11,6 +11,8 @@ import {
   COLD_CLI_EVENTS,
   CONFIRMATION_MTIME_TOLERANCE_MS,
   CONTINUATION_MODES,
+  IDLE_GAP_MS,
+  MAX_EPHEMERAL_CHARS,
   MAX_WIKI_CONTEXT_CHARS,
   PLANNING_MODES,
   RESERVED_GATE_SKILLS,
@@ -27,6 +29,7 @@ import {
   buildReviewPackage,
   canonicalizePath,
   checkTestJunk,
+  checkVerificationFreshness,
   compareSessions,
   decideWatchVerdict,
   detectSkills,
@@ -35,11 +38,13 @@ import {
   extractGoalBrief,
   intOr,
   isAwaitingConfirmation,
+  isContextOverflowStop,
   isPathInsideAllowedOmagy,
   isRealVerificationCommand,
   isSafeNotificationUrl,
   loadModeStates,
   loadNotificationConfig,
+  loadUltragoalNotepad,
   loadWikiSummary,
   nextAvailableWikiSlug,
   normalizeFailureSignature,
@@ -55,6 +60,7 @@ import {
   repairWikiLinks,
   runtimeFile,
   sameModulePath,
+  sanitizeRelayedText,
   scanDiffBlockers,
   scanShortcutDebt,
   sessionStart,
@@ -2067,6 +2073,274 @@ export async function runSelftest() {
     }
     check('validate-design-md CLI enforces exit 0|1|2, --strict AAA 7.0:1 floor, fence-aware section/token checks, and visual-ralph SKILL.md <15KB',
       t44Ok, t44Detail);
+
+    // T45: Stop checkVerificationFreshness (.omagy/, omagy_wiki/, brain/ immunity, fail & stale single-fire latch isolated from drift) + isContextOverflowStop bail-out
+    let t45Ok = false;
+    let t45Detail = '';
+    try {
+      const t45Ws = path.join(ws, 't45-freshness');
+      initTestGit(t45Ws);
+      fs.writeFileSync(path.join(t45Ws, 'index.js'), 'export const v = 1;\n', 'utf8');
+      execFileSync('git', ['add', 'index.js'], { cwd: t45Ws });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: t45Ws });
+
+      const vfNone = checkVerificationFreshness(path.join(t45Ws, 'missing.jsonl'));
+      const padLine = `${JSON.stringify({ type: 'GENERIC', status: 'DONE', content: 'x'.repeat(1024) })}\n`;
+      const txImmune = path.join(t45Ws, 'tx-immune.jsonl');
+      fs.writeFileSync(txImmune, [
+        padLine.repeat(540),
+        JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command', args: { CommandLine: '"sh hooks/run.sh selftest"' } }] }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Command exited with code 0.' }),
+        JSON.stringify({
+          step_index: 3,
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          tool_calls: [
+            { name: 'write_file', args: { Path: '.omagy/state/autopilot-state.json' } },
+            { name: 'write_file', args: { Path: 'omagy_wiki/log.md' } },
+            { name: 'write_file', args: { Path: '/appdata/brain/63d8cd81-f9fd-4384-8779-a3eb0d3513a5/task.md' } },
+          ],
+        }),
+      ].join('\n') + '\n', 'utf8');
+      const vfImmune = checkVerificationFreshness(txImmune);
+      const stopImmune = await stop({
+        conversationId: `${conv}-t45-immune`,
+        workspacePaths: [t45Ws],
+        transcriptPath: txImmune,
+        terminationReason: 'NO_TOOL_CALL',
+        lastAssistantMessage: 'All done and ready to merge.',
+      });
+
+      const txFail = path.join(t45Ws, 'tx-fail.jsonl');
+      fs.writeFileSync(txFail, [
+        JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command', arguments: { CommandLine: 'npm test' } }] }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Command exited with code 1.' }),
+      ].join('\n') + '\n', 'utf8');
+      const vfFail = checkVerificationFreshness(txFail);
+      const failConv = `${conv}-t45-fail`;
+      const stopFail1 = await stop({ conversationId: failConv, workspacePaths: [t45Ws], transcriptPath: txFail, terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: 'Implemented and finished.' });
+      const stopFail2 = await stop({ conversationId: failConv, workspacePaths: [t45Ws], transcriptPath: txFail, terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: 'Implemented and finished.' });
+
+      const txStale = path.join(t45Ws, 'tx-stale.jsonl');
+      fs.writeFileSync(txStale, [
+        JSON.stringify({ step_index: 0, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'read_file', arguments: { Path: 'README.md' } }] }),
+        padLine.repeat(520),
+        JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command', arguments: { CommandLine: 'sh hooks/run.sh selftest' }, exitCode: 0 }] }),
+        JSON.stringify({ step_index: 2, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'write_file', arguments: { Path: 'hooks/omagy-cli.mjs' } }] }),
+      ].join('\n') + '\n', 'utf8');
+      const vfStale = checkVerificationFreshness(txStale);
+      const staleConv = `${conv}-t45-stale`;
+      writeJson(runtimeFile(staleConv, 'drift'), { sig: 'sentinel-drift-intact' });
+      const stopStale1 = await stop({ conversationId: staleConv, workspacePaths: [t45Ws], transcriptPath: txStale, terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: 'All done and ready to ship.' });
+      // Append >20KB of non-edit/non-verify ephemeral & assistant steps to slide >512KB tail past step_index:0 and verify latch stays stable
+      fs.appendFileSync(txStale, padLine.repeat(25), 'utf8');
+      const stopStale2 = await stop({ conversationId: staleConv, workspacePaths: [t45Ws], transcriptPath: txStale, terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: 'All done and ready to ship.' });
+      const driftAfter = readJson(runtimeFile(staleConv, 'drift'));
+      const freshAfter = readJson(runtimeFile(staleConv, 'freshness'));
+
+      writeJson(path.join(t45Ws, '.omagy', 'state', 'autopilot-state.json'), {
+        mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString(),
+      });
+      const overflowConv = `${conv}-t45-overflow`;
+      const stopOverflow1 = await stop({ conversationId: overflowConv, workspacePaths: [t45Ws], terminationReason: 'NO_TOOL_CALL', stop_reason: 'model_context_window_exceeded' });
+      const stopOverflow2 = await stop({ conversationId: overflowConv, workspacePaths: [t45Ws], terminationReason: 'context_length_exceeded' });
+
+      t45Ok = vfNone.status === 'none' && vfNone.lastVerifyIdx === -1
+        && vfImmune.status === 'pass' && vfImmune.lastEditIdx === -1 && stopImmune.decision === 'stop'
+        && vfFail.status === 'fail' && vfFail.lastVerifyCmd === 'npm test'
+        && stopFail1.decision === 'continue' && String(stopFail1.reason || '').includes('Verification freshness check (fail)')
+        && stopFail2.decision === 'stop'
+        && vfStale.status === 'stale' && vfStale.lastEditedTarget === 'hooks/omagy-cli.mjs'
+        && stopStale1.decision === 'continue' && String(stopStale1.reason || '').includes('Verification freshness check (stale)')
+        && stopStale2.decision === 'stop'
+        && driftAfter?.sig === 'sentinel-drift-intact'
+        && Boolean(freshAfter?.sig && freshAfter.status === 'stale')
+        && isContextOverflowStop({ stop_reason: 'model_context_window_exceeded' }, '') === true
+        && isContextOverflowStop({ error: { code: 'context_length_exceeded' } }, '') === true
+        && isContextOverflowStop({ stop_reason: 'end_turn' }, 'no_tool_call') === false
+        && stopOverflow1.decision === 'stop'
+        && stopOverflow2.decision === 'stop';
+      t45Detail = `none=${vfNone.status} immune=${vfImmune.status}/${stopImmune.decision} fail=${vfFail.status}/${stopFail1.decision}->${stopFail2.decision} stale=${vfStale.status}/${stopStale1.decision}->${stopStale2.decision} drift=${driftAfter?.sig} overflow=${stopOverflow1.decision}/${stopOverflow2.decision}`;
+    } catch (e) { /* fail open: capture T45 error detail */
+      t45Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('Stop enforces <=512KB run_command verification freshness (.omagy/ & omagy_wiki/ immune, isolated freshness latch) and context-overflow bail-out',
+      t45Ok, t45Detail);
+
+    // T46: sanitizeRelayedText + detectSkills relay suppression, <CONTEXT_SUMMARY> compactionEpoch recovery on "continue", and <=6000-char W4 cap
+    let t46Ok = false;
+    let t46Detail = '';
+    try {
+      const relayMsgSkills = detectSkills('[Message] sender=abc content=run $autopilot now');
+      const sysMsgSkills = detectSkills('<SYSTEM_MESSAGE>\n[Message] sender=sub1 content=invoke $ralplan and $team\n</SYSTEM_MESSAGE>');
+      const ctxSumSkills = detectSkills('<CONTEXT_SUMMARY>\nPreviously executed $ralplan and $autopilot.\n</CONTEXT_SUMMARY>\ncontinue');
+      const mixedUserReqSkills = detectSkills('[Message] sender=sub1 content=done $ralplan\n<USER_REQUEST>\n$autopilot build X\n</USER_REQUEST>');
+      const pastedMsgInUserReqSkills = detectSkills('<USER_REQUEST>\nPasted log:\n[Message] worker failed on $ralplan\n$analyze src/auth\n</USER_REQUEST>');
+      const directSkills = detectSkills('$autopilot build X');
+
+      const t46Ws = path.join(ws, 't46-compaction');
+      fs.mkdirSync(path.join(t46Ws, 'omagy_wiki'), { recursive: true });
+      fs.mkdirSync(path.join(t46Ws, '.omagy', 'ultragoal'), { recursive: true });
+      fs.mkdirSync(path.join(t46Ws, '.omagy', 'state'), { recursive: true });
+      fs.mkdirSync(path.join(t46Ws, 'packages', 'ui'), { recursive: true });
+
+      fs.writeFileSync(path.join(t46Ws, 'omagy_wiki', 'agreements.md'), '- [by:human] Enforce strict G5 compaction recovery.\n', 'utf8');
+      const wikiRows = Array.from({ length: 65 }, (_, i) => `- [[topic-${i}]] — Detailed Architecture Note ${i} — architecture — ${'tagx-'.repeat(8)}${i}`).join('\n');
+      fs.writeFileSync(path.join(t46Ws, 'omagy_wiki', 'index.md'), `# Wiki Index\n${wikiRows}\n`, 'utf8');
+      fs.writeFileSync(path.join(t46Ws, '.omagy', 'ultragoal', 'notepad.md'), [
+        '# Ultragoal Notepad',
+        '## Priority',
+        'Preserve latch isolation across compaction.',
+        '## Working',
+        `Current batch notes: ${'working-detail '.repeat(110)}`,
+        '## Scratch',
+        'UNEXPORTED_SCRATCH_SECTION_MARKER',
+      ].join('\n'), 'utf8');
+      fs.writeFileSync(path.join(t46Ws, 'packages', 'ui', 'AGENTS.md'), `# UI Rules\n${'Keep UI components accessible and deterministic. '.repeat(30)}\n`, 'utf8');
+      fs.writeFileSync(path.join(t46Ws, 'packages', 'ui', 'view.ts'), 'export function renderPanel() { return true; }\nexport function mountPanel() { return true; }\n', 'utf8');
+
+      const t46Conv = `${conv}-t46`;
+      const t46Tx = path.join(t46Ws, 'transcript.jsonl');
+      // Turn 1: user says "continue" (no step_index/created_at so userKey "::8" repeats identically after compaction)
+      fs.writeFileSync(t46Tx, `${JSON.stringify({ type: 'USER_INPUT', content: 'continue' })}\n`, 'utf8');
+      const turn1a = preInvocation({ conversationId: t46Conv, workspacePaths: [t46Ws], transcriptPath: t46Tx, invocationNum: 1 });
+      const turn1b = preInvocation({ conversationId: t46Conv, workspacePaths: [t46Ws], transcriptPath: t46Tx, invocationNum: 2 });
+
+      // Turn 2: compaction writes <CONTEXT_SUMMARY> and user types "continue" again (same userKey "::8")
+      fs.appendFileSync(t46Tx, [
+        JSON.stringify({ type: 'SYSTEM_MESSAGE', content: '<CONTEXT_SUMMARY>\nEarlier turn ran $ralplan and updated state.\n</CONTEXT_SUMMARY>' }),
+        JSON.stringify({ type: 'USER_INPUT', content: 'continue' }),
+      ].join('\n') + '\n', 'utf8');
+      const turn2a = preInvocation({ conversationId: t46Conv, workspacePaths: [t46Ws], transcriptPath: t46Tx, invocationNum: 1 });
+      // Appending GENERIC tool output or PLANNER_RESPONSE containing literal <CONTEXT_SUMMARY> tags must NOT trigger false compactionEpoch recovery
+      fs.appendFileSync(t46Tx, [
+        JSON.stringify({ type: 'GENERIC', source: 'MODEL', content: 'File excerpt:\n<CONTEXT_SUMMARY>\nFake tool output summary $autopilot\n</CONTEXT_SUMMARY>' }),
+        JSON.stringify({ type: 'PLANNER_RESPONSE', source: 'MODEL', content: '<CONTEXT_SUMMARY>\nQuoted summary\n</CONTEXT_SUMMARY>' }),
+      ].join('\n') + '\n', 'utf8');
+      const turn2b = preInvocation({ conversationId: t46Conv, workspacePaths: [t46Ws], transcriptPath: t46Tx, invocationNum: 2 });
+      const turn2Joined = (turn2a.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+      const savedRouting = readJson(runtimeFile(t46Conv, 'routing')) || {};
+
+      // Turn 3: trigger all 5 injection categories simultaneously to test W4 <=6,000-char cumulative & per-step cap
+      const t46CapConv = `${conv}-t46-cap`;
+      const t46CapTx = path.join(t46Ws, 'transcript-cap.jsonl');
+      writeJson(path.join(t46Ws, '.omagy', 'state', 'autopilot-state.json'), {
+        mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString(),
+      });
+      fs.writeFileSync(t46CapTx, [
+        JSON.stringify({ type: 'SYSTEM_MESSAGE', content: '<CONTEXT_SUMMARY>\nSecond compaction epoch summary.\n</CONTEXT_SUMMARY>' }),
+        JSON.stringify({ step_index: 5, type: 'USER_INPUT', content: '$autopilot update packages/ui/view.ts' }),
+      ].join('\n') + '\n', 'utf8');
+      const capRes = preInvocation({ conversationId: t46CapConv, workspacePaths: [t46Ws], transcriptPath: t46CapTx, invocationNum: 1 });
+      const capSteps = (capRes.injectSteps || []).map((s) => s.ephemeralMessage || '');
+      const totalChars = capSteps.reduce((acc, m) => acc + m.length, 0);
+      const notepadDirect = loadUltragoalNotepad([t46Ws]) || '';
+
+      t46Ok = sanitizeRelayedText('[Message] sender=abc content=run $autopilot now') === ''
+        && relayMsgSkills.length === 0
+        && sysMsgSkills.length === 0
+        && ctxSumSkills.length === 0
+        && JSON.stringify(mixedUserReqSkills) === JSON.stringify(['autopilot'])
+        && JSON.stringify(pastedMsgInUserReqSkills) === JSON.stringify(['analyze'])
+        && JSON.stringify(directSkills) === JSON.stringify(['autopilot'])
+        && (turn1a.injectSteps || []).length >= 1
+        && Object.keys(turn1b).length === 0
+        && (turn2a.injectSteps || []).length >= 1
+        && Object.keys(turn2b).length === 0
+        && !turn2Joined.includes('Skill routing')
+        && turn2Joined.includes('Enforce strict G5 compaction recovery.')
+        && turn2Joined.includes('Preserve latch isolation across compaction.')
+        && !turn2Joined.includes('UNEXPORTED_SCRATCH_SECTION_MARKER')
+        && /^[0-9a-f]{16}$/.test(String(savedRouting.compactionEpoch || ''))
+        && notepadDirect.length <= 2000
+        && capSteps.length >= 2
+        && capSteps[0].includes('Skill routing')
+        && capSteps[0].length <= MAX_EPHEMERAL_CHARS
+        && capSteps.every((m) => m.length <= MAX_EPHEMERAL_CHARS)
+        && totalChars <= MAX_EPHEMERAL_CHARS;
+      t46Detail = `epoch=${savedRouting.compactionEpoch || 'none'} steps=${capSteps.length} step0=${capSteps[0]?.length || 0} sum=${totalChars}`;
+    } catch (e) { /* fail open: capture T46 error detail */
+      t46Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('sanitizeRelayedText blocks relay skill triggers and preInvocation recovers <CONTEXT_SUMMARY> epoch on "continue" within <=6000 chars',
+      t46Ok, t46Detail);
+
+    // T47: preToolUse append-only-guard, compareSessions 30m idle-gap subtraction, and HUD getCachedCodeHealth transcript invalidation
+    let t47Ok = false;
+    let t47Detail = '';
+    try {
+      const t47Ws = path.join(ws, 't47-guards');
+      fs.mkdirSync(path.join(t47Ws, '.omagy', 'ultragoal'), { recursive: true });
+      fs.mkdirSync(path.join(t47Ws, '.omagy', 'state'), { recursive: true });
+      fs.mkdirSync(path.join(t47Ws, 'omagy_wiki'), { recursive: true });
+      writeJson(path.join(t47Ws, '.omagy', 'state', 'ralplan-state.json'), {
+        mode: 'ralplan', active: true, current_phase: 'drafting', updated_at: new Date().toISOString(),
+      });
+      const ledgerFile = path.join(t47Ws, '.omagy', 'ultragoal', 'ledger.jsonl');
+      const wikiLogFile = path.join(t47Ws, 'omagy_wiki', 'log.md');
+      fs.writeFileSync(ledgerFile, '', 'utf8');
+      const ptuCall = (name, args) => preToolUse({ conversationId: `${conv}-t47`, workspacePaths: [t47Ws], toolCall: { name, args } });
+      const allowEmptyLedger = ptuCall('write_file', { Path: ledgerFile, Overwrite: true, Content: '{"event":"init"}\n' });
+
+      fs.writeFileSync(ledgerFile, '{"goal_id":"G1","event":"started"}\n', 'utf8');
+      fs.writeFileSync(wikiLogFile, '## 2026-11-11 — Initial entry\n', 'utf8');
+      const blockOverwriteLedger = ptuCall('write_file', { Path: ledgerFile, Overwrite: true, Content: '{"wiped":true}\n' });
+      const allowAppendLedger = ptuCall('write_file', { Path: ledgerFile, Append: true, Content: '{"goal_id":"G1","event":"checkpoint"}\n' });
+      const blockOverwriteWikiLog = ptuCall('write_to_file', { TargetFile: wikiLogFile, Overwrite: true, CodeContent: 'wiped\n' });
+      const allowAppendWikiLog = ptuCall('write_file', { Path: wikiLogFile, Append: true, Content: '## 2026-11-11 — Appended\n' });
+
+      const idleBaseTx = path.join(t47Ws, 'idle-base.jsonl');
+      const idleCandTx = path.join(t47Ws, 'idle-cand.jsonl');
+      fs.writeFileSync(idleBaseTx, [
+        JSON.stringify({ created_at: '2026-11-11T10:00:00.000Z', type: 'USER_INPUT', content: 'run check' }),
+        JSON.stringify({ created_at: '2026-11-11T10:00:05.000Z', type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command' }] }),
+      ].join('\n') + '\n', 'utf8');
+      fs.writeFileSync(idleCandTx, [
+        JSON.stringify({ created_at: '2026-11-11T10:00:00.000Z', type: 'USER_INPUT', content: 'start' }),
+        JSON.stringify({ created_at: '2026-11-11T12:00:00.000Z', type: 'USER_INPUT', content: 'resume after 2h lunch' }),
+        JSON.stringify({ created_at: '2026-11-11T12:00:05.000Z', type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command' }] }),
+      ].join('\n') + '\n', 'utf8');
+      const idleCmp = compareSessions(idleBaseTx, idleCandTx, { failOnRegression: true });
+
+      const { getCachedCodeHealth } = await import('../sidecars/hud/main.mjs');
+      const hudRepo = path.join(t47Ws, 'hud-repo');
+      initTestGit(hudRepo);
+      fs.mkdirSync(path.join(hudRepo, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(hudRepo, 'src', 'app.js'), 'export const ready = true;\n', 'utf8');
+      execFileSync('git', ['add', 'src/app.js'], { cwd: hudRepo });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: hudRepo });
+      const hudTx = path.join(t47Ws, 'hud-tx.jsonl');
+      fs.writeFileSync(hudTx, [
+        JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'run_command', arguments: { CommandLine: 'sh hooks/run.sh selftest' }, exitCode: 0 }] }),
+      ].join('\n') + '\n', 'utf8');
+      const ch1 = getCachedCodeHealth(hudRepo, 200000, hudTx);
+      const ch2 = getCachedCodeHealth(hudRepo, 200500, hudTx);
+      fs.appendFileSync(hudTx, `${JSON.stringify({ step_index: 2, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'edit_file', arguments: { Path: 'src/app.js' } }] })}\n`, 'utf8');
+      const ch3 = getCachedCodeHealth(hudRepo, 201000, hudTx);
+
+      t47Ok = !allowEmptyLedger.decision
+        && blockOverwriteLedger.decision === 'force_ask' && String(blockOverwriteLedger.reason || '').includes('append-only-guard')
+        && !allowAppendLedger.decision
+        && blockOverwriteWikiLog.decision === 'force_ask' && String(blockOverwriteWikiLog.reason || '').includes('append-only-guard')
+        && !allowAppendWikiLog.decision
+        && IDLE_GAP_MS === 1800000
+        && idleCmp.candidate.duration_ms === 5000
+        && idleCmp.candidate.raw_duration_ms === 7205000
+        && idleCmp.baseline.duration_ms === 5000
+        && idleCmp.baseline.raw_duration_ms === 5000
+        && idleCmp.assessment.status === 'no_regression'
+        && idleCmp.exitCode === 0
+        && ch1.verificationFreshness === 'pass'
+        && ch2 === ch1
+        && ch3 !== ch1
+        && ch3.verificationFreshness === 'stale'
+        && ch3.lastEditedTarget === 'src/app.js';
+      t47Detail = `ledger=${blockOverwriteLedger.decision} log=${blockOverwriteWikiLog.decision} dur=${idleCmp.candidate.duration_ms}/${idleCmp.candidate.raw_duration_ms} hud=${ch1.verificationFreshness}->${ch3.verificationFreshness}`;
+    } catch (e) { /* fail open: capture T47 error detail */
+      t47Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('preToolUse append-only-guard, compareSessions 30m idle-gap subtraction, and HUD transcript-keyed codeHealth cache pass',
+      t47Ok, t47Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
