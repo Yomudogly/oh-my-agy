@@ -17,7 +17,7 @@ In Antigravity, workers are **subagents**:
 
 ## Inputs and preconditions
 
-- Launch shape: `$team [N:role] "<task>"`. Default role is `executor`. Use `test-engineer`, `designer`, `debugger`, etc. for specialized lanes. Max **6** concurrent workers.
+- Launch shape: `$team [N:role] "<task>"` (plus `$team --amend` for live mid-flight DAG board mutation and `$team --arena` for `N=2..3` competing `Workspace: "share"` candidate bake-offs on high-risk slices — see [references/amend-and-arena.md](references/amend-and-arena.md)). Default role is `executor`. Use `test-engineer`, `designer`, `debugger`, etc. for specialized lanes. Max **6** concurrent workers.
 - Ground the task first: reuse or create `.omagy/context/{slug}-*.md` (target, evidence, constraints, unknowns, touchpoints). Prefer an approved spec or plan (`.omagy/specs/`, `.omagy/plans/`).
 - Do not launch nested teams. Workers never spawn subagents.
 - **Work-Shape Model Routing (`Splittable` vs `Cohesive`)**:
@@ -48,7 +48,8 @@ Also write `.omagy/state/team-state.json` (`mode:"team"`, `active:true`, `curren
   - **One-task-per-worker capacity reservation & rollback**: reserve at most 1 active (`in_progress`) task per worker at a time. If `invoke_subagent` or `send_message` dispatch fails, immediately roll the task's claim back to `status: "pending"` (`worker: null`, `conversation_id: null`) so it is not stranded as a phantom `in_progress` claim.
   - **Fail-closed task-board integrity**: before scheduling a new wave or declaring completion, validate `.omagy/state/team/<team>/tasks.json` (or run `sh <plugin>/hooks/run.sh validate-team-tasks <workspace> <team>`). Any missing, unreadable, symlinked, or malformed task board is a hard blocker (`team_task_read_failed`) — never treat an unreadable board as "0 pending tasks".
   - If a task fails or blocks after retries, mark it `"blocked"` and cascade `"blocked"` (`result:"blocked-by:<id>"`) to downstream tasks whose `depends_on` transitively includes `<id>`, while continuing independent branches.
-  - When amending a team plan mid-run, recompute each task's `fingerprint` (`title + owned_paths + acceptance + upstream fingerprints`). Any `"completed"` task whose `fingerprint` is unchanged stays `"completed"` and its verified output is reused without re-running.
+  - When amending a team plan mid-run (`$team --amend`; see [references/amend-and-arena.md](references/amend-and-arena.md)), perform a leader-owned atomic read-modify-write on `.omagy/state/team/<team>/tasks.json` (and `tasks/task-<id>.json`), recompute `fingerprint` (`title + owned_paths + acceptance + upstream fingerprints`) so unchanged `"completed"` tasks stay `"completed"`, steer in-flight workers safely via `send_message` without losing `Workspace: "share"` commits, and immediately re-validate with `sh <plugin>/hooks/run.sh validate-team-tasks <cwd> <team> --json`.
+  - For high-ambiguity or high-risk slices (`$team --arena`; see [references/amend-and-arena.md](references/amend-and-arena.md)), run `N=2..3` parallel `executor` candidates in `Workspace: "share"` against one shared test contract, gate winner selection through independent `verifier` + `critic` review (`VERIFICATION_VERDICTS` + `verified_head`), merge/cherry-pick the winner cleanly, and archive runner-up diffs under `.omagy/artifacts/`.
 
 Only the leader edits the board. Workers report results in their final message, and the leader transitions status.
 

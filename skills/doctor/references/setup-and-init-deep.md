@@ -29,7 +29,11 @@ Resolve `SRC` (this plugin's directory, two levels up from `skills/doctor/SKILL.
 
 - **Gitignore**: append `.omagy/` to `.gitignore` if missing (`omagy_wiki/` is created lazily on the first `$wiki` operation, not during setup).
 - **Root `AGENTS.md` bootstrap (`--setup`)**: when requested, create or extend a concise root `AGENTS.md` from real repository evidence (purpose, directory layout, build/test/lint commands, conventions, and do/don't rules). Antigravity loads `AGENTS.md` and `GEMINI.md` hierarchically. Never overwrite an existing file — merge into a clearly marked section instead.
-- **Hierarchical subdirectory `AGENTS.md` (`--init-deep`)**: for monorepos or multi-package workspaces, scan candidate package/module directories (`sh "<PLUGIN_DIR>/hooks/run.sh" init-deep-scan "<workspace>" --json` when available, or repo file-density + git-churn inspection) to propose bounded subdirectory `AGENTS.md` files for high-density boundaries. Confirm target paths with the user before writing, keep each file concise and package-specific, and never overwrite human-authored sections.
+- **Hierarchical subdirectory `AGENTS.md` (`--init-deep`)**: for monorepos or multi-package workspaces, run:
+  ```bash
+  sh "<PLUGIN_DIR>/hooks/run.sh" init-deep-scan "<workspace>" --json
+  ```
+  `init-deep-scan` ranks candidate subdirectories (`{ dir, codeFiles, loc, churnPct, reasons, hasAgentsMd }`) triggered by code density (`>= 8` code files and `>= 500` LOC) or git commit churn (`>= 15%` across `>= 30` commits). Propose bounded child `AGENTS.md` files only for confirmed boundaries, confirm target paths with the user before writing, keep each child file strictly **non-duplicative** (package-local build/test commands, module invariants, and local gotchas only — never copy-pasting root `AGENTS.md`), and never overwrite human-authored sections.
 - **Optional extras**:
   - Stop/idle notifications: see [notifications.md](./notifications.md) (`$doctor --notifications`).
   - Planning write guard: in `hooks.json`, set `"enabled": true` on `oh-my-agy-planning-guard` to require confirmation before source writes while `deep-interview`, `ralplan`, or `plan` state is active.

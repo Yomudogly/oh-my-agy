@@ -4,16 +4,16 @@ Multi-agent workflow layer for [Google Antigravity](https://antigravity.google).
 
 `oh-my-agy` brings structured, evidence-backed agentic engineering to Antigravity with zero external CLI dependencies:
 - **Supervised Autopilot**: `/deep-interview -> /ralplan -> /ultragoal` end-to-end delivery (`/autopilot`)
-- **Divergent Ideation, Consensus & Hostile Planning**: 7-lens divergent concept shaping (`/deep-interview --ideate`), Planner -> Architect -> Critic (`/ralplan`), 5-persona hostile cross-critique (`/ralplan --hyperplan`), and explore-first planning (`/plan`)
-- **Durable Goal Ledgers & Blind-Claim Verification**: repo-native `goals.json` + `ledger.jsonl` execution (`/ultragoal`) with `light`/`heavy` rigor tiering, `product` vs `harness` failure triage, Blind-Claim `AdversarialVerify` packets, and 4-tier `RECONCILE` rulings
-- **Coordinated Subagent Teams**: parallel worker waves on a leader-owned DAG task board (`/team`) with work-shape model routing (`flash` / `inherit` / `pro`) and verified completion evidence
-- **Adversarial QA, Dual-Lane Review & Ship Readiness**: 9-class trigger-mapped dynamic QA (`/ultraqa`), Two-Axis + Demolition/ADR code review (`/code-review`, including `--audit [path]` whole-repo lean audits and `--ship` production ship-readiness gates), and fail-closed `semgrep`/`axe` scanner checks (`quality-gate`)
-- **Codebase Reuse Map, Anti-Tampering Floor Guard & Debt Telemetry**: automatic shared-first `[oh-my-agy] Codebase map` injection (`codebase-map`), 6-Rung Reuse Ladder, `shortcut: <ceiling>, <when to upgrade>` debt ledger (`scan-debt`), `omagy-ignore-start..end` protected blocks, 9-category `floor-guard` anti-tampering analysis, and TF-IDF skill routing checks (`skill-eval`) surfaced live in the Aux Pane HUD (`sidecar://oh-my-agy/hud/`)
-- **Multi-Lens Deep Research**: 5-phase technical, business, idea, and implementation investigations (`/deep-research`) with Boolean query matrices, Tier A–E source ranking, `[VERIFIED]`/`[DERIVED]`/`[ASSUMED]` tags, and a 5-dimension `>=85` self-audit
-- **18 Role Subagents & 27 Workflow Skills**: including causal hypothesis tracing (`tracer`), post-modification simplification (`code-simplifier`), throwaway prototyping (`/loft`), read-only `stdin`-sandboxed external second opinions (`/ask --doubt`), PR paper-trail assembly (`/pr --ship` / `--watch`), and session continuation packets (`/handoff`)
-- **Persistent Project Wiki & Working Agreements**: markdown knowledge base and guardrail ledger under `omagy_wiki/` (`/wiki`)
+- **Divergent Ideation, Consensus & Migration Planning**: 7-lens divergent concept shaping (`/deep-interview --ideate`), lightweight single-lane planning (`/ralplan --light`), Planner -> Architect -> Critic consensus (`/ralplan`), 5-persona hostile cross-critique (`/ralplan --hyperplan`), strangler-fig & EARS migration plans (`/ralplan --migrate`), and SHA-256 + fake-timeline plan receipts (`plan-hash`)
+- **Durable Goal Ledgers, Shadow Checkpoints & Receipt-Backed Verification**: repo-native `goals.json` + `ledger.jsonl` + compaction-resilient `notepad.md` execution (`/ultragoal`) with test-gated `goal-done`, stash-free index-preserving git checkpoints (`checkpoint` under `refs/omagy/checkpoints/*`), `stale-after-edit` completion freshness guards, Blind-Claim `AdversarialVerify` packets, and 4-tier `RECONCILE` rulings
+- **Coordinated Subagent Teams & Arena Bake-Offs**: parallel `executor` worker waves on a leader-owned DAG task board (`/team`, including `--amend` live re-planning and `--arena` multi-candidate bake-offs) with work-shape model routing (`flash` / `inherit` / `pro`) and verified completion evidence
+- **Google Stitch 2-Layer `DESIGN.md` & Visual QA**: unified design-system authoring and visual-diff implementation (`/visual-ralph --design`) with 3-level nested YAML tokens, 8 canonical Stitch prose sections, 5 AA-compliant starter presets, pure-Node WCAG 2.1 AA/AAA linting (`validate-design-md`), Craft Floor `A12`–`F9`, and optional `StitchMCP` synchronization
+- **Adversarial QA, Dual-Lane Review & Security/Ship Gates**: 9-class dynamic QA with browser settle & DOM quarantine (`/ultraqa`), Two-Axis + Demolition/ADR code review (`/code-review`, including `--audit [path]`, `--ship`, and `--security` `STRIDE` + `OWASP` + `lookout` hazard scans), and fail-closed `semgrep`/`axe` checks (`quality-gate`)
+- **Codebase Reuse Map, Anti-Tampering Floor Guard & HUD Telemetry**: shared-first `[oh-my-agy] Codebase map` injection (`codebase-map`), 6-Rung Reuse Ladder, `shortcut:` debt ledger (`scan-debt`), `omagy-ignore-start..end` protected blocks, 9-category `floor-guard`, and `95%`-ratcheted TF-IDF skill routing checks (`skill-eval`) surfaced live in the Aux Pane HUD (`sidecar://oh-my-agy/hud/`)
+- **Multi-Lens, Quick & Loop Deep Research**: 5-phase technical, business, idea, and implementation investigations (`/deep-research`), bounded upstream docs lookups (`/deep-research --quick`), and validator-gated research loops (`/deep-research --loop`) with Tier A–E source ranking and a 5-dimension `>=85` self-audit
+- **14 Role Subagents & 20 Workflow Skills**: spike-verified 3-tier `tools:` YAML frontmatter, causal hypothesis tracing (`tracer`), blast-radius & statechart mapping (`/analyze --blast-radius|--statechart`), throwaway & arena prototyping (`/loft --arena`), `stdin`-sandboxed external second opinions (`/ask --doubt`), PR paper-trail assembly (`/pr --ship` / `--watch`), session handoff (`/hud --handoff`), setup/notifications/forensics (`/doctor --setup|--notifications|--init-deep|--session-scan`), and persistent markdown wiki (`/wiki` with CJK `wiki-query` & dead-ref `wiki-lint`)
 
-All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle hooks run on a dependency-free Node.js runtime (`hooks/omagy-hook.mjs` + lazy-loaded cold CLI `hooks/omagy-cli.mjs`).
+All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle hooks run on a dependency-free 3-module Node.js runtime (`hooks/omagy-hook.mjs` `<-` `hooks/omagy-cli.mjs` `<-` `hooks/omagy-selftest.mjs`).
 
 ## Requirements
 
@@ -24,21 +24,22 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 ```text
 oh-my-agy/
-├── .gitattributes         # LF line-ending normalization across POSIX & Windows checkouts
-├── .github/workflows/ci.yml # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 20)
-├── plugin.json            # Antigravity manifest (v0.4.6, strict JSON)
-├── assets/logo.png        # Plugin icon
-├── HOW_TO_USE.md          # Complete guide to all 27 skills, 18 subagents, hooks & recipes
-├── rules/AGENTS.md        # always-on operating contract (<24 KB)
-├── hooks.json             # SessionStart + PreInvocation routing/wiki, Stop continuation, opt-in PreToolUse guard
+├── .gitattributes            # LF line-ending normalization across POSIX & Windows checkouts
+├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 20)
+├── plugin.json               # Antigravity manifest (v0.5.0, strict JSON)
+├── assets/logo.png           # Plugin icon
+├── HOW_TO_USE.md             # Complete guide to all 20 skills, 14 subagents, hooks & recipes
+├── rules/AGENTS.md           # always-on operating contract (<24 KB)
+├── hooks.json                # SessionStart + PreInvocation routing/wiki, Stop continuation, opt-in PreToolUse guard
 ├── hooks/
-│   ├── run.sh             # POSIX-portable Node locator (homebrew/volta/fnm/nvm/Windows), fails open if absent
-│   ├── omagy-hook.mjs     # hot-path hook runtime + 20 CLI subcommands (`selftest`, `floor-guard`, `skill-eval`, `quality-gate`, `codebase-map`, `scan-debt`, `check-test-junk`, `review-package`, `goal-brief`, `research-matrix`, `audit-research`, `verify-evidence`, `validate-team-tasks`, `watch-pr`, `failure-sig`, `session-compare`, `wiki-repair`, `quality-gates`, `append-jsonl`, `read-jsonl`)
-│   ├── omagy-cli.mjs      # lazy-loaded zero-dep cold CLI (`floor-guard`, `skill-eval`, `quality-gate` & static validators)
-│   └── skill-eval-cases.json # 27-skill positive + owner-paired negative routing benchmark corpus
-├── sidecars/hud/          # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`: Overview, Workflows, Skills, Subagents, Wiki)
-├── agents/                # 18 role subagents (explore, researcher, architect, critic, tracer, code-simplifier, ...)
-└── skills/                # 27 workflow skills + progressive-disclosure `references/`
+│   ├── run.sh                # POSIX-portable Node locator (homebrew/volta/fnm/nvm/Windows), fails open on lifecycle hooks
+│   ├── omagy-hook.mjs        # hot-path hook runtime (<175 KB) + 17 CLI dispatchers (`selftest`, `verify-evidence`, `append-jsonl`, `read-jsonl`, `quality-gates`, `review-package`, `goal-brief`, `check-test-junk`, `research-matrix`, `audit-research`, `codebase-map`, `scan-debt`, `validate-team-tasks`, `watch-pr`, `failure-sig`, `session-compare`, `wiki-repair`)
+│   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<93,734 B; 13 subcommands: `floor-guard`, `skill-eval`, `quality-gate`, `validate-design-md`, `goal-done`, `checkpoint`, `handoff`, `lookout`, `plan-hash`, `init-deep-scan`, `wiki-query`, `wiki-lint`, `session-scan` & static validators)
+│   ├── omagy-selftest.mjs    # lazy-loaded 85-check offline selftest suite (`T1`–`T10`, `T20`–`T50`)
+│   └── skill-eval-cases.json # 20-skill positive + owner-paired negative routing benchmark corpus (>=95% rank-1)
+├── sidecars/hud/             # Aux Pane UI extension (`sidecar://oh-my-agy/hud/`: Overview, Workflows, Skills, Subagents, Wiki)
+├── agents/                   # 14 role subagents with verified `subagent`/`mainAgent`/`tools` frontmatter
+└── skills/                   # 20 workflow skills + progressive-disclosure `references/`
 ```
 
 ## Install
@@ -53,7 +54,7 @@ git clone https://github.com/Yomudogly/oh-my-agy.git ~/.gemini/config/plugins/oh
 git clone https://github.com/Yomudogly/oh-my-agy.git .agents/plugins/oh-my-agy
 ```
 
-Restart Antigravity (new plugin directories are discovered at startup), then run `/doctor`. Add `.omagy/` to your project's `.gitignore`.
+Restart Antigravity (new plugin directories are discovered at startup), then run `/doctor` (or `/doctor --setup` to bootstrap project `AGENTS.md` and `.gitignore`). Add `.omagy/` to your project's `.gitignore`.
 
 On macOS, keep the real plugin directory in the discovery root. Do not make it a symlink into `~/Documents`, `~/Desktop`, or `~/Downloads`, because Antigravity's sandboxed terminal cannot read those folders.
 
@@ -67,11 +68,11 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ### Verify
 
-Run the offline hook selftest at any time:
+Run the offline hook, routing, and HUD selftests at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":74,"failed":0}
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-eval --min-rank1 90 # -> SKILL-EVAL: PASS (skills=27, ...)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":85,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-eval --min-rank1 95 # -> SKILL-EVAL: PASS (skills=20, ...)
 sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest # -> {"selftest":"PASS",...}
 ```
 
@@ -83,33 +84,35 @@ Delete the plugin directory and restart Antigravity. Workspace `.omagy/` and `om
 
 ## Usage
 
-> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 27 skills (with flags and examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, and end-to-end recipes.
+> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 20 skills (with flags and examples), all 14 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, all 30 CLI utilities, and end-to-end recipes.
 
-In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot build X`, `/deep-research --technical "topic"`, `/code-review`, `/handoff`, `/cancel`). `$<skill>` is also supported by the `PreInvocation` hook as an alias (useful if a name like `/plan` overlaps with Antigravity's built-in `/plan` slash command).
+In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot build X`, `/deep-research --technical "topic"`, `/visual-ralph --design`, `/code-review --security`, `/hud --handoff`, `/cancel`). `$<skill>` is also supported by the `PreInvocation` hook as an alias.
 
 | Skill | Purpose |
 |---|---|
 | `/autopilot` | supervised `/deep-interview -> /ralplan -> /ultragoal` delivery |
-| `/deep-interview` | Socratic interview with ambiguity scoring, `--ideate` 7-lens divergent concept shaping, and Two-Filter owner-decision gating (via `ask_question`) |
-| `/plan` / `/ralplan` | explore-first lightweight plan / Planner -> Architect -> Critic consensus (plus `--hyperplan`) |
-| `/ultragoal` | durable `goals.json` + `ledger.jsonl` execution with rigor tiering, Blind-Claim `AdversarialVerify`, and final review gates |
-| `/team` | parallel subagent workers on a leader-owned DAG task board with completion evidence |
-| `/code-review` | independent `code-reviewer` + `architect` lanes (Two-Axis + Demolition/ADR tests, `--re-review`, `--audit [path]` whole-repo lean audit, `--ship` production readiness), deterministic verdict |
-| `/ultraqa` | 9-class trigger-mapped adversarial e2e QA cycles |
-| `/deep-research`, `/analyze`, `/best-practice-research` | 4-lens deep research (`--technical`, `--business`, `--idea`, `--implementation`) with `>=85` scorecard audit, 6-tier evidence analysis (`--deep`, `--audit [path]`), and official-docs lookup |
-| `/ai-slop-cleaner`, `/design`, `/loft`, `/pr`, `/visual-ralph` | anti-slop cleanup, `DESIGN.md` crafting, throwaway prototyping, PR assembly (`--ship`, `--watch`), and visual-diff loops |
-| `/autoresearch`, `/performance-goal` | validator-gated research and benchmark optimization loops (with CWV/SQL/cache domain playbooks) |
+| `/deep-interview` | Socratic interview with ambiguity scoring, `--ideate` 7-lens divergent concept shaping, `--autoresearch` loop specs, and Two-Filter owner-decision gating (via `ask_question`) |
+| `/ralplan` | Planner -> Architect -> Critic consensus planning (`--hyperplan` 5-persona tournament, `--light` single-lane plan, `--interview`, `--review`, `--migrate` strangler/EARS plan + SHA-256 `plan-hash` receipt) |
+| `/ultragoal` | durable `goals.json` + `ledger.jsonl` + `notepad.md` execution with `goal-done`, stash-free git `checkpoint`, `plan-hash verify`, and Blind-Claim `AdversarialVerify` |
+| `/team` | parallel `executor` subagent workers on a leader-owned DAG task board (`--amend` live task edits, `--arena` isolated bake-offs) with verified completion evidence |
+| `/code-review` | independent `code-reviewer` + `architect` lanes (`Confidence: HIGH\|MEDIUM\|LOW`, `--re-review`, `--audit [path]` lean audit, `--ship` production readiness, `--security` `STRIDE` + `OWASP` + `lookout` hazard check) |
+| `/ultraqa` | 9-class trigger-mapped adversarial e2e QA cycles with `failure-sig` deduplication and browser settle/DOM quarantine |
+| `/deep-research` | 4-lens deep research (`--technical`, `--business`, `--idea`, `--implementation`) with `>=85` self-audit, `--quick` upstream docs lookup, and `--loop` validator-gated iteration |
+| `/analyze` | 6-tier evidence root-cause synthesis (`--deep` parallel `tracer`, `--audit [path]` lean audit, `--blast-radius` caller impact, `--statechart` Mermaid `stateDiagram-v2`) |
+| `/visual-ralph` | visual-diff frontend loop + `--design` Google Stitch 2-Layer `DESIGN.md` authoring, 5 AA starter presets, `validate-design-md` WCAG linter, and `StitchMCP` sync |
+| `/loft`, `/ai-slop-cleaner`, `/pr` | throwaway & `--arena` prototyping, 4-pass anti-slop cleanup, and PR assembly (`--ship`, `--watch`) |
+| `/performance-goal` | evaluator-gated benchmark optimization loops (with CWV/SQL/cache domain playbooks) |
 | `/ask` | read-only `stdin`-sandboxed second opinion and `--doubt` blind-claim critique from local `claude` / `gemini` / `codex` CLIs |
-| `/wiki` | repo markdown wiki (`omagy_wiki/index.md`) and working-agreement ledger (`omagy_wiki/agreements.md`) |
-| `/handoff`, `/cancel`, `/hud`, `/doctor`, `/omagy-setup`, `/skill`, `/configure-notifications` | session handoff, workflow control, 5-tab Aux Pane HUD (`sidecar://oh-my-agy/hud/`), diagnostics, skill extraction & `$skill eval` routing benchmarks, and notifications |
+| `/wiki` | repo markdown wiki (`omagy_wiki/index.md`), working agreements (`omagy_wiki/agreements.md`), CJK `wiki-query`, and dead-ref `wiki-lint` |
+| `/hud`, `/cancel`, `/doctor`, `/skill` | 5-tab Aux Pane HUD (`sidecar://oh-my-agy/hud/`) & `--handoff` packets, exact-scope cancellation, diagnostics & setup (`--setup`, `--notifications`, `--init-deep`, `--session`, `--session-compare`, `--session-scan`), and skill lifecycle (`eval`, `test`, `extract`) |
 
 ## Architecture & Runtime Notes
 
-- **Hooks & State Isolation**: `SessionStart` and `PreInvocation` inject `/skill` (and `$skill`) routing (while stripping code fences, blockquotes, relay headers, URLs, quoted strings, negations, and help queries), active `.omagy/state/` reminders, bounded (`<=3,500` chars) `omagy_wiki/agreements.md` + `omagy_wiki/index.md` context once per session (with `expires: <ISO 8601>` time-boxed expiry filtering and standalone secret redaction), a once-per-session shared-first `[oh-my-agy] Codebase map` (`<=1,800` chars, opt-out via `OMAGY_MAP=0`, configurable via `OMAGY_MAP_CHARS`; also appended to `goal-brief` packets), and unseen subdirectory `AGENTS.md` files and child-project `omagy_wiki/` along touched workspace paths. State files support conversation-owner isolation (`owner_conversation_id` and `.omagy/state/sessions/<conversationId>/`), environment overrides (`OMAGY_ROOT` / `OMAGY_STATE_ROOT`), parent-workspace anchoring, inner-folder `.omagy` discovery (`discoverOmagyScopes`), and multi-repo workspace anchoring (`.omagy-workspace`).
-- **Bounded Continuation & Calibrated Drift Guard**: The `Stop` hook re-enters active autonomous loops at most 2 consecutive times without a state update, never on errors or while background tasks are running, enforces permission-denial / user-refusal finality (`blocked`), and ignores states older than 6 hours. On completion claims, `scanDiffBlockers` scans tracked `git diff` (via hunk-spoof-immune `parseUnifiedDiff`) and bounded untracked code files for left-behind blocker patterns (`test.skip`, `test.only`, placeholder `TODO: implement` / `throw new Error("Not implemented")`), unexempted checker suppressions (requiring `-- <reason>` or `shortcut:`), bare/placeholder empty `catch` blocks (exempting `/* fail open: ... */` or `shortcut:`), `omagy-ignore-start..end` / `simplify-ignore-start..end` protected-block tampering, and `open-caller:<symbol>` broken call sites of removed non-generic symbols (complemented by the 9-category `floor-guard` CLI).
-- **Opt-In PreToolUse Guard**: `PreToolUse` ships disabled in `hooks.json` because Antigravity requires a `decision` when enabled. When opted in, it enforces the planning-phase write boundary across `Path`, `TargetFile`, `filePath`, rename/move, `edits[]`, and `apply_patch` (failing closed on targetless file-mutation tools), `protected-block-guard` (`reconstructPostEditContent` blocking edits/deletions to `omagy-ignore` and `simplify-ignore` regions), `agreements-guard` (preserving `[by:human]` lines in `omagy_wiki/agreements.md`), and `write-existing-file-guard` (requiring confirmation before overwriting an unread non-empty source file) without ever emitting `allow`.
-- **Aux Pane HUD & Code Health Telemetry**: `sidecars/hud/main.mjs` serves the 5-tab `sidecar://oh-my-agy/hud/` web UI (`Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`), featuring live `Code Health & Technical Debt` KPIs (5s + git-mtime cached uncommitted `git diff` function reuse, orphaned call sites, secret-redacted `shortcut:` / `ceiling:` debt markers, and `floorGuard` anti-tampering counts), `Benchmarks & Autoresearch`, `Visual Ralph & Loft Prototypes`, `Diagnostics & Runtime Health` (including mtime-cached `Skill Eval`), and `X-Content-Type-Options: nosniff` artifact serving (`.md` as `text/plain; charset=utf-8`, including `.omagy/artifacts/ideas/`).
-- **Subagents & Fallbacks**: `agents/*.md` defines 18 specialized subagents invoked via `invoke_subagent`. If a custom role is unavailable in a session, workflows fall back to Antigravity's built-in `self` or `research` subagent with the role's prompt preamble.
+- **Hooks, Compaction Recovery & State Isolation**: `SessionStart` and `PreInvocation` strip UTF-8 BOMs, sanitize `[Message ...]` / `<SYSTEM_MESSAGE>` / `<CONTEXT_SUMMARY>` relay blocks (`sanitizeRelayedText`) alongside code fences, blockquotes, URLs, quotes, negations, and help queries before `/skill` / `$skill` detection, and cap `injectSteps[0].ephemeralMessage` deterministically at `<= 6,000` chars. When `<CONTEXT_SUMMARY>` compaction is detected (`compactionEpoch`), `PreInvocation` automatically re-injects `omagy_wiki/` (`<= 3,500` chars, expiry-filtered & secret-redacted) plus `.omagy/ultragoal/notepad.md` (`<= 2,000` chars). A shared-first `[oh-my-agy] Codebase map` (`<= 1,800` chars, opt-out via `OMAGY_MAP=0`) and nested subdirectory `AGENTS.md` / child `omagy_wiki/` files are injected on demand.
+- **Bounded Continuation, Context-Overflow Bail-Out & Freshness/Drift Guards**: `Stop` exits immediately on context-overflow errors (`isContextOverflowStop`), re-enters active autonomous loops at most 2 consecutive times without a state update, honors `awaiting_confirmation` holds, and enforces permission-denial / user-refusal finality (`blocked`). On completion claims, `checkVerificationFreshness` inspects the trailing `<= 512 KB` of the transcript to nudge once (`runtimeFile(conv, 'freshness')`) when code files outside `.omagy/`, `omagy_wiki/`, and `<appDataDir>/brain/` were edited after the last passing test or when the last test failed, while `scanDiffBlockers` (`runtimeFile(conv, 'drift')`) catches left-behind blockers, unexempted suppressions, bare empty `catch` blocks, protected-block tampering, and `open-caller:<symbol>` broken call sites.
+- **Opt-In PreToolUse Guard**: When enabled in `hooks.json`, `PreToolUse` enforces `append-only-guard` (blocking `Overwrite: true` on non-empty `.omagy/ultragoal/ledger.jsonl` and `omagy_wiki/log.md` even during planning), the planning-phase write boundary (`Path`, `TargetFile`, `filePath`, rename/move, `edits[]`, `apply_patch`), `protected-block-guard` (`omagy-ignore` / `simplify-ignore`), `agreements-guard` (`[by:human]` preservation), and `write-existing-file-guard` (unread `Overwrite: true` protection).
+- **Aux Pane HUD & Code Health Telemetry**: `sidecars/hud/main.mjs` serves the 5-tab `sidecar://oh-my-agy/hud/` web UI (`Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`), featuring transcript-mtime-coherent `Code Health & Technical Debt` KPIs (`verificationFreshness`, uncommitted `git diff` function reuse, orphaned call sites, redacted `shortcut:` / `ceiling:` debt, and `floorGuard` counts), `64 KiB` research artifact previews, `Diagnostics & Runtime Health` (`Skill Eval: PASS` at `>= 95%`), and `X-Content-Type-Options: nosniff` artifact serving.
+- **14 Subagents & Scoped Tooling**: `agents/*.md` defines 14 specialized subagents with `subagent: true`, `mainAgent: false`, and 3-tier `tools:` YAML arrays (`4` write roles, `8` repo-inspecting read-only roles, `2` pure read/web roles), `context7` and `codegraph_explore` fast paths, and built-in `self` / `research` fallback support.
 
 ## License
 

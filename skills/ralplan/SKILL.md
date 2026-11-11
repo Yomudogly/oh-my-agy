@@ -16,6 +16,7 @@ $ralplan --interview "task description"
 $ralplan --review ".omagy/plans/plan-<slug>.md"
 $ralplan --interactive "task description"
 $ralplan --deliberate "task description"
+$ralplan --migrate "task description"
 $ralplan --hyperplan "task description"
 $ralplan --advisory "task description"
 ```
@@ -27,6 +28,7 @@ $ralplan --advisory "task description"
 - `--review`: evaluate an existing plan in `.omagy/plans/` (or a specified path) via an independent `critic` subagent (`APPROVE` / `ITERATE` / `REJECT`; never self-approve; report the gap if an independent lane is unavailable).
 - `--interactive`: pause at key decision points (draft review in step 2, final approval in step 6) using `ask_question`. Without it, the Planner -> Architect -> Critic loop runs fully automated.
 - `--deliberate`: force deliberate mode. It adds a pre-mortem (3 scenarios) and an expanded test plan (unit/integration/e2e/observability). Deliberate mode also turns on automatically when the request signals high risk: auth/security, migrations, destructive changes, production incidents, compliance/PII, public API breakage.
+- `--migrate`: safe legacy, database schema, API, or SDK migration planning — follow [references/migration-and-ears.md](references/migration-and-ears.md). Enforces the 4-stage Strangler sequence (`(1) Characterization Tests` -> `(2) Strangler Adapter / Expand-Only Seam` -> `(3) Dual-Run / Shadow Parity & Instant Rollback Switch` -> `(4) Cutover & Legacy Decommission`), EARS (`THE` / `WHEN` / `WHILE` / `IF-THEN` / `WHERE`) acceptance criteria, and deliberate pre-mortem review.
 - `--hyperplan`: run a 2-round, 5-persona hostile cross-critique tournament before the Planner drafts the PRD:
   - **Round 1 (Independent Analysis)**: dispatch parallel read-only subagents across 5 adversarial lenses:
     1. `skeptic` (`architect` or `research` subagent): attacks accidental complexity, speculative abstractions, and YAGNI violations.
@@ -60,7 +62,7 @@ Standalone consensus mode: write `.omagy/state/ralplan-state.json` (`mode:"ralpl
    - Deliberate mode only: pre-mortem (3 scenarios) and an expanded test plan
    - **Global Constraints**: verbatim spec/architectural invariants carried into every task and reviewer dispatch.
    - **Review Focus (Top 5 Silent Edge Cases)**: the 5 input classes or failure modes the spec is silent on that would bite a real user, each wired to an owning task's test step.
-   - **Per-Task `Interfaces: Consumes / Produces` & `Proportion` Check**: explicit input/output signatures per goal/task to prevent cross-task signature drift, keeping task bodies proportional (signatures + assertions, never full-file code transcripts longer than the spec).
+   - **Per-Task `Interfaces: Consumes / Produces`, EARS Criteria & `Proportion` Check**: explicit input/output signatures and EARS (`THE`/`WHEN`/`WHILE`/`IF-THEN`/`WHERE`; see [references/migration-and-ears.md](references/migration-and-ears.md)) acceptance criteria per goal/task without fake calendar/effort promises, keeping task bodies proportional (signatures + assertions, never full-file code transcripts longer than the spec).
    - **Blind-Claim `AdversarialVerify` Contract**: specify in `.omagy/plans/test-spec-{slug}.md` that downstream heavy-rigor `AdversarialVerify` (`verifier`) receives only `ARTIFACT` (diff / `review-package` path / touched file paths) + `CONTRACT` (acceptance criteria / invariants) + raw command exit codes, stripping persuasive executor narrative summaries (`CLAIM` rationales).
 
    The main lane may author the plan for standalone runs. For complex Autopilot planning, invoke the `planner` subagent. Save `.omagy/plans/prd-{slug}.md` and `.omagy/plans/test-spec-{slug}.md`.
@@ -78,13 +80,14 @@ Standalone consensus mode: write `.omagy/state/ralplan-state.json` (`mode:"ralpl
      3. `(3) Explicit Ruling` — bounded non-defect tradeoff where alternatives carry higher cost/complexity -> record `Ruling: <decision> — <why> — <cost_if_wrong>` in `.omagy/plans/ralplan-review-{slug}.md` and the PRD instead of churning architecture across rounds.
      4. `(4) Context noise` — false positive disproved by repository `file:line` or official documentation -> dismiss with concrete `file:line` or doc citation.
    - **`Doubt/Review Theater` Circuit Breaker**: if `>= 2` consecutive consensus review or downstream verification cycles return prose critiques ("substantive findings") with `0` actionable defects passing Tier 1–2, halt automated re-spinning immediately—either approve/checkpoint via an explicit Tier 3 `Ruling:` (with `cost_if_wrong`, passing the cited `RECONCILE` rulings once if needed to satisfy a pending Critic/gate verdict) or escalate directly to the user rather than burning remaining iterations up to 5. After 5 iterations without approval, present the best version and the outstanding objections to the user.
-6. **On approval**, persist review evidence to `.omagy/plans/ralplan-review-{slug}.md` (Architect review, Critic review, verdicts, iteration) and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can inspect the `Reviews` tab (consensus gate and `--hyperplan` distillation) in the Auxiliary Pane. Standalone interactive: ask which execution lane to use next. Inside Autopilot: the explicit `$autopilot` request authorizes the supervised transition to `$ultragoal`.
+6. **On approval**, persist **both** `.omagy/plans/ralplan-review-{slug}.md` (human/HUD review log: Architect review, Critic review, verdicts, `RECONCILE` rulings, iteration) **and** `.omagy/plans/ralplan-review-{slug}.json` via `sh <plugin>/hooks/run.sh plan-hash compute .omagy/plans/prd-{slug}.md --spec .omagy/plans/test-spec-{slug}.md --write-receipt APPROVE --json` (enforcing the deterministic fake-timeline lint and binding `plan_hash` cryptographically to the approved PRD + test spec; see [references/migration-and-ears.md](references/migration-and-ears.md)). Surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once so the user can inspect the `Reviews` tab in the Auxiliary Pane. Standalone interactive: ask which execution lane to use next. Inside Autopilot: the explicit `$autopilot` request authorizes the supervised transition to `$ultragoal`.
 7. **Record the handoff** (in ralplan state or under Autopilot `handoff_artifacts.ralplan`):
    ```json
    {
      "planning_artifacts": [".omagy/plans/prd-<slug>.md", ".omagy/plans/test-spec-<slug>.md"],
      "ralplan_architect_review": {"verdict": "approve", "path": ".omagy/plans/ralplan-review-<slug>.md"},
      "ralplan_critic_review": {"verdict": "APPROVE", "path": ".omagy/plans/ralplan-review-<slug>.md"},
+     "ralplan_receipt": ".omagy/plans/ralplan-review-<slug>.json",
      "ralplan_consensus_gate": {"complete": true},
      "ralplan_execution_handoff": {"authorized": true, "reason": "<rationale>", "authorized_at": "<ISO>", "review_cycle": 1, "source": "autopilot|user"}
    }

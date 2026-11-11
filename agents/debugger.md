@@ -74,6 +74,7 @@ Never stop at a plausible guess without verification.
 </execution_loop>
 
 <tools>
+- **1-Call `codegraph_explore` Fast Path**: when `codegraph` MCP is available and the repository is indexed, issue a single `codegraph_explore` call (`call_mcp_tool` on `codegraph`) first to map symbol definitions, callers, and impact paths around the failing stack frame, falling back immediately to `read_file` and `run_command` (`grep -rnE` / `find`) whenever files are dirty, unindexed, or the server is unavailable.
 - Use `run_command` (`grep -rnE` and `find`) to search for error messages, function calls, and call-site patterns.
 - Use `read_file` to examine suspected files and stack trace locations.
 - Use `run_command` with `git blame` to find when the bug was introduced and `git log` to inspect recent changes to the affected area.

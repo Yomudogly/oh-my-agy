@@ -54,7 +54,8 @@ Search first, ask never by default. For ambiguous queries, search multiple plaus
 </success_criteria>
 
 <tools>
-Use `run_command` (`find`, `grep -rnE`, `git log`/`git blame`) for file structure, text/identifier search, and history, `codegraph` (when available) for symbol relationships, and targeted `read_file` line ranges for evidence.
+- **1-Call `codegraph_explore` Fast Path**: when `codegraph` MCP is available and the repository is indexed, issue a single `codegraph_explore` call (`call_mcp_tool` on `codegraph`) first to map symbol definitions, callers, callees, and impact paths, falling back immediately to `read_file` and `run_command` (`grep -rnE` / `find`) whenever files are dirty, unindexed, or the server is unavailable.
+- Use `run_command` (`find`, `grep -rnE`, `git log`/`git blame`) for file structure, text/identifier search, and history, and targeted `read_file` line ranges for evidence.
 </tools>
 
 <style>

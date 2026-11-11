@@ -34,8 +34,8 @@ Before running commands, record a matrix (in `.omagy/artifacts/ultraqa-<slug>/ma
 ## Cycle (maximum 5)
 
 1. **PLAN ADVERSARIAL QA**: goal, success criteria, safety bounds, stop condition, runnable surfaces, matrix.
-2. **RUN BASELINE VERIFICATION**: `--tests` runs the project tests; `--build` runs the build plus built-artifact probes; `--lint`; `--typecheck` plus typed harnesses; `--custom` checks the pattern and exit status; `--interactive` uses a bounded CLI/service harness.
-3. **RUN ADVERSARIAL SCENARIOS**: capture exit codes, output, artifacts, and cleanup. Use `run_command` with a bounded `WaitMsBeforeAsync` for long runs, and `manage_task kill` for hung processes.
+2. **RUN BASELINE VERIFICATION**: `--tests` runs the project tests; `--build` runs the build plus built-artifact probes; `--lint`; `--typecheck` plus typed harnesses; `--custom` checks the pattern and exit status; `--interactive` uses a bounded CLI/service or browser harness following [references/browser-verification-safety.md](references/browser-verification-safety.md) (`await document.fonts.ready` + double `requestAnimationFrame` render settle, console/network `4xx`/`5xx` triage, and OWASP LLM01 untrusted DOM/cookie quarantine).
+3. **RUN ADVERSARIAL SCENARIOS**: pre-scan custom harness scripts and teardown commands with `sh <plugin>/hooks/run.sh lookout <paths> --json` (`exitCode: 0` required before execution), then capture exit codes, output, artifacts, and cleanup. Use `run_command` with a bounded `WaitMsBeforeAsync` for long runs, and `manage_task kill` for hung processes.
 4. **CHECK RESULT**: pass only when baseline, adversarial scenarios, evidence, and cleanup all pass. Otherwise diagnose and repeat.
 5. **ARCHITECT DIAGNOSIS** (via the `architect` or `debugger` subagent for non-trivial failures): root cause and safety impact. **FIX ISSUES** precisely. **CLEAN UP AND ROLL BACK** temporary harnesses, fixtures, logs, processes, state, and failed experiments before the next cycle.
 

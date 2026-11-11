@@ -32,6 +32,12 @@ For questions of layout, information architecture, navigation model, or density:
 4. Provide an on-page switcher cycling `A` / `B` / `C` using realistic data density in `.omagy/artifacts/loft/<slug>/index.html`, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` so the user can test the full-height `A` / `B` / `C` variants in the `Loft` tab of the Auxiliary Pane (or open on an isolated git branch `loft/<slug>`).
 5. **Variant Grafting (`arena`)**: once the user picks a winner (or requests a hybrid, e.g., *"Variant B's layout with Variant A's filter bar"*), graft the winning structural traits into `DESIGN.md` or `.omagy/specs/` and leave the throwaway harness behind.
 
+### 3. Multi-Worker Arena Bake-Off (`$loft --arena`)
+When `N=2..3` competing architectural, algorithmic, state-machine, or UX approaches would collide inside one file and require isolated runnable prototypes judged against a frozen contract, follow [references/arena-bakeoff.md](references/arena-bakeoff.md):
+1. Freeze `.omagy/artifacts/loft/<slug>/contract.md` and shared benchmark/fixture inputs first.
+2. Dispatch `2..3` parallel `executor` (or `designer`) subagents with `Workspace: "share"` into `.omagy/artifacts/loft/<slug>/variant-a/` .. `variant-c/`.
+3. Score candidates blindly via an independent `critic` subagent (`Lean:` LOC, correctness, performance/UX, and `cost_if_wrong`), record `Decision:` / `Rejected:` in `.omagy/artifacts/loft/<slug>/arena-verdict.md`, and clean up losing worktrees after preserving evidence.
+
 ## Discipline
 
 - **Disposable by design**: no database migrations, no new dependencies, no production wiring, and no commits to `main`. Keep artifacts in `.omagy/artifacts/loft/<slug>/` or on a non-merged `loft/<slug>` branch.

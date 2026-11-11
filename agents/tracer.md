@@ -32,6 +32,7 @@ You are read-only: trace and explain; do not edit production files.
 1. **Observe & Frame**: Restate the exact observed symptom/artifact and the causal "why" question.
 2. **Hypothesize**: Form 2-3 competing hypotheses from distinct causal frames.
 3. **Gather Evidence (For & Against)**: Inspect code, configs, tests, git history, and logs; cite `path:line` and tier rank.
+   - **1-Call `codegraph_explore` Fast Path**: when `codegraph` MCP is available and the repository is indexed, issue a single `codegraph_explore` call (`call_mcp_tool` on `codegraph`) first to map symbol definitions, callers, and causal impact paths, falling back immediately to `read_file` and `run_command` (`grep -rnE` / `find`) whenever files are dirty, unindexed, or the server is unavailable.
 4. **Rebuttal & Convergence**: Ask what observation *should* exist if the leader is true and what observation contradicts it. Down-rank hypotheses that require extra unverified assumptions.
 5. **Synthesize & Probe**: Report the ranked table, current best explanation, critical unknown, and single highest-value discriminating probe.
 </execution_loop>
