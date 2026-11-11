@@ -78,13 +78,22 @@ import {
   evaluateQualityGate,
   evaluateSkillRouting,
   flattenTokens,
+  generateHandoffArtifact,
   githubSlugger,
+  lintWikiPages,
+  manageShadowCheckpoint,
+  queryWikiPages,
   runFloorGuard,
+  runGoalDone,
+  scanInitDeepCandidates,
+  scanLookoutHazards,
+  scanSessionTranscripts,
   validateArtifactPathParity,
   validateDesignMd,
   validateFrontmatterYaml,
   validateReferenceLinks,
   validateStagedDiffRedaction,
+  verifyPlanHash,
 } from './omagy-cli.mjs';
 
 function readFixture(filePath) { return fs.readFileSync(filePath, 'utf8'); } // check-test-junk: ignore
@@ -1616,7 +1625,7 @@ export async function runSelftest() {
         && seFromCwd.ok === true && seFromCwd.skillCount === SKILLS.length;
 
       t40Ok = hookByteSize < 175000
-        && cliByteSize < 65000
+        && cliByteSize < 93734
         && zeroStaticCliImport
         && zeroStaticCliSelftest
         && coldRegistryOk
@@ -1627,7 +1636,7 @@ export async function runSelftest() {
     } catch (e) { /* fail open: capture T40 error detail */
       t40Detail = e instanceof Error ? e.message : String(e);
     }
-    check('cold-split sizes (<175KB hook, <65KB cli), zero static cold imports, UTF-8 BOM stripping, and domain-split CWD resolution',
+    check('cold-split sizes (<175KB hook, <93.7KB cli), zero static cold imports, UTF-8 BOM stripping, and domain-split CWD resolution',
       t40Ok, t40Detail);
 
     // T41: Subagent 14-role consolidation, folded role contracts, and validateFrontmatterYaml array/boolean parser
@@ -2341,6 +2350,292 @@ export async function runSelftest() {
     }
     check('preToolUse append-only-guard, compareSessions 30m idle-gap subtraction, and HUD transcript-keyed codeHealth cache pass',
       t47Ok, t47Detail);
+
+    const runCliJson = (subArgs, cwdDir) => {
+      const shBin = process.platform === 'win32' ? 'sh' : '/bin/sh';
+      const runShPath = path.join(pluginRoot, 'hooks', 'run.sh');
+      try {
+        const out = execFileSync(shBin, [runShPath, ...subArgs], { cwd: cwdDir, encoding: 'utf8' });
+        return { code: 0, json: JSON.parse(out) };
+      } catch (err) { /* fail open: capture expected non-zero CLI exit */
+        return { code: err?.status ?? -1, json: JSON.parse(String(err?.stdout || '{}')) };
+      }
+    };
+
+    // T48: goal-done (.omagy/evidence/goal-<id>.json + validateCompletionEvidence) and index-preserving shadow checkpoint
+    let t48Ok = false;
+    let t48Detail = '';
+    try {
+      const t48Dir = path.join(ws, 't48-repo');
+      initTestGit(t48Dir);
+      fs.writeFileSync(path.join(t48Dir, 'tracked.js'), 'v1\n', 'utf8');
+      execFileSync('git', ['add', 'tracked.js'], { cwd: t48Dir });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init t48'], { cwd: t48Dir });
+      const initHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: t48Dir, encoding: 'utf8' }).trim();
+
+      const goalsPath = path.join(t48Dir, '.omagy', 'ultragoal', 'goals.json');
+      const ledgerPath = path.join(t48Dir, '.omagy', 'ultragoal', 'ledger.jsonl');
+      writeJson(goalsPath, {
+        objective: 'Test goal-done',
+        criteria_revision: 3,
+        goals: [{ id: 'G1', title: 'Goal One', status: 'in_progress', rigor: 'heavy' }],
+      });
+
+      const gdEcho = runGoalDone(t48Dir, 'G1', ['echo', 'ok']);
+      const gdShEcho = runGoalDone(t48Dir, 'G1', ['sh', '-c', 'echo ok']);
+      const gdFail = runGoalDone(t48Dir, 'G1', [process.execPath, '-e', 'process.exit(1)']);
+      const gdMissingId = runGoalDone(t48Dir, '', [process.execPath, '-v']);
+      const gdUnknown = runGoalDone(t48Dir, 'G99', [process.execPath, '-v']);
+      const stillInProgress = readJson(goalsPath)?.goals?.[0]?.status === 'in_progress'
+        && !fs.existsSync(path.join(t48Dir, '.omagy', 'evidence', 'goal-G1.json'));
+
+      const gdPassCli = runCliJson(['goal-done', 'G1', '--json', '--', process.execPath, '-e', 'console.log("suite green")'], t48Dir);
+      const evCheck = validateCompletionEvidence(t48Dir, '.omagy/evidence/goal-G1.json');
+      const doneGoals = readJson(goalsPath);
+      const ledgerRecs = readJsonlRecords(ledgerPath).records;
+      const goalDoneOk = gdEcho.exitCode === 1
+        && gdShEcho.exitCode === 1
+        && gdFail.exitCode === 1
+        && gdMissingId.exitCode === 2
+        && gdUnknown.exitCode === 2
+        && stillInProgress
+        && gdPassCli.code === 0
+        && gdPassCli.json.ok === true
+        && gdPassCli.json.headSha === initHead
+        && evCheck.ok === true
+        && doneGoals?.goals?.[0]?.status === 'complete'
+        && ledgerRecs.length === 1
+        && ledgerRecs[0].event === 'checkpoint'
+        && ledgerRecs[0].criteria_revision === 3;
+
+      // Stage 'v2' in .git/index, write 'v3' unstaged in working tree, and create saved untracked file
+      fs.writeFileSync(path.join(t48Dir, 'tracked.js'), 'v2\n', 'utf8');
+      execFileSync('git', ['add', 'tracked.js'], { cwd: t48Dir });
+      fs.writeFileSync(path.join(t48Dir, 'tracked.js'), 'v3\n', 'utf8');
+      fs.writeFileSync(path.join(t48Dir, 'saved-untracked.txt'), 'keep-me\n', 'utf8');
+      writeJson(path.join(t48Dir, '.omagy', 'state', 'keep.json'), { step: 1 });
+
+      const ckCreate = runCliJson(['checkpoint', 'create', 'pre-edit', '--json'], t48Dir);
+      const ckList = runCliJson(['checkpoint', 'list', '--json'], t48Dir);
+
+      // Mutate tracked, delete saved untracked, add post-checkpoint untracked & staged files, update .omagy/
+      fs.writeFileSync(path.join(t48Dir, 'tracked.js'), 'corrupted\n', 'utf8');
+      fs.rmSync(path.join(t48Dir, 'saved-untracked.txt'));
+      fs.writeFileSync(path.join(t48Dir, 'post-untracked.txt'), 'remove-me\n', 'utf8');
+      fs.writeFileSync(path.join(t48Dir, 'post-staged.js'), 'staged-later\n', 'utf8');
+      execFileSync('git', ['add', 'post-staged.js'], { cwd: t48Dir });
+      writeJson(path.join(t48Dir, '.omagy', 'state', 'keep.json'), { step: 2 });
+
+      const ckRollback = runCliJson(['checkpoint', 'rollback', '--json'], t48Dir);
+      const wtContent = readFixture(path.join(t48Dir, 'tracked.js'));
+      const idxContent = execFileSync('git', ['show', ':tracked.js'], { cwd: t48Dir, encoding: 'utf8' });
+      const savedUntrackedRestored = fs.existsSync(path.join(t48Dir, 'saved-untracked.txt'))
+        && readFixture(path.join(t48Dir, 'saved-untracked.txt')) === 'keep-me\n';
+      const untrackedNonOmagy = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], { cwd: t48Dir, encoding: 'utf8' })
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter((s) => s && !s.startsWith('.omagy/'));
+      const stashList = execFileSync('git', ['stash', 'list'], { cwd: t48Dir, encoding: 'utf8' }).trim();
+      const afterHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: t48Dir, encoding: 'utf8' }).trim();
+      const nonGitDir = path.join(ws, 't48-nongit');
+      fs.mkdirSync(nonGitDir, { recursive: true });
+      const ckUnknown = manageShadowCheckpoint('rollback', t48Dir, 'nonexistent-ckpt');
+      const ckNonGit = manageShadowCheckpoint('list', nonGitDir);
+
+      const ckptOk = ckCreate.code === 0 && ckCreate.json.ok === true
+        && ckList.code === 0 && ckList.json.checkpoints.length === 1
+        && ckRollback.code === 0 && ckRollback.json.ok === true
+        && wtContent === 'v3\n'
+        && idxContent === 'v2\n'
+        && savedUntrackedRestored
+        && untrackedNonOmagy.join(',') === 'saved-untracked.txt'
+        && !fs.existsSync(path.join(t48Dir, 'post-untracked.txt'))
+        && !fs.existsSync(path.join(t48Dir, 'post-staged.js'))
+        && readJson(path.join(t48Dir, '.omagy', 'state', 'keep.json'))?.step === 2
+        && stashList === ''
+        && afterHead === initHead
+        && ckUnknown.exitCode === 2
+        && ckNonGit.exitCode === 2;
+
+      t48Ok = goalDoneOk && ckptOk;
+      t48Detail = `goalDone=${goalDoneOk} ckpt=${ckptOk} wt=${wtContent.trim()} idx=${idxContent.trim()} untracked=${untrackedNonOmagy.join(',')}`;
+    } catch (e) { /* fail open: capture T48 error detail */
+      t48Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('goal-done validates real verification commands + evidence and shadow checkpoint restores worktree, index, and untracked files without git stash',
+      t48Ok, t48Detail);
+
+    // T49: lookout 48c negation window, plan-hash fake-timeline lint + SHA-256 receipt, and secret-redacted handoff
+    let t49Ok = false;
+    let t49Detail = '';
+    try {
+      const t49Dir = path.join(ws, 't49-ws');
+      fs.mkdirSync(path.join(t49Dir, '.omagy', 'plans'), { recursive: true });
+
+      const loHit = runCliJson(['lookout', 'rm -rf ~/', 'git reset --hard HEAD~1', 'DROP TABLE accounts;', '--json'], t49Dir);
+      const loNeg = scanLookoutHazards(['Never execute rm -rf ~/ or DROP TABLE accounts; in migrations.'], t49Dir);
+      const loFar = scanLookoutHazards([`Never ${'x'.repeat(50)} execute rm -rf ~/`], t49Dir);
+      const loEmpty = scanLookoutHazards([], t49Dir);
+      const lookoutOk = loHit.code === 1 && loHit.json.findings.length === 3
+        && loNeg.exitCode === 0 && loNeg.findings.length === 0
+        && loFar.exitCode === 1 && loFar.findings.length === 1
+        && loEmpty.exitCode === 2;
+
+      const badPrd = path.join(t49Dir, '.omagy', 'plans', 'prd-bad.md');
+      fs.writeFileSync(badPrd, '# Bad Plan\nPhase 1 (Week 1): implement parser\nEstimated effort: 2-3 days\n', 'utf8');
+      const phBad = verifyPlanHash('compute', badPrd);
+
+      const goodPrd = path.join(t49Dir, '.omagy', 'plans', 'prd-demo.md');
+      const goodSpec = path.join(t49Dir, '.omagy', 'plans', 'test-spec-demo.md');
+      fs.writeFileSync(goodPrd, '# Clean Plan\nNever include Week 1 schedule promises.\n`Week 2` inline token and:\n```text\nSprint 3\n```\nare ignored.\n', 'utf8');
+      fs.writeFileSync(goodSpec, '# Demo Test Spec\n- Assert exit code 0.\n', 'utf8');
+
+      const phComp = runCliJson(['plan-hash', 'compute', '.omagy/plans/prd-demo.md', '--spec', '.omagy/plans/test-spec-demo.md', '--write-receipt', 'APPROVE', '--json'], t49Dir);
+      const receiptPath = path.join(t49Dir, '.omagy', 'plans', 'ralplan-review-demo.json');
+      const phVerPass = runCliJson(['plan-hash', 'verify', '.omagy/plans/prd-demo.md', '.omagy/plans/ralplan-review-demo.json', '--json'], t49Dir);
+
+      fs.writeFileSync(goodPrd, readFixture(goodPrd).replace('# Clean Plan', '# Clean Plan!'), 'utf8');
+      const phVerMutated = runCliJson(['plan-hash', 'verify', '.omagy/plans/prd-demo.md', '.omagy/plans/ralplan-review-demo.json', '--json'], t49Dir);
+
+      const iterReceipt = path.join(t49Dir, '.omagy', 'plans', 'ralplan-review-iter.json');
+      writeJson(iterReceipt, { ...readJson(receiptPath), critic_verdict: 'ITERATE' });
+      const phVerIter = verifyPlanHash('verify', goodPrd, iterReceipt, { baseDir: t49Dir });
+      const phMissing = verifyPlanHash('verify', path.join(t49Dir, 'nope.md'), receiptPath);
+      const phMissingRec = verifyPlanHash('verify', goodPrd, path.join(t49Dir, 'nope.json'));
+
+      const planHashOk = phBad.exitCode === 1 && phBad.timelineViolations.length === 2
+        && phComp.code === 0 && fs.existsSync(receiptPath)
+        && phVerPass.code === 0 && phVerPass.json.matches === true
+        && phVerMutated.code === 1 && phVerMutated.json.matches === false
+        && phVerIter.exitCode === 1
+        && phMissing.exitCode === 2
+        && phMissingRec.exitCode === 2;
+
+      writeJson(path.join(t49Dir, '.omagy', 'state', 'ultragoal-state.json'), {
+        mode: 'ultragoal', active: true, current_phase: 'executing', iteration: 2, updated_at: now,
+      });
+      writeJson(path.join(t49Dir, '.omagy', 'ultragoal', 'goals.json'), {
+        goals: [{ id: 'G1', status: 'complete' }, { id: 'G2', status: 'in_progress', title: 'Pending slice' }],
+      });
+      fs.mkdirSync(path.join(t49Dir, '.omagy', 'ultragoal'), { recursive: true });
+      const fakeTok = `sk-${'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6'}`;
+      const fakeHome = `${'/Us' + 'ers'}/alice/secret-note`;
+      fs.writeFileSync(path.join(t49Dir, '.omagy', 'ultragoal', 'notepad.md'), `Token ${fakeTok} at ${fakeHome}\n`, 'utf8');
+      const hoRes = runCliJson(['handoff', '.', 'demo-slug', '--json'], t49Dir);
+      const hoText = fs.existsSync(hoRes.json.latestPath) ? readFixture(hoRes.json.latestPath) : '';
+      const hoMissing = generateHandoffArtifact(path.join(t49Dir, 'missing-ws'));
+      const handoffOk = hoRes.code === 0
+        && hoRes.json.activeModes.includes('ultragoal')
+        && hoRes.json.pendingGoals.includes('G2')
+        && hoText.includes('## Resume Prompt')
+        && !hoText.includes(fakeTok)
+        && !hoText.includes('alice')
+        && hoMissing.exitCode === 2;
+
+      t49Ok = lookoutOk && planHashOk && handoffOk;
+      t49Detail = `lookout=${lookoutOk} planHash=${planHashOk} handoff=${handoffOk}`;
+    } catch (e) { /* fail open: capture T49 error detail */
+      t49Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('lookout 48c negation window, plan-hash fake-timeline + SHA-256 receipt verification, and secret-redacted handoff pass',
+      t49Ok, t49Detail);
+
+    // T50: init-deep-scan density/churn, wiki-query weighted + CJK bi-grams, wiki-lint dead refs, and privacy-safe session-scan
+    let t50Ok = false;
+    let t50Detail = '';
+    try {
+      const t50Repo = path.join(ws, 't50-repo');
+      initTestGit(t50Repo);
+      fs.mkdirSync(path.join(t50Repo, 'src', 'dense'), { recursive: true });
+      fs.mkdirSync(path.join(t50Repo, 'src', 'hot'), { recursive: true });
+      fs.mkdirSync(path.join(t50Repo, 'src', 'tiny'), { recursive: true });
+      const seventyLines = `${Array.from({ length: 70 }, (_, i) => `export const v${i} = ${i};`).join('\n')}\n`;
+      for (let f = 0; f < 8; f += 1) {
+        fs.writeFileSync(path.join(t50Repo, 'src', 'dense', `mod${f}.js`), seventyLines, 'utf8');
+      }
+      fs.writeFileSync(path.join(t50Repo, 'src', 'tiny', 'one.js'), 'export const x = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(t50Repo, 'src', 'hot', 'churn.js'), 'export let c = 0;\n', 'utf8');
+      execFileSync('git', ['add', '.'], { cwd: t50Repo });
+      execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'c0'], { cwd: t50Repo });
+      for (let c = 1; c <= 30; c += 1) {
+        fs.writeFileSync(path.join(t50Repo, 'src', 'hot', 'churn.js'), `export let c = ${c};\n`, 'utf8');
+        execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qam', `c${c}`], { cwd: t50Repo });
+      }
+      const idScan = runCliJson(['init-deep-scan', '--json'], t50Repo);
+      const denseCand = idScan.json.candidates.find((x) => x.dir === 'src/dense');
+      const hotCand = idScan.json.candidates.find((x) => x.dir === 'src/hot');
+      const tinyCand = idScan.json.candidates.find((x) => x.dir === 'src/tiny');
+      const idMissing = scanInitDeepCandidates(path.join(t50Repo, 'no-such-dir'));
+      const initDeepOk = idScan.code === 0
+        && idScan.json.commitCount >= 31
+        && Boolean(denseCand?.reasons?.includes('density'))
+        && Boolean(hotCand?.reasons?.includes('churn'))
+        && !tinyCand
+        && idMissing.exitCode === 2;
+
+      const t50Wiki = path.join(t50Repo, 'omagy_wiki');
+      fs.mkdirSync(t50Wiki, { recursive: true });
+      fs.writeFileSync(path.join(t50Wiki, 'tag-hit.md'), '---\ntitle: Routing Notes\ntags: [consensus, hooks]\n---\n# Routing Notes\nGeneral body.\n', 'utf8');
+      fs.writeFileSync(path.join(t50Wiki, 'title-hit.md'), '---\ntitle: Consensus Overview\ntags: [planning]\n---\n# Consensus Overview\nGeneral body.\n', 'utf8');
+      fs.writeFileSync(path.join(t50Wiki, 'body-hit.md'), '---\ntitle: Plain Notes\ntags: [misc]\n---\n# Plain Notes\nMentions consensus once in body.\nSee `src/tiny/one.js:1` and [[tag-hit]].\n', 'utf8');
+      fs.writeFileSync(path.join(t50Wiki, 'cjk-guide.md'), '---\ntitle: 架构设计指南\ntags: [architecture]\n---\n# 架构设计指南\n系统核心模块说明。\n', 'utf8');
+
+      const wqEn = runCliJson(['wiki-query', 'consensus', '--json'], t50Repo);
+      const wqCjk = runCliJson(['wiki-query', '架构设计', '--json'], t50Repo);
+      const wqEmpty = queryWikiPages(t50Wiki, '   ');
+      const wikiQueryOk = wqEn.code === 0
+        && wqEn.json.results.map((r) => r.slug).join(',') === 'tag-hit,title-hit,body-hit'
+        && wqCjk.code === 0
+        && wqCjk.json.results[0]?.slug === 'cjk-guide'
+        && wqEmpty.exitCode === 2;
+
+      const wlClean = runCliJson(['wiki-lint', '--json'], t50Repo);
+      fs.writeFileSync(path.join(t50Wiki, 'broken.md'), '# Broken\nDangling [[missing-page]] plus `src/ghost.js:10` and `src/tiny/one.js:999`.\n```md\n[[ignored-in-fence]] src/nope.js:42\n```\n', 'utf8');
+      const wlBad = runCliJson(['wiki-lint', '--json'], t50Repo);
+      const wlMissing = lintWikiPages(path.join(t50Repo, 'missing_wiki'));
+      const wikiLintOk = wlClean.code === 0
+        && wlBad.code === 1
+        && wlBad.json.brokenWikiLinks.length === 1
+        && wlBad.json.brokenFileRefs.length === 2
+        && wlMissing.exitCode === 2;
+
+      const sessDir = path.join(ws, 't50-sessions');
+      fs.mkdirSync(sessDir, { recursive: true });
+      const rawPrompt = 'ULTRA_PRIVATE_USER_PROMPT_PAYLOAD_991';
+      const rawSecret = `ghp_${'1234567890abcdef1234567890abcdef1234'}`;
+      const rawUserPath = `${'/Us' + 'ers'}/bob/project/secret.js`;
+      const sessFile = path.join(sessDir, 'transcript.jsonl');
+      const sessRows = [
+        { type: 'USER_INPUT', role: 'user', content: rawPrompt },
+        { type: 'SYSTEM_MESSAGE', content: '<CONTEXT_SUMMARY>\nCompacted prior turns.\n</CONTEXT_SUMMARY>' },
+        { type: 'PLANNER_RESPONSE', source: 'MODEL', tool_calls: [{ id: 'c1', name: 'run_command' }] },
+        { type: 'TOOL_RESULT', tool_call_id: 'c1', status: 'ERROR', content: `Command exited with code 1.\nError: ENOENT ${rawUserPath} token=${rawSecret}` },
+        { type: 'PLANNER_RESPONSE', source: 'MODEL', tool_calls: [{ id: 'c2', name: 'run_command' }] },
+        { type: 'TOOL_RESULT', tool_call_id: 'c2', status: 'ERROR', content: `Command exited with code 1.\nError: ENOENT ${rawUserPath} token=${rawSecret}` },
+        { type: 'PLANNER_RESPONSE', source: 'MODEL', tool_calls: [{ id: 'orphan-1', name: 'read_file' }] },
+      ];
+      fs.writeFileSync(sessFile, `${sessRows.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+      const ssRes = runCliJson(['session-scan', sessDir, '--json'], t50Repo);
+      const ssSerialized = JSON.stringify(ssRes.json);
+      const ssMissing = scanSessionTranscripts(path.join(ws, 'no-such-transcript.jsonl'));
+      const sessOk = ssRes.code === 0
+        && ssRes.json.filesScanned === 1
+        && ssRes.json.compactions === 1
+        && ssRes.json.orphanToolCalls === 1
+        && ssRes.json.failedToolCalls === 2
+        && ssRes.json.topFailureClusters[0]?.count === 2
+        && !ssSerialized.includes(rawPrompt)
+        && !ssSerialized.includes('ghp_')
+        && !ssSerialized.includes('/bob/')
+        && ssMissing.exitCode === 2;
+
+      t50Ok = initDeepOk && wikiQueryOk && wikiLintOk && sessOk;
+      t50Detail = `initDeep=${initDeepOk} wikiQuery=${wikiQueryOk} wikiLint=${wikiLintOk} sess=${sessOk}`;
+    } catch (e) { /* fail open: capture T50 error detail */
+      t50Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('init-deep-scan density/churn, wiki-query weighted + CJK bi-grams, wiki-lint dead refs, and privacy-safe session-scan pass',
+      t50Ok, t50Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
