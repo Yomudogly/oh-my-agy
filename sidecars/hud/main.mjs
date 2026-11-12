@@ -33,18 +33,36 @@ import {
   HUD_HTML,
   buildSkillCommandWithFlags,
   buildSubagentInvokeSnippet,
+  buildWikiMindMapGraph,
+  formatAgreementCard,
+  formatScopeLabel,
+  formatWorkspaceName,
+  highlightMatch,
+  parseWorkflowStageLabel,
   prepareLoftSrcdoc,
+  projectMindMapPoint,
   renderHudHtml,
   renderSafeMarkdown,
+  resolveWorkflowStageState,
+  selectCurrentMode,
 } from './ui.mjs';
 
 export {
   HUD_HTML,
   buildSkillCommandWithFlags,
   buildSubagentInvokeSnippet,
+  buildWikiMindMapGraph,
+  formatAgreementCard,
+  formatScopeLabel,
+  formatWorkspaceName,
+  highlightMatch,
+  parseWorkflowStageLabel,
   prepareLoftSrcdoc,
+  projectMindMapPoint,
   renderHudHtml,
   renderSafeMarkdown,
+  resolveWorkflowStageState,
+  selectCurrentMode,
 };
 
 hardenWindowsExeSearch();
@@ -1173,7 +1191,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     let recentLedger = [];
     try {
       if (fs.existsSync(ledgerPath)) {
-        recentLedger = readJsonlRecords(ledgerPath).records.slice(-8).reverse();
+        recentLedger = readJsonlRecords(ledgerPath).records.slice(-5).reverse();
       }
     } catch { /* fail open: malformed or missing ledger.jsonl */ recentLedger = []; }
     const goals = goalsData.goals.map((g) => ({
@@ -1337,10 +1355,12 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           try { pst = fs.lstatSync(fullPlanPath); } catch { /* fail open: skip transient plan file */ continue; }
           if (pst.isSymbolicLink() || !pst.isFile()) continue;
           const text = readTextSafe(fullPlanPath);
+          const planUpdatedAt = new Date(pst.mtimeMs).toISOString();
           artifacts.plans.push({
             scope: sc.scope,
             file: `${relPrefix}.omagy/plans/${name}`,
             title: extractMarkdownTitle(text, name),
+            updatedAt: planUpdatedAt,
           });
           if (name.startsWith('hyperplan-distillation-')) {
             const survives = (text.match(/\bSURVIVES\b/g) || []).length;
@@ -1349,6 +1369,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
             reviews.hyperplan.push({
               scope: sc.scope,
               file: `${relPrefix}.omagy/plans/${name}`,
+              updatedAt: planUpdatedAt,
               survives,
               weakened,
               killed,
@@ -1386,6 +1407,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
             scope: sc.scope,
             file: `${relPrefix}.omagy/specs/${name}`,
             title: extractMarkdownTitle(text, name),
+            updatedAt: new Date(sst.mtimeMs).toISOString(),
           });
         }
       }
@@ -1401,6 +1423,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           try { ast = fs.lstatSync(fullArtPath); } catch { /* fail open: skip transient artifact file */ continue; }
           if (ast.isSymbolicLink() || !ast.isFile()) continue;
           const text = readTextSafe(fullArtPath);
+          const artUpdatedAt = new Date(ast.mtimeMs).toISOString();
           if (name.startsWith('code-review-')) {
             const archMatch = /Architectural Status:\s*(CLEAR|WATCH|BLOCK)/i.exec(text);
             const recMatch = /RECOMMENDATION:\s*(APPROVE|REQUEST CHANGES|COMMENT)/i.exec(text);
@@ -1409,6 +1432,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
             reviews.codeReviews.push({
               scope: sc.scope,
               file: `${relPrefix}.omagy/artifacts/${name}`,
+              updatedAt: artUpdatedAt,
               architectStatus: archMatch ? archMatch[1].toUpperCase() : 'UNKNOWN',
               recommendation: recMatch ? recMatch[1].toUpperCase() : 'UNKNOWN',
               filesReviewed: filesMatch ? Number(filesMatch[1]) : 0,
@@ -1419,13 +1443,14 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
               scope: sc.scope,
               file: `${relPrefix}.omagy/artifacts/${name}`,
               title: extractMarkdownTitle(text, name),
-              updatedAt: new Date(ast.mtimeMs).toISOString(),
+              updatedAt: artUpdatedAt,
             });
           } else if (name.startsWith('ask-')) {
             artifacts.asks.push({
               scope: sc.scope,
               file: `${relPrefix}.omagy/artifacts/${name}`,
               title: extractMarkdownTitle(text, name),
+              updatedAt: artUpdatedAt,
             });
           }
         }
@@ -1446,6 +1471,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
             scope: sc.scope,
             file: `${relPrefix}.omagy/artifacts/ideas/${name}`,
             title: extractMarkdownTitle(text, name),
+            updatedAt: new Date(ist.mtimeMs).toISOString(),
           });
         }
       }
@@ -1459,9 +1485,12 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     const researchDir = path.join(sc.root, '.omagy', 'artifacts', 'research');
     try {
       if (fs.existsSync(researchDir) && !fs.lstatSync(researchDir).isSymbolicLink()) {
-        for (const name of fs.readdirSync(researchDir)) {
+        for (const name of fs.readdirSync(researchDir).sort()) {
           if (!name.endsWith('.md')) continue;
           const fullPath = path.join(researchDir, name);
+          let rst;
+          try { rst = fs.lstatSync(fullPath); } catch { /* fail open: skip transient research file */ continue; }
+          if (rst.isSymbolicLink() || !rst.isFile()) continue;
           const text = readTextSafe(fullPath, 64 * 1024);
           if (!text) continue;
           const titleMatch = /^#\s+([^\r\n]+)/m.exec(text);
@@ -1471,6 +1500,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           research.push({
             scope: sc.scope,
             file: `${relPrefix}.omagy/artifacts/research/${name}`,
+            updatedAt: new Date(rst.mtimeMs).toISOString(),
             title: redactSecrets((titleMatch ? titleMatch[1] : name).trim()),
             lens: (lensMatch ? lensMatch[1] : 'multi-lens').trim(),
             compositeScore: compMatch ? Number(compMatch[1]) : null,
@@ -1538,9 +1568,11 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           const completionData = readJsonSafe(path.join(dir, 'completion.json')) || {};
           const reportPath = path.join(dir, 'report.md');
           let hasReport = false;
+          let reportMtimeMs = st.mtimeMs;
           try {
             const rst = fs.lstatSync(reportPath);
             hasReport = rst.isFile() && !rst.isSymbolicLink();
+            if (hasReport) reportMtimeMs = rst.mtimeMs;
           } catch { /* fail open: optional autoresearch report.md */ }
           const reportText = hasReport ? readTextSafe(reportPath) : '';
           const reportRelFile = hasReport ? `${relPrefix}.omagy/specs/${name}/report.md` : null;
@@ -1549,6 +1581,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
               scope: sc.scope,
               file: reportRelFile,
               title: extractMarkdownTitle(reportText, `${name}/report.md`),
+              updatedAt: new Date(reportMtimeMs).toISOString(),
             });
           }
           const evalMatch = /\*{0,2}Verdict:\s*(PASS|FAIL|INCONCLUSIVE)\*{0,2}/i.exec(reportText);
@@ -1571,6 +1604,19 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
       }
     } catch { /* fail open: autoresearch specs scan unavailable */ }
   }
+
+  const sortByNewestFile = (arr) => arr.sort((a, b) => {
+    const diff = (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0);
+    return diff !== 0 ? diff : String(b.file || '').localeCompare(String(a.file || ''));
+  });
+  sortByNewestFile(reviews.hyperplan);
+  sortByNewestFile(reviews.codeReviews);
+  sortByNewestFile(research);
+  sortByNewestFile(artifacts.plans);
+  sortByNewestFile(artifacts.specs);
+  sortByNewestFile(artifacts.handoffs);
+  sortByNewestFile(artifacts.ideas);
+  sortByNewestFile(artifacts.asks);
 
   // 6. Visual Ralph Diff & Verdict Inspector (across scopes)
   const visualRalph = [];
@@ -1740,7 +1786,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
         const expiresStr = meta?.expires ? String(meta.expires) : '';
         const expired = Boolean(expiresStr && Date.parse(expiresStr) <= nowMs);
         if (expired) wiki.lint.expiredPages.push(slug);
-        const links = [...raw.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
+        const bodyWithoutCode = body.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]+`/g, '');
+        const links = [...bodyWithoutCode.matchAll(/\[\[([a-zA-Z0-9_-]+)(?:\|[^\]\n]+)?\]\]/g)].map((m) => m[1]);
         for (const target of links) {
           inboundLinks.add(target);
           if (!allSlugs.has(target)) wiki.lint.danglingLinks.push(`${slug} -> [[${target}]]`);
@@ -2432,7 +2479,7 @@ async function runSelftest() {
       fs.mkdirSync(path.join(sseWs, '.omagy', 'state'), { recursive: true });
       fs.mkdirSync(path.join(sseWs, 'omagy_wiki'), { recursive: true });
       const initialApJson = JSON.stringify({
-        mode: 'autopilot', active: true, current_phase: 'ralplan', iteration: 1, updated_at: '2026-11-11T20:00:00Z',
+        mode: 'autopilot', active: true, current_phase: 'ralplan', iteration: 1, updated_at: new Date(baseNowMs - 60000).toISOString(),
       });
       fs.writeFileSync(path.join(sseWs, '.omagy', 'state', 'autopilot-state.json'), initialApJson);
       fs.writeFileSync(path.join(sseWs, 'omagy_wiki', 'index.md'), '- [[intro]] — Intro\n');
@@ -2588,7 +2635,7 @@ async function runSelftest() {
         // Rewrite identical JSON first (unchanged digest must not emit a duplicate snapshot frame), then mutate phase.
         fs.writeFileSync(path.join(sseWs, '.omagy', 'state', 'autopilot-state.json'), initialApJson);
         fs.writeFileSync(path.join(sseWs, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
-          mode: 'autopilot', active: true, current_phase: 'code-review', iteration: 2, updated_at: '2026-11-11T20:05:00Z',
+          mode: 'autopilot', active: true, current_phase: 'code-review', iteration: 2, updated_at: new Date(baseNowMs - 30000).toISOString(),
         }));
         const frame2 = await liveClient.waitForFrame(2);
         fs.writeFileSync(path.join(sseWs, 'omagy_wiki', 'live-note.md'), '---\ntitle: Live Note\ncategory: pattern\ntags: [sse]\n---\nLive wiki push.\n');
@@ -2600,11 +2647,11 @@ async function runSelftest() {
         const preFrame1 = await flatClient.waitForFrame(1);
         fs.mkdirSync(path.join(preOmagyWs, '.omagy', 'state'), { recursive: true });
         fs.writeFileSync(path.join(preOmagyWs, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
-          mode: 'autopilot', active: true, current_phase: 'planning', iteration: 1, updated_at: '2026-11-11T20:10:00Z',
+          mode: 'autopilot', active: true, current_phase: 'planning', iteration: 1, updated_at: new Date(baseNowMs - 20000).toISOString(),
         }));
         const preFrame2 = await flatClient.waitForFrame(2);
         fs.writeFileSync(path.join(preOmagyWs, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
-          mode: 'autopilot', active: true, current_phase: 'executing', iteration: 2, updated_at: '2026-11-11T20:11:00Z',
+          mode: 'autopilot', active: true, current_phase: 'executing', iteration: 2, updated_at: new Date(baseNowMs - 10000).toISOString(),
         }));
         const preFrame3 = await flatClient.waitForFrame(3);
         await flatClient.closeAndWait();
@@ -2670,7 +2717,7 @@ async function runSelftest() {
         mode: 'autopilot',
         active: true,
         current_phase: 'ultragoal',
-        updated_at: '2026-11-11T21:00:00Z',
+        updated_at: new Date(baseNowMs - 10000).toISOString(),
         state: {
           deep_interview: {
             slug: 'demo',
@@ -2966,6 +3013,162 @@ async function runSelftest() {
       && HUD_HTML.includes('-webkit-appearance: none;')
       && HUD_HTML.includes('.chip-btn code,');
 
+    // H20: Workbench UX polish — clean header, folder/scope labels, single current mode, 5-item ledger, wide un-crushed Markdown + YAML frontmatter, 2-tab Reviews/Research, 10-item collapsible artifacts, collapsible boxed Working Agreements, & no Wiki search input
+    const frontmatterMd = [
+      '---',
+      'title: Deep Interview Spec',
+      'slug: hud-polish',
+      'profile: standard',
+      '---',
+      '',
+      '# Spec Heading',
+      '',
+      '1. First item',
+      '- Top bullet',
+      '  - Nested bullet',
+      '2. Second item',
+      '',
+      '| Flag | Rule |',
+      '| --- | --- |',
+      '| `--a|--b` | A \\| B |',
+    ].join('\n');
+    const renderedFmMd = renderSafeMarkdown(frontmatterMd);
+    const modePickLive = selectCurrentMode([
+      { mode: 'ultragoal', active: true, stale: false, phase: 'executing', updatedMs: 200 },
+      { mode: 'autopilot', active: true, stale: false, phase: 'ultragoal', updatedMs: 100 },
+    ]);
+    const modePickIdle = selectCurrentMode([
+      { mode: 'ultragoal', active: false, stale: false, phase: 'complete', updatedMs: 100 },
+      { mode: 'autopilot', active: false, stale: false, phase: 'complete', updatedMs: 300 },
+    ]);
+    const agCardHtml = formatAgreementCard({
+      text: '- [v1] [by:human] Keep `hooks/` dependency-free — 2026-11-02',
+      author: 'human',
+      expired: false,
+    }, 0);
+    const h20Ok = !HUD_HTML.includes('1-5 &middot; / &middot; Esc')
+      && !HUD_HTML.includes('id="wiki-search-input"')
+      && !HUD_HTML.includes('Tracked .omagy scopes:')
+      && HUD_HTML.includes('function formatWorkspaceName(')
+      && HUD_HTML.includes('function formatScopeLabel(')
+      && HUD_HTML.includes('function selectCurrentMode(')
+      && HUD_HTML.includes('setOverviewReviewTab')
+      && HUD_HTML.includes('data-hud-key="wiki-agreements"')
+      && HUD_HTML.includes('agreement-box')
+      && HUD_HTML.includes('ledger-item')
+      && HUD_HTML.includes('table-layout: auto')
+      && HUD_HTML.includes('width: min(100vw, 780px)')
+      && formatWorkspaceName('/opt/projects/oh-my-agy/') === 'oh-my-agy'
+      && formatScopeLabel('.') === 'workspace'
+      && formatScopeLabel('packages/web-ui') === 'web-ui'
+      && modePickLive.current?.mode === 'autopilot'
+      && modePickIdle.current === null
+      && modePickIdle.lastCompleted?.mode === 'autopilot'
+      && agCardHtml.includes('v1')
+      && agCardHtml.includes('<code class="md-inline-code">hooks/</code>')
+      && agCardHtml.includes('2026-11-02')
+      && !agCardHtml.includes('[by:human]')
+      && renderedFmMd.includes('class="md-frontmatter"')
+      && renderedFmMd.includes('hud-polish')
+      && !renderedFmMd.includes('<hr class="md-hr" />')
+      && renderedFmMd.includes('class="md-subitem"')
+      && renderedFmMd.includes('<td><code class="md-inline-code">--a|--b</code></td><td>A | B</td>')
+      && renderedFmMd.includes('<ol class="md-list" start="2">');
+
+    // H21: Animated Workflow Step Pipeline & Interactive 3D Wiki Mind-Map Graph/Projection
+    const wfParsedRalplan = parseWorkflowStageLabel('$ralplan (Planner -> Architect -> Critic)');
+    const wfParsedPlain = parseWorkflowStageLabel('$deep-interview');
+    const apStages = ['$deep-interview', '$ralplan', '$ultragoal', '$code-review'];
+    const wfStateIdle = resolveWorkflowStageState(apStages, 'ultragoal', false);
+    const wfStateMid = resolveWorkflowStageState(apStages, 'ultragoal', true);
+    const wfStateEnd = resolveWorkflowStageState(apStages, 'code-review', true);
+    const mmSampleEntries = [
+      { slug: 'arch', title: 'Architecture', category: 'architecture', tags: ['core'], links: ['hud', 'hooks', 'arch', 'missing-page'] },
+      { slug: 'hud', title: 'HUD Sidecar', category: 'architecture', tags: ['ui'], links: ['arch', 'tests'] },
+      { slug: 'hooks', title: 'Hooks Runtime', category: 'reference', tags: ['cli'], links: ['tests'] },
+      { slug: 'tests', title: 'Selftest Suite', category: 'pattern', tags: ['qa'], links: [] },
+    ];
+    const mmGraphAll = buildWikiMindMapGraph(mmSampleEntries, 'All');
+    const mmGraphRepeat = buildWikiMindMapGraph(mmSampleEntries, 'All');
+    const mmGraphArch = buildWikiMindMapGraph(mmSampleEntries, 'architecture');
+    const archHudEdge = mmGraphAll.edges.find((e) => (e.source === 'arch' && e.target === 'hud') || (e.source === 'hud' && e.target === 'arch'));
+    const projFront = projectMindMapPoint({ x: 0, y: 0, z: -0.8 }, 0, 0, 1, 400, 280);
+    const projBack = projectMindMapPoint({ x: 0, y: 0, z: 0.8 }, 0, 0, 1, 400, 280);
+    const h21Ok = wfParsedRalplan.title === '$ralplan'
+      && wfParsedRalplan.sub === 'Planner \u00b7 Architect \u00b7 Critic'
+      && wfParsedPlain.title === '$deep-interview'
+      && wfParsedPlain.sub === ''
+      && wfStateIdle.activeIndex === -1
+      && JSON.stringify(wfStateIdle.states) === JSON.stringify(['idle', 'idle', 'idle', 'idle'])
+      && JSON.stringify(wfStateIdle.arrowStates) === JSON.stringify(['idle', 'idle', 'idle'])
+      && wfStateMid.activeIndex === 2
+      && JSON.stringify(wfStateMid.states) === JSON.stringify(['done', 'done', 'current', 'upcoming'])
+      && JSON.stringify(wfStateMid.arrowStates) === JSON.stringify(['done', 'done', 'active'])
+      && wfStateEnd.activeIndex === 3
+      && JSON.stringify(wfStateEnd.states) === JSON.stringify(['done', 'done', 'done', 'current'])
+      && JSON.stringify(wfStateEnd.arrowStates) === JSON.stringify(['done', 'done', 'active'])
+      && mmGraphAll.nodes.length === 4
+      && mmGraphAll.edges.length === 4
+      && Boolean(archHudEdge && archHudEdge.bidirectional === true)
+      && JSON.stringify(mmGraphAll.nodes) === JSON.stringify(mmGraphRepeat.nodes)
+      && mmGraphArch.nodes.filter((n) => n.inFilter).length === 2
+      && mmGraphArch.nodes.filter((n) => !n.inFilter).length === 2
+      && projFront.sx === 200
+      && projFront.sy === 140
+      && projFront.persp > projBack.persp
+      && projFront.z < projBack.z
+      && HUD_HTML.includes(parseWorkflowStageLabel.toString())
+      && HUD_HTML.includes(resolveWorkflowStageState.toString())
+      && HUD_HTML.includes(buildWikiMindMapGraph.toString())
+      && HUD_HTML.includes(projectMindMapPoint.toString())
+      && HUD_HTML.includes('class="wf-pipeline"')
+      && /\.wf-pipeline\s*\{[^}]*flex-wrap:\s*nowrap;[^}]*overflow-x:\s*auto;/s.test(HUD_HTML)
+      && HUD_HTML.includes('data-wf-pipeline=')
+      && HUD_HTML.includes('class="wf-arrow-svg"')
+      && HUD_HTML.includes('id="wiki-mindmap-canvas"')
+      && HUD_HTML.includes('class="wiki-mode-switch"')
+      && HUD_HTML.includes('id="wiki-list-wrap"')
+      && HUD_HTML.includes("if (wikiViewMode === 'list')")
+      && HUD_HTML.includes('setWikiViewMode(this.dataset.wikiMode)');
+
+    // H22: Hallmark tactile motion, sliding tab pills, asymmetric drawer/button physics, GPU scaleX bars, delayed skeleton, & search highlight
+    const h22Ok = HUD_HTML.includes('--ease-out:')
+      && HUD_HTML.includes('--ease-in:')
+      && HUD_HTML.includes('--ease-in-out:')
+      && HUD_HTML.includes('--dur-press:')
+      && HUD_HTML.includes('--dur-micro:')
+      && HUD_HTML.includes('--dur-short:')
+      && HUD_HTML.includes('--dur-long:')
+      && HUD_HTML.includes('--hud-scrim:')
+      && HUD_HTML.includes('--hud-shadow-drawer:')
+      && !/transition:\s*width\b/i.test(HUD_HTML)
+      && HUD_HTML.includes('scaleX(var(--bar-scale, 0))')
+      && HUD_HTML.includes('class="tab-pill-indicator"')
+      && HUD_HTML.includes('function syncSlidingTabPill(')
+      && HUD_HTML.includes('data-sliding-tabs="main"')
+      && HUD_HTML.includes('data-sliding-tabs="ov-rev"')
+      && HUD_HTML.includes('data-sliding-tabs="skill-cat"')
+      && HUD_HTML.includes('data-sliding-tabs="sa-lane"')
+      && HUD_HTML.includes('data-sliding-tabs="wiki-mode"')
+      && HUD_HTML.includes("classList.add('pane-enter')")
+      && HUD_HTML.includes(':active:not(:disabled)')
+      && HUD_HTML.includes('function setButtonFeedback(')
+      && HUD_HTML.includes('class="btn-check-path"')
+      && HUD_HTML.includes('id="hud-main-shell"')
+      && HUD_HTML.includes('function setMainShellInert(')
+      && HUD_HTML.includes("classList.add('is-closing')")
+      && HUD_HTML.includes('class="md-skeleton"')
+      && renderedMd.includes('onclick="copyMdCodeBlock(this)"')
+      && HUD_HTML.includes('window.copyMdCodeBlock =')
+      && HUD_HTML.includes('id="wiki-doc-pane"')
+      && HUD_HTML.includes('wiki-path-flash')
+      && HUD_HTML.includes('details.animate(')
+      && HUD_HTML.includes(highlightMatch.toString())
+      && highlightMatch('<img onerror=1> Deep-Research', 'deep') === '&lt;img onerror=1&gt; <mark class="hud-mark">Deep</mark>-Research'
+      && HUD_HTML.includes('class="hud-mark"')
+      && HUD_HTML.includes('id="skills-match-count"')
+      && HUD_HTML.includes('id="subagents-match-count"');
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -3056,7 +3259,10 @@ async function runSelftest() {
       && h16Ok
       && h17Ok
       && h18Ok
-      && h19Ok;
+      && h19Ok
+      && h20Ok
+      && h21Ok
+      && h22Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',

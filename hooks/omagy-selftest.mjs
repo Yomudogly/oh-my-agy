@@ -2900,7 +2900,7 @@ export async function runSelftest() {
     check('omagy-skill.mjs cold CLI dispatch, <170KB hook ceiling, skill-validate (--strict, SR-1, sibling links, manifest), and skill-init scopes pass',
       t51Ok, t51Detail);
 
-    // T52: sidecars/hud/ui.mjs modularity, provenance/path hygiene, pure helper exports, and HUD --selftest (H1-H18) gate
+    // T52: sidecars/hud/ui.mjs modularity, provenance/path hygiene, pure helper exports, and HUD --selftest (H1-H22) gate
     let t52Ok = false;
     let t52Detail = '';
     try {
@@ -2934,6 +2934,9 @@ export async function runSelftest() {
         && typeof uiMod.buildSubagentInvokeSnippet === 'function'
         && typeof uiMod.renderSafeMarkdown === 'function'
         && typeof uiMod.prepareLoftSrcdoc === 'function'
+        && typeof uiMod.resolveWorkflowStageState === 'function'
+        && typeof uiMod.buildWikiMindMapGraph === 'function'
+        && typeof uiMod.highlightMatch === 'function'
         && hudOut.selftest === 'PASS'
         && hudOut.views === 5
         && hudOut.skills === 20
@@ -2942,7 +2945,7 @@ export async function runSelftest() {
     } catch (e) { /* fail open: capture T52 error detail */
       t52Detail = e instanceof Error ? e.message : String(e);
     }
-    check('sidecars/hud/ui.mjs modularity (<256KB, zero circularity/provenance/personal-paths) and HUD --selftest (H1-H18) pass',
+    check('sidecars/hud/ui.mjs modularity (<256KB, zero circularity/provenance/personal-paths) and HUD --selftest (H1-H22) pass',
       t52Ok, t52Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
