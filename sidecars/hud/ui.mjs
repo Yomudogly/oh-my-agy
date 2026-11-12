@@ -375,7 +375,7 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
 
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:">`;
   const themeStyle = cssVarsText
-    ? `<style id="omagy-hud-theme-vars">:root { ${cssVarsText} }</style>`
+    ? `<style id="omagy-hud-theme-vars">:root { ${safeInlineCss(cssVarsText)} }</style>`
     : '';
   const injectedHead = `${cspMeta}\n${themeStyle}`;
 
@@ -411,13 +411,27 @@ export function renderHudHtml() {
       --hud-border: var(--border, rgba(148, 163, 184, 0.18));
       --hud-fg: var(--foreground, #e5e7eb);
       --hud-muted: var(--muted-foreground, #94a3b8);
-      --hud-primary: var(--primary, #60a5fa);
-      --hud-accent: var(--accent, rgba(96, 165, 250, 0.14));
-      --hud-surface-subtle: rgba(255, 255, 255, 0.035);
-      --hud-input-bg: rgba(0, 0, 0, 0.24);
-      --hud-ok: #34d399;
-      --hud-warn: #fbbf24;
-      --hud-danger: #f87171;
+      --hud-primary: var(--primary, #3b82f6);
+      --hud-primary-fg: var(--primary-foreground, #ffffff);
+      --hud-border-strong: rgba(148, 163, 184, 0.34);
+      --hud-surface-subtle: rgba(255, 255, 255, 0.045);
+      --hud-surface-hover: rgba(255, 255, 255, 0.085);
+      --hud-surface-active: rgba(255, 255, 255, 0.12);
+      --hud-input-bg: rgba(0, 0, 0, 0.22);
+      --hud-primary-tint: rgba(59, 130, 246, 0.14);
+      --hud-primary-tint-strong: rgba(59, 130, 246, 0.20);
+      --hud-primary-tint-hover: rgba(59, 130, 246, 0.28);
+      --hud-primary-border: rgba(96, 165, 250, 0.45);
+      --hud-primary-ink: #93c5fd;
+      --hud-ok: #10b981;
+      --hud-ok-tint: rgba(16, 185, 129, 0.14);
+      --hud-ok-border: rgba(16, 185, 129, 0.42);
+      --hud-ok-ink: #6ee7b7;
+      --hud-warn: #f59e0b;
+      --hud-danger: #ef4444;
+      --hud-danger-tint: rgba(239, 68, 68, 0.13);
+      --hud-danger-border: rgba(239, 68, 68, 0.44);
+      --hud-danger-ink: #fca5a5;
     }
     @media (prefers-color-scheme: light) {
       :root {
@@ -429,12 +443,61 @@ export function renderHudHtml() {
         --hud-fg: var(--foreground, #0f172a);
         --hud-muted: var(--muted-foreground, #475569);
         --hud-primary: var(--primary, #2563eb);
-        --hud-accent: var(--accent, rgba(37, 99, 235, 0.10));
-        --hud-surface-subtle: rgba(15, 23, 42, 0.035);
-        --hud-input-bg: rgba(15, 23, 42, 0.04);
+        --hud-primary-fg: var(--primary-foreground, #ffffff);
+        --hud-border-strong: rgba(15, 23, 42, 0.26);
+        --hud-surface-subtle: rgba(15, 23, 42, 0.04);
+        --hud-surface-hover: rgba(15, 23, 42, 0.075);
+        --hud-surface-active: rgba(15, 23, 42, 0.11);
+        --hud-input-bg: rgba(15, 23, 42, 0.035);
+        --hud-primary-tint: rgba(37, 99, 235, 0.12);
+        --hud-primary-tint-strong: rgba(37, 99, 235, 0.17);
+        --hud-primary-tint-hover: rgba(37, 99, 235, 0.24);
+        --hud-primary-border: rgba(37, 99, 235, 0.40);
+        --hud-primary-ink: #1d4ed8;
         --hud-ok: #059669;
+        --hud-ok-tint: rgba(5, 150, 105, 0.12);
+        --hud-ok-border: rgba(5, 150, 105, 0.38);
+        --hud-ok-ink: #047857;
         --hud-warn: #d97706;
         --hud-danger: #dc2626;
+        --hud-danger-tint: rgba(220, 38, 38, 0.11);
+        --hud-danger-border: rgba(220, 38, 38, 0.38);
+        --hud-danger-ink: #b91c1c;
+      }
+    }
+    html.light {
+      --hud-bg: var(--background, #f8fafc);
+      --hud-content: var(--content, #ffffff);
+      --hud-card: var(--card, #ffffff);
+      --hud-sidebar: var(--sidebar, #f1f5f9);
+      --hud-border: var(--border, rgba(15, 23, 42, 0.14));
+      --hud-fg: var(--foreground, #0f172a);
+      --hud-muted: var(--muted-foreground, #475569);
+      --hud-primary: var(--primary, #2563eb);
+      --hud-primary-fg: var(--primary-foreground, #ffffff);
+      --hud-ok: #059669;
+      --hud-warn: #d97706;
+      --hud-danger: #dc2626;
+    }
+    @supports (color: color-mix(in srgb, #000, #fff)) {
+      :root,
+      html.light {
+        --hud-border-strong: color-mix(in srgb, var(--hud-fg) 22%, var(--hud-border));
+        --hud-surface-subtle: color-mix(in srgb, var(--hud-fg) 5.5%, transparent);
+        --hud-surface-hover: color-mix(in srgb, var(--hud-fg) 10%, transparent);
+        --hud-surface-active: color-mix(in srgb, var(--hud-fg) 13%, transparent);
+        --hud-input-bg: color-mix(in srgb, var(--hud-bg) 68%, var(--hud-card));
+        --hud-primary-tint: color-mix(in srgb, var(--hud-primary) 14%, transparent);
+        --hud-primary-tint-strong: color-mix(in srgb, var(--hud-primary) 20%, transparent);
+        --hud-primary-tint-hover: color-mix(in srgb, var(--hud-primary) 28%, transparent);
+        --hud-primary-border: color-mix(in srgb, var(--hud-primary) 45%, var(--hud-border));
+        --hud-primary-ink: color-mix(in srgb, var(--hud-primary) 48%, var(--hud-fg));
+        --hud-ok-tint: color-mix(in srgb, var(--hud-ok) 14%, transparent);
+        --hud-ok-border: color-mix(in srgb, var(--hud-ok) 44%, var(--hud-border));
+        --hud-ok-ink: color-mix(in srgb, var(--hud-ok) 50%, var(--hud-fg));
+        --hud-danger-tint: color-mix(in srgb, var(--hud-danger) 13%, transparent);
+        --hud-danger-border: color-mix(in srgb, var(--hud-danger) 44%, var(--hud-border));
+        --hud-danger-ink: color-mix(in srgb, var(--hud-danger) 52%, var(--hud-fg));
       }
     }
     *, *::before, *::after { box-sizing: border-box; }
@@ -447,6 +510,22 @@ export function renderHudHtml() {
       font-size: 13px;
       line-height: 1.45;
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    button,
+    input,
+    select,
+    textarea {
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+      color: inherit;
+      margin: 0;
+    }
+    button {
+      appearance: none;
+      -webkit-appearance: none;
+      background: none;
     }
     button:focus-visible,
     a:focus-visible,
@@ -479,73 +558,121 @@ export function renderHudHtml() {
       border-radius: 9999px;
       font-size: 12px;
       font-weight: 500;
+      line-height: 1.35;
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
+      vertical-align: middle;
       max-width: 100%;
-      overflow: hidden;
-      text-overflow: ellipsis;
       flex-shrink: 0;
       border: 1px solid var(--hud-border);
       background: var(--hud-surface-subtle);
       color: var(--hud-fg);
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+    button.badge:hover {
+      background: var(--hud-surface-hover);
+      border-color: var(--hud-border-strong);
     }
     .badge-active {
-      border-color: var(--hud-primary);
-      color: var(--hud-primary);
-      background: var(--hud-accent);
+      border-color: var(--hud-primary-border);
+      background: var(--hud-primary-tint);
+      color: var(--hud-primary-ink);
     }
     .badge-live {
-      border-color: var(--hud-ok);
-      color: var(--hud-ok);
+      border-color: var(--hud-ok-border);
+      background: var(--hud-ok-tint);
+      color: var(--hud-ok-ink);
     }
     .badge-danger {
-      border-color: var(--hud-danger);
-      color: var(--hud-danger);
+      border-color: var(--hud-danger-border);
+      background: var(--hud-danger-tint);
+      color: var(--hud-danger-ink);
+    }
+    .tab-bar {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      padding: 3px;
+      margin-bottom: 12px;
+      border-radius: 9px;
+      background: var(--hud-sidebar);
+      border: 1px solid var(--hud-border);
     }
     .tab-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
       padding: 5px 10px;
-      border-radius: 7px;
+      border-radius: 6px;
       font-size: 12px;
       font-weight: 500;
+      line-height: 1.35;
+      white-space: nowrap;
       cursor: pointer;
       border: 1px solid transparent;
       background: transparent;
       color: var(--hud-muted);
-      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 90ms ease;
     }
     .tab-btn:hover {
       color: var(--hud-fg);
       background: var(--hud-surface-subtle);
     }
     .tab-btn.active {
-      background: var(--hud-accent);
+      background: var(--hud-card);
       color: var(--hud-fg);
-      border-color: var(--hud-border);
+      border-color: var(--hud-border-strong);
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
+    .card .tab-btn.active {
+      background: var(--hud-surface-active);
+      border-color: var(--hud-border-strong);
+      box-shadow: none;
     }
     .chip-btn {
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      padding: 3px 8px;
+      padding: 3px 9px;
       border-radius: 9999px;
       font-size: 12px;
       font-weight: 500;
+      line-height: 1.35;
       font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      flex-shrink: 0;
       border: 1px solid var(--hud-border);
       background: var(--hud-surface-subtle);
       color: var(--hud-muted);
-      transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 90ms ease;
     }
     .chip-btn:hover {
       color: var(--hud-fg);
-      border-color: var(--hud-primary);
+      background: var(--hud-surface-hover);
+      border-color: var(--hud-border-strong);
     }
     .chip-btn.chip-active,
     .chip-btn[aria-pressed="true"] {
-      color: var(--hud-primary);
+      color: var(--hud-primary-ink);
+      border-color: var(--hud-primary-border);
+      background: var(--hud-primary-tint-strong);
+      font-weight: 600;
+    }
+    .chip-btn.chip-active:hover,
+    .chip-btn[aria-pressed="true"]:hover {
+      background: var(--hud-primary-tint-hover);
       border-color: var(--hud-primary);
-      background: var(--hud-accent);
+    }
+    .chip-btn code,
+    .badge code {
+      color: inherit;
+      font-size: 12px;
+      line-height: inherit;
+      white-space: nowrap;
+      word-break: normal;
+      overflow-wrap: normal;
     }
     .search-input {
       width: 100%;
@@ -561,7 +688,7 @@ export function renderHudHtml() {
     .bar-track {
       width: 100%;
       height: 8px;
-      background: rgba(148, 163, 184, 0.22);
+      background: var(--hud-surface-hover);
       border-radius: 9999px;
       overflow: hidden;
     }
@@ -604,28 +731,66 @@ export function renderHudHtml() {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      padding: 4px 9px;
+      padding: 4px 10px;
       border-radius: 6px;
       font-size: 12px;
       font-weight: 500;
+      line-height: 1.35;
       text-decoration: none;
       white-space: nowrap;
       border: 1px solid var(--hud-border);
       background: var(--hud-surface-subtle);
       color: var(--hud-fg);
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 90ms ease;
     }
     .action-btn:hover {
-      border-color: var(--hud-primary);
+      background: var(--hud-surface-hover);
+      border-color: var(--hud-border-strong);
+    }
+    .action-btn:active,
+    .chip-btn:active,
+    .tab-btn:active {
+      transform: scale(0.98);
+    }
+    .action-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
     }
     .action-btn-primary {
+      border-color: var(--hud-primary-border);
+      background: var(--hud-primary-tint-strong);
+      color: var(--hud-primary-ink);
+      font-weight: 600;
+    }
+    .action-btn-primary:hover {
+      background: var(--hud-primary-tint-hover);
       border-color: var(--hud-primary);
-      background: var(--hud-accent);
-      color: var(--hud-primary);
+      color: var(--hud-primary-ink);
     }
     .action-btn-danger {
+      border-color: var(--hud-danger-border);
+      color: var(--hud-danger-ink);
+      background: var(--hud-danger-tint);
+    }
+    .action-btn-danger:hover {
       border-color: var(--hud-danger);
-      color: var(--hud-danger);
-      background: rgba(248, 113, 113, 0.1);
+      color: var(--hud-danger-ink);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .badge,
+      .tab-btn,
+      .chip-btn,
+      .action-btn,
+      .bar-fill,
+      .wiki-link-pill {
+        transition: none;
+      }
+      .action-btn:active,
+      .chip-btn:active,
+      .tab-btn:active {
+        transform: none;
+      }
     }
     .table-wrap {
       width: 100%;
@@ -790,7 +955,7 @@ export function renderHudHtml() {
       font-size: 12px;
     }
     .md-link {
-      color: var(--hud-primary);
+      color: var(--hud-primary-ink);
       text-decoration: underline;
     }
     .wiki-link-pill {
@@ -799,11 +964,18 @@ export function renderHudHtml() {
       align-items: center;
       padding: 1px 6px;
       border-radius: 5px;
-      border: 1px solid var(--hud-primary);
-      background: var(--hud-accent);
-      color: var(--hud-primary);
+      border: 1px solid var(--hud-primary-border);
+      background: var(--hud-primary-tint);
+      color: var(--hud-primary-ink);
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 12px;
+      line-height: 1.35;
+      white-space: nowrap;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .wiki-link-pill:hover {
+      background: var(--hud-primary-tint-hover);
+      border-color: var(--hud-primary);
     }
 
     /* Slide-Over Artifact Drawer */
@@ -901,16 +1073,16 @@ export function renderHudHtml() {
     </div>
     <div style="display:flex;align-items:center;gap:6px;">
       <span class="muted" style="font-size:12px;" title="Shortcuts: 1-5 switch tabs, / search, Esc close drawer">1-5 &middot; / &middot; Esc</span>
-      <button id="refresh-btn" class="tab-btn active" title="Force snapshot refresh">Refresh</button>
+      <button id="refresh-btn" type="button" class="action-btn" title="Force snapshot refresh">Refresh</button>
     </div>
   </div>
 
-  <div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;" role="tablist" aria-label="HUD sections">
-    <button class="tab-btn active" role="tab" data-view="overview">Overview</button>
-    <button class="tab-btn" role="tab" data-view="workflows">Workflows</button>
-    <button class="tab-btn" role="tab" data-view="skills">Skills</button>
-    <button class="tab-btn" role="tab" data-view="subagents">Subagents</button>
-    <button class="tab-btn" role="tab" data-view="wiki">Wiki</button>
+  <div class="tab-bar" role="tablist" aria-label="HUD sections">
+    <button type="button" class="tab-btn active" role="tab" data-view="overview">Overview</button>
+    <button type="button" class="tab-btn" role="tab" data-view="workflows">Workflows</button>
+    <button type="button" class="tab-btn" role="tab" data-view="skills">Skills</button>
+    <button type="button" class="tab-btn" role="tab" data-view="subagents">Subagents</button>
+    <button type="button" class="tab-btn" role="tab" data-view="wiki">Wiki</button>
   </div>
 
   <div id="view-overview" class="view-pane"></div>
@@ -1018,6 +1190,12 @@ export function renderHudHtml() {
       if (event.data?.type === 'theme-change' && event.data.payload?.cssVariables) {
         for (const [k, v] of Object.entries(event.data.payload.cssVariables)) {
           document.documentElement.style.setProperty(k, v);
+        }
+        const rawTheme = String(event.data.payload.theme || event.data.payload.colorScheme || '').toLowerCase();
+        if (rawTheme.includes('light') || rawTheme.includes('dark')) {
+          const isLight = rawTheme.includes('light') && !rawTheme.includes('dark');
+          document.documentElement.classList.toggle('light', isLight);
+          document.documentElement.style.colorScheme = isLight ? 'light' : 'dark';
         }
         if (currentLoftState && !document.getElementById('artifact-drawer').hidden) {
           renderLoftFrame();
@@ -1434,7 +1612,7 @@ export function renderHudHtml() {
 
     function collectActiveThemeCssVars() {
       const style = getComputedStyle(document.documentElement);
-      const keys = ['--hud-bg', '--hud-content', '--hud-card', '--hud-sidebar', '--hud-border', '--hud-fg', '--hud-muted', '--hud-primary', '--hud-accent', '--background', '--foreground', '--card', '--border', '--primary'];
+      const keys = ['--hud-bg', '--hud-content', '--hud-card', '--hud-sidebar', '--hud-border', '--hud-fg', '--hud-muted', '--hud-primary', '--hud-primary-tint', '--hud-primary-border', '--hud-primary-ink', '--hud-surface-subtle', '--hud-input-bg', '--background', '--foreground', '--card', '--border', '--primary'];
       const pairs = [];
       for (const k of keys) {
         const val = style.getPropertyValue(k).trim();
@@ -1555,7 +1733,9 @@ export function renderHudHtml() {
     function setTab(view) {
       activeView = ALLOWED.includes(view) ? view : 'overview';
       document.querySelectorAll('.tab-btn[data-view]').forEach((btn) => {
-        btn.classList.toggle('active', btn.dataset.view === activeView);
+        const selected = btn.dataset.view === activeView;
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-selected', selected ? 'true' : 'false');
       });
       ALLOWED.forEach((v) => {
         const el = document.getElementById('view-' + v);
@@ -1959,7 +2139,7 @@ export function renderHudHtml() {
 
       const ch = data.codeHealth || { reused: [], created: [], reusedCount: 0, newCount: 0, reusePct: null, openCallers: [], debtTotal: 0, noTriggerCount: 0, debtItems: [], verificationFreshness: 'none', lastVerifyCmd: '', lastEditedTarget: '' };
       const vfStatus = String(ch.verificationFreshness || 'none');
-      const vfBadgeCls = vfStatus === 'pass' ? 'badge badge-active' : 'badge';
+      const vfBadgeCls = vfStatus === 'pass' ? 'badge badge-live' : (vfStatus === 'fail' ? 'badge badge-danger' : 'badge');
       const vfDetail = vfStatus === 'stale' && ch.lastEditedTarget
         ? \`Edited after pass: \${ch.lastEditedTarget}\`
         : (ch.lastVerifyCmd ? \`Last verify: \${ch.lastVerifyCmd}\` : 'No verification run in transcript tail');
@@ -2085,8 +2265,8 @@ export function renderHudHtml() {
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
             <div style="font-weight:600;">Diagnostics &amp; Runtime Health</div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <span class="badge \${se && se.ok ? 'badge-active' : ''}">Skill Eval: \${seLabel}</span>
-              <span class="badge \${doc.qualityGatesOk ? 'badge-active' : ''}">Quality Gates: \${doc.qualityGatesOk ? 'OK' : 'INVALID'}</span>
+              <span class="badge \${se ? (se.ok ? 'badge-live' : 'badge-danger') : ''}">Skill Eval: \${seLabel}</span>
+              <span class="badge \${doc.qualityGatesOk ? 'badge-live' : 'badge-danger'}">Quality Gates: \${doc.qualityGatesOk ? 'OK' : 'INVALID'}</span>
               <span class="badge">Stale Modes: \${(doc.staleModes || []).length ? esc(doc.staleModes.join(', ')) : 'none'}</span>
             </div>
           </div>
@@ -2269,7 +2449,7 @@ export function renderHudHtml() {
             <code style="font-weight:600;font-size:13px;">\${esc(a.name)}</code>
             <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
               <span class="badge">\${esc(a.lane)}</span>
-              <span class="badge badge-active">Model: \${esc(activeTier)}</span>
+              <span class="badge">Model: \${esc(activeTier)}</span>
             </div>
           </div>
           <div style="margin-bottom:6px;">\${esc(a.whenToUse)}</div>

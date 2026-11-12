@@ -61,6 +61,26 @@ const ALLOWED_DISPATCH_MODES = new Set(['active-chat', 'new-chat', 'subagent-act
 const ALLOWED_CLI_MODELS = new Set(['flash_lite', 'flash', 'pro']);
 export const ALLOWED_VIEWS = ['overview', 'workflows', 'skills', 'subagents', 'wiki'];
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const UI_MODULE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'ui.mjs');
+let liveUiMtimeMs = 0;
+let liveHudHtml = HUD_HTML;
+try {
+  liveUiMtimeMs = fs.statSync(UI_MODULE_PATH).mtimeMs;
+} catch { /* fail open: fallback to static HUD_HTML */ }
+
+async function getLiveHudHtml() {
+  try {
+    const st = fs.statSync(UI_MODULE_PATH);
+    if (st.mtimeMs !== liveUiMtimeMs) {
+      const freshMod = await import(`${pathToFileURL(UI_MODULE_PATH).href}?t=${st.mtimeMs}`);
+      if (typeof freshMod.HUD_HTML === 'string' && freshMod.HUD_HTML.length > 0) {
+        liveHudHtml = freshMod.HUD_HTML;
+        liveUiMtimeMs = st.mtimeMs;
+      }
+    }
+  } catch { /* fail open: serve last valid HUD_HTML if ui.mjs is mid-write */ }
+  return liveHudHtml;
+}
 
 const MIME_BY_EXT = {
   '.png': 'image/png',
@@ -1861,8 +1881,12 @@ export function createHudServer(token, options = {}) {
       res.end(JSON.stringify({ error: 'unauthorized' }));
     };
     if (req.method === 'GET' && (reqUrl.pathname === '/' || reqUrl.pathname === '/index.html')) {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(HUD_HTML);
+      getLiveHudHtml().then((htmlBody) => {
+        if (!res.headersSent) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        }
+        res.end(htmlBody);
+      });
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/status') {
@@ -2931,6 +2955,17 @@ async function runSelftest() {
       && !/https?:\/\//i.test(HUD_HTML)
       && !/font-size\s*:\s*(?:[0-9]|1[01])(?:\.[0-9]+)?px\b/i.test(HUD_HTML);
 
+    // H19: Guard against opaque Antigravity --accent collision on blue pills/badges/buttons across all 5 tabs
+    const h19Ok = !/var\(--accent\b/.test(HUD_HTML)
+      && !HUD_HTML.includes('--hud-accent')
+      && HUD_HTML.includes('--hud-primary-tint')
+      && HUD_HTML.includes('--hud-primary-ink')
+      && HUD_HTML.includes('color-mix(in srgb,')
+      && HUD_HTML.includes('id="refresh-btn" type="button" class="action-btn"')
+      && HUD_HTML.includes('class="tab-bar"')
+      && HUD_HTML.includes('-webkit-appearance: none;')
+      && HUD_HTML.includes('.chip-btn code,');
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -3020,7 +3055,8 @@ async function runSelftest() {
       && h15Ok
       && h16Ok
       && h17Ok
-      && h18Ok;
+      && h18Ok
+      && h19Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',
