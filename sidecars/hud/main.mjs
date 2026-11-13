@@ -27,13 +27,21 @@ import {
 } from '../../hooks/omagy-hook.mjs';
 import {
   evaluateSkillRouting,
+  manageShadowCheckpoint,
+  queryWikiPages,
   runFloorGuard,
+  scanSessionTranscripts,
+  validateDesignMd,
 } from '../../hooks/omagy-cli.mjs';
 import {
   HUD_HTML,
+  buildBacklinksIndex,
+  buildCommandPaletteItems,
   buildSkillCommandWithFlags,
   buildSubagentInvokeSnippet,
+  buildTaskDagWaves,
   buildWikiMindMapGraph,
+  extractMarkdownToc,
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
@@ -49,9 +57,13 @@ import {
 
 export {
   HUD_HTML,
+  buildBacklinksIndex,
+  buildCommandPaletteItems,
   buildSkillCommandWithFlags,
   buildSubagentInvokeSnippet,
+  buildTaskDagWaves,
   buildWikiMindMapGraph,
+  extractMarkdownToc,
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
@@ -80,23 +92,31 @@ const ALLOWED_CLI_MODELS = new Set(['flash_lite', 'flash', 'pro']);
 export const ALLOWED_VIEWS = ['overview', 'workflows', 'skills', 'subagents', 'wiki'];
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const UI_MODULE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'ui.mjs');
+const CLIENT_MODULE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'client.mjs');
 let liveUiMtimeMs = 0;
+let liveClientMtimeMs = 0;
 let liveHudHtml = HUD_HTML;
 try {
   liveUiMtimeMs = fs.statSync(UI_MODULE_PATH).mtimeMs;
+  liveClientMtimeMs = fs.statSync(CLIENT_MODULE_PATH).mtimeMs;
 } catch { /* fail open: fallback to static HUD_HTML */ }
 
 async function getLiveHudHtml() {
   try {
-    const st = fs.statSync(UI_MODULE_PATH);
-    if (st.mtimeMs !== liveUiMtimeMs) {
-      const freshMod = await import(`${pathToFileURL(UI_MODULE_PATH).href}?t=${st.mtimeMs}`);
-      if (typeof freshMod.HUD_HTML === 'string' && freshMod.HUD_HTML.length > 0) {
-        liveHudHtml = freshMod.HUD_HTML;
-        liveUiMtimeMs = st.mtimeMs;
+    const uiSt = fs.statSync(UI_MODULE_PATH);
+    const clientSt = fs.statSync(CLIENT_MODULE_PATH);
+    if (uiSt.mtimeMs !== liveUiMtimeMs || clientSt.mtimeMs !== liveClientMtimeMs) {
+      const freshClient = await import(`${pathToFileURL(CLIENT_MODULE_PATH).href}?t=${clientSt.mtimeMs}`);
+      const freshUi = await import(`${pathToFileURL(UI_MODULE_PATH).href}?t=${uiSt.mtimeMs}`);
+      const clientRenderer = typeof freshClient.renderHudClientScript === 'function' ? freshClient.renderHudClientScript : undefined;
+      const freshHtml = typeof freshUi.renderHudHtml === 'function' ? freshUi.renderHudHtml(clientRenderer) : freshUi.HUD_HTML;
+      if (typeof freshHtml === 'string' && freshHtml.length > 0) {
+        liveHudHtml = freshHtml;
+        liveUiMtimeMs = uiSt.mtimeMs;
+        liveClientMtimeMs = clientSt.mtimeMs;
       }
     }
-  } catch { /* fail open: serve last valid HUD_HTML if ui.mjs is mid-write */ }
+  } catch { /* fail open: serve last valid HUD_HTML if ui.mjs or client.mjs is mid-write */ }
   return liveHudHtml;
 }
 
@@ -492,7 +512,19 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
   } else if (/^\.omagy\/plans\/[^/]+\.md$/i.test(omagySubpath)) {
     mime = 'text/plain; charset=utf-8';
     redact = true;
+  } else if (/^\.omagy\/plans\/ralplan-review-[^/]+\.json$/i.test(omagySubpath)) {
+    mime = 'application/json; charset=utf-8';
+    redact = true;
   } else if (/^\.omagy\/specs\/(?:[^/]+\.md|autoresearch-[^/]+\/report\.md)$/i.test(omagySubpath)) {
+    mime = 'text/plain; charset=utf-8';
+    redact = true;
+  } else if (/^\.omagy\/evidence\/(?:task|goal)-[A-Za-z0-9._-]+\.json$/i.test(omagySubpath)) {
+    mime = 'application/json; charset=utf-8';
+    redact = true;
+  } else if (/^\.omagy\/ultragoal\/(?:brief|notepad)\.md$/i.test(omagySubpath)) {
+    mime = 'text/plain; charset=utf-8';
+    redact = true;
+  } else if (/^\.omagy\/goals\/performance\/[^/]+\/summary\.md$/i.test(omagySubpath)) {
     mime = 'text/plain; charset=utf-8';
     redact = true;
   } else {
@@ -522,6 +554,9 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
       path.join(scopeOmagyReal, 'artifacts') + path.sep,
       path.join(scopeOmagyReal, 'plans') + path.sep,
       path.join(scopeOmagyReal, 'specs') + path.sep,
+      path.join(scopeOmagyReal, 'evidence') + path.sep,
+      path.join(scopeOmagyReal, 'ultragoal') + path.sep,
+      path.join(scopeOmagyReal, 'goals', 'performance') + path.sep,
     ];
     if (!candidateReal.startsWith(rootReal + path.sep) || !allowedSubroots.some((sub) => candidateReal.startsWith(sub))) {
       return null;
@@ -533,7 +568,18 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
 }
 
 const codeHealthCache = new Map();
+const checkpointCache = new Map();
+const designSystemCache = new Map();
+const forensicsCache = new Map();
 let skillEvalCache = { key: '', value: null };
+
+function setBoundedCache(map, key, entry) {
+  if (map.size >= MAX_CODE_HEALTH_CACHE_ENTRIES && !map.has(key)) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey !== undefined) map.delete(oldestKey);
+  }
+  map.set(key, entry);
+}
 
 function statMtimeToken(filePath) {
   try {
@@ -669,12 +715,209 @@ export function getCachedCodeHealth(primaryRoot, nowMs = Date.now(), transcriptP
     lastEditedTarget: redactSecrets(String(freshness.lastEditedTarget || '')),
   };
 
-  if (codeHealthCache.size >= MAX_CODE_HEALTH_CACHE_ENTRIES && !codeHealthCache.has(rootKey)) {
-    const oldestKey = codeHealthCache.keys().next().value;
-    if (oldestKey !== undefined) codeHealthCache.delete(oldestKey);
-  }
-  codeHealthCache.set(rootKey, { gitSig, computedAtMs: nowMs, value });
+  setBoundedCache(codeHealthCache, rootKey, { gitSig, computedAtMs: nowMs, value });
   return value;
+}
+
+function getCachedCheckpoints(primaryRoot, nowMs = Date.now()) {
+  const rootKey = path.resolve(primaryRoot);
+  const gitSig = readGitMetadataSignature(rootKey);
+  if (gitSig === 'nogit') {
+    return { available: false, count: 0, items: [] };
+  }
+  const cached = checkpointCache.get(rootKey);
+  if (
+    cached
+    && cached.gitSig === gitSig
+    && nowMs >= cached.computedAtMs
+    && (nowMs - cached.computedAtMs) < CODE_HEALTH_TTL_MS
+  ) {
+    return cached.value;
+  }
+  let value = { available: false, count: 0, items: [] };
+  try {
+    const res = manageShadowCheckpoint('list', rootKey);
+    const items = Array.isArray(res?.checkpoints) ? res.checkpoints : [];
+    value = {
+      available: Boolean(res?.ok),
+      count: items.length,
+      items: items.slice(0, 12).map((cp) => ({
+        id: String(cp.id || ''),
+        commitSha: String(cp.commitSha || ''),
+        headSha: String(cp.headSha || ''),
+        createdAt: String(cp.createdAt || ''),
+        label: redactSecrets(String(cp.label || 'snapshot')),
+      })),
+    };
+  } catch { /* fail open: shadow checkpoint listing unavailable */ }
+  setBoundedCache(checkpointCache, rootKey, { gitSig, computedAtMs: nowMs, value });
+  return value;
+}
+
+function findDesignMdPath(rootKey) {
+  const candidates = [
+    path.join(rootKey, 'DESIGN.md'),
+    path.join(rootKey, '.omagy', 'DESIGN.md'),
+  ];
+  for (const p of candidates) {
+    try {
+      const st = fs.lstatSync(p);
+      if (!st.isSymbolicLink() && st.isFile()) return p;
+    } catch { /* fail open: candidate DESIGN.md absent */ }
+  }
+  return '';
+}
+
+function getCachedDesignSystem(primaryRoot) {
+  const rootKey = path.resolve(primaryRoot);
+  const designPath = findDesignMdPath(rootKey);
+  if (!designPath) {
+    return {
+      exists: false,
+      file: '',
+      ok: true,
+      categoriesFound: [],
+      sectionsFound: [],
+      tokenCount: 0,
+      contrastChecks: [],
+      unresolvedRefs: [],
+      errors: [],
+      warnings: [],
+    };
+  }
+  const sig = `${designPath}:${statMtimeToken(designPath)}`;
+  const cached = designSystemCache.get(rootKey);
+  if (cached && cached.sig === sig) {
+    return cached.value;
+  }
+  let value = {
+    exists: true,
+    file: path.relative(rootKey, designPath).replace(/\\/g, '/'),
+    ok: false,
+    categoriesFound: [],
+    sectionsFound: [],
+    tokenCount: 0,
+    contrastChecks: [],
+    unresolvedRefs: [],
+    errors: ['Design validation unavailable'],
+    warnings: [],
+  };
+  try {
+    const res = validateDesignMd(designPath);
+    value = {
+      exists: true,
+      file: path.relative(rootKey, designPath).replace(/\\/g, '/'),
+      ok: Boolean(res.ok),
+      categoriesFound: Array.isArray(res.categoriesFound) ? res.categoriesFound.map(String) : [],
+      sectionsFound: Array.isArray(res.sectionsFound) ? res.sectionsFound.map(String) : [],
+      tokenCount: Number(res.tokenCount || 0),
+      contrastChecks: Array.isArray(res.contrastChecks)
+        ? res.contrastChecks.slice(0, 16).map((c) => ({
+            pair: String(c.pair || ''),
+            fg: String(c.fg || ''),
+            bg: String(c.bg || ''),
+            ratio: Number(c.ratio || 0),
+            minRequired: Number(c.minRequired || 4.5),
+            pass: Boolean(c.pass),
+          }))
+        : [],
+      unresolvedRefs: Array.isArray(res.unresolvedRefs) ? res.unresolvedRefs.slice(0, 16).map((u) => redactSecrets(String(u))) : [],
+      errors: Array.isArray(res.errors) ? res.errors.slice(0, 10).map((e) => redactSecrets(String(e))) : [],
+      warnings: Array.isArray(res.warnings) ? res.warnings.slice(0, 10).map((w) => redactSecrets(String(w))) : [],
+    };
+  } catch { /* fail open: DESIGN.md validation failed */ }
+  setBoundedCache(designSystemCache, rootKey, { sig, value });
+  return value;
+}
+
+function getCachedForensics(primaryRoot, transcriptPath = '') {
+  const rootKey = path.resolve(primaryRoot);
+  let targetPath = '';
+  let childSig = '';
+  const logsDir = path.join(rootKey, '.omagy', 'logs');
+  try {
+    const st = fs.lstatSync(logsDir);
+    if (!st.isSymbolicLink() && st.isDirectory()) {
+      const logFiles = fs.readdirSync(logsDir)
+        .filter((n) => n.endsWith('.jsonl') && n !== 'ledger.jsonl' && n !== 'hook-errors.jsonl')
+        .sort();
+      if (logFiles.length) {
+        targetPath = logsDir;
+        childSig = logFiles.map((n) => `${n}:${statMtimeToken(path.join(logsDir, n))}`).join(',');
+      }
+    }
+  } catch { /* fail open: .omagy/logs unavailable */ }
+  const txCandidate = typeof transcriptPath === 'string' ? transcriptPath.trim() : '';
+  if (!targetPath && txCandidate) {
+    try {
+      const st = fs.lstatSync(txCandidate);
+      if (!st.isSymbolicLink() && st.isFile()) targetPath = path.resolve(txCandidate);
+    } catch { /* fail open: transcript path missing */ }
+  }
+  if (!targetPath) {
+    return {
+      available: false,
+      filesScanned: 0,
+      totalSteps: 0,
+      compactions: 0,
+      orphanToolCalls: 0,
+      failedToolCalls: 0,
+      topFailureClusters: [],
+    };
+  }
+  const sig = `${targetPath}:${statMtimeToken(targetPath)}:${childSig}`;
+  const cached = forensicsCache.get(rootKey);
+  if (cached && cached.sig === sig) {
+    return cached.value;
+  }
+  let value = {
+    available: false,
+    filesScanned: 0,
+    totalSteps: 0,
+    compactions: 0,
+    orphanToolCalls: 0,
+    failedToolCalls: 0,
+    topFailureClusters: [],
+  };
+  try {
+    const res = scanSessionTranscripts(targetPath);
+    value = {
+      available: Boolean(res?.ok && Number(res.filesScanned || 0) > 0),
+      filesScanned: Number(res?.filesScanned || 0),
+      totalSteps: Number(res?.totalSteps || 0),
+      compactions: Number(res?.compactions || 0),
+      orphanToolCalls: Number(res?.orphanToolCalls || 0),
+      failedToolCalls: Number(res?.failedToolCalls || 0),
+      topFailureClusters: Array.isArray(res?.topFailureClusters)
+        ? res.topFailureClusters.slice(0, 6).map((c) => ({
+            tool: String(c.tool || 'unknown'),
+            signature: redactSecrets(String(c.signature || '')),
+            count: Number(c.count || 0),
+          }))
+        : [],
+    };
+  } catch { /* fail open: session transcript scan failed */ }
+  setBoundedCache(forensicsCache, rootKey, { sig, value });
+  return value;
+}
+
+function readNotificationBooleans(primaryRoot) {
+  const rootKey = path.resolve(primaryRoot);
+  const notifData = readJsonSafe(path.join(rootKey, '.omagy', 'notifications.json')) || {};
+  const cfgData = readJsonSafe(path.join(rootKey, '.omagy', 'config.json')) || {};
+  const cfgNotif = (cfgData && typeof cfgData.notifications === 'object' && cfgData.notifications) ? cfgData.notifications : {};
+  const isEnabled = (channel) => {
+    const a = notifData[channel];
+    const b = cfgNotif[channel];
+    return Boolean(a === true || a?.enabled === true || b === true || b?.enabled === true);
+  };
+  return {
+    slack: isEnabled('slack'),
+    discord: isEnabled('discord'),
+    telegram: isEnabled('telegram'),
+    webhook: isEnabled('webhook'),
+    command: isEnabled('command'),
+  };
 }
 
 function buildSkillEvalSignature(pluginRoot) {
@@ -811,15 +1054,35 @@ export function buildPluginCatalog(pluginRoot = PLUGIN_ROOT, activeModes = []) {
         .map((d) => d.name)
         .sort();
       for (const dirName of dirs) {
-        const skillFile = path.join(skillsDir, dirName, 'SKILL.md');
+        const skillDir = path.join(skillsDir, dirName);
+        if (fs.lstatSync(skillDir).isSymbolicLink()) continue;
+        const skillFile = path.join(skillDir, 'SKILL.md');
+        if (!fs.existsSync(skillFile) || fs.lstatSync(skillFile).isSymbolicLink()) continue;
         const raw = readTextSafe(skillFile, 24 * 1024);
         if (!raw) continue;
         const { meta } = parseFrontmatter(raw);
         const name = String(meta?.name || dirName).trim();
         const rawDesc = String(meta?.description || '').replace(/^\[oh-my-agy\]\s*/i, '').trim();
         const guide = SKILL_GUIDE_META[name] || {};
+        let references = [];
+        try {
+          const refsDir = path.join(skillDir, 'references');
+          if (fs.existsSync(refsDir) && !fs.lstatSync(refsDir).isSymbolicLink() && fs.statSync(refsDir).isDirectory()) {
+            references = fs.readdirSync(refsDir)
+              .filter((f) => /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}\.md$/.test(f))
+              .filter((f) => {
+                const rf = path.join(refsDir, f);
+                return !fs.lstatSync(rf).isSymbolicLink() && fs.statSync(rf).isFile();
+              })
+              .sort()
+              .map((f) => `references/${f}`);
+          }
+        } catch { /* fail open: optional references scan failed */ }
         skills.push({
           name,
+          dir: dirName,
+          file: `skills/${dirName}/SKILL.md`,
+          references,
           category: guide.category || 'Knowledge, Control & Setup',
           description: rawDesc,
           howToUse: guide.howToUse || rawDesc,
@@ -877,6 +1140,79 @@ export function buildPluginCatalog(pluginRoot = PLUGIN_ROOT, activeModes = []) {
   });
 
   return { skills, subagents, workflows };
+}
+
+export function resolveSafeSkillDoc(pluginRoot = PLUGIN_ROOT, skillKey = '', refRel = '') {
+  try {
+    const cleanSkill = String(skillKey || '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(cleanSkill)) return null;
+
+    const cleanRef = String(refRel || '').trim().replace(/^\.\//, '');
+    let targetSubRel = 'SKILL.md';
+    if (cleanRef && cleanRef !== 'SKILL.md') {
+      if (!/^references\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}\.md$/.test(cleanRef)) return null;
+      targetSubRel = cleanRef;
+    }
+
+    const skillsDir = path.join(pluginRoot, 'skills');
+    if (!fs.existsSync(skillsDir) || fs.lstatSync(skillsDir).isSymbolicLink() || !fs.statSync(skillsDir).isDirectory()) {
+      return null;
+    }
+    const skillsRootReal = fs.realpathSync(skillsDir);
+
+    let skillDir = path.join(skillsDir, cleanSkill);
+    const isValidSkillDir = (dirCandidate) => (
+      fs.existsSync(dirCandidate)
+      && !fs.lstatSync(dirCandidate).isSymbolicLink()
+      && fs.statSync(dirCandidate).isDirectory()
+    );
+    if (!isValidSkillDir(skillDir)) {
+      skillDir = '';
+      const subDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+        .sort();
+      for (const dName of subDirs) {
+        const probeDir = path.join(skillsDir, dName);
+        if (!isValidSkillDir(probeDir)) continue;
+        const probeSkillMd = path.join(probeDir, 'SKILL.md');
+        if (!fs.existsSync(probeSkillMd) || fs.lstatSync(probeSkillMd).isSymbolicLink()) continue;
+        const raw = readTextSafe(probeSkillMd, 8 * 1024);
+        if (!raw) continue;
+        const { meta } = parseFrontmatter(raw);
+        if (String(meta?.name || '').trim() === cleanSkill) {
+          skillDir = probeDir;
+          break;
+        }
+      }
+      if (!skillDir) return null;
+    }
+
+    if (targetSubRel.startsWith('references/')) {
+      const refsDir = path.join(skillDir, 'references');
+      if (!fs.existsSync(refsDir) || fs.lstatSync(refsDir).isSymbolicLink() || !fs.statSync(refsDir).isDirectory()) {
+        return null;
+      }
+    }
+
+    const candidate = path.join(skillDir, targetSubRel);
+    if (!fs.existsSync(candidate) || fs.lstatSync(candidate).isSymbolicLink() || !fs.statSync(candidate).isFile()) {
+      return null;
+    }
+
+    const candidateReal = fs.realpathSync(candidate);
+    if (!candidateReal.startsWith(`${skillsRootReal}${path.sep}`)) return null;
+
+    const skillDirName = path.basename(skillDir);
+    return {
+      filePath: candidateReal,
+      skillDirName,
+      relPath: `skills/${skillDirName}/${targetSubRel}`,
+      mime: 'text/plain; charset=utf-8',
+    };
+  } catch { /* fail open: invalid or unreadable skill doc path */
+    return null;
+  }
 }
 
 export function resolveActiveConversationId(workspaceRoot = process.cwd(), explicitId = '') {
@@ -1094,7 +1430,7 @@ function extractMarkdownTitle(text, fallbackName) {
   return redactSecrets((m ? m[1] : fallbackName).trim());
 }
 
-function resolveWorkspaceRoots(rawWorkspaces = [], fallbackWorkspaceRoot = '') {
+export function resolveWorkspaceRoots(rawWorkspaces = [], fallbackWorkspaceRoot = '', preferredRoot = '') {
   const candidates = [];
   for (const w of rawWorkspaces) {
     const p = uriToFsPath(w) || (typeof w === 'string' && path.isAbsolute(w.trim()) ? w.trim() : '');
@@ -1111,12 +1447,25 @@ function resolveWorkspaceRoots(rawWorkspaces = [], fallbackWorkspaceRoot = '') {
     candidates.push(process.cwd());
   }
   const roots = [...new Set(candidates.map(resolveStateRoot))];
-  const primaryRoot = roots[0] || process.cwd();
+  let primaryRoot = roots[0] || process.cwd();
+  const rawPref = typeof preferredRoot === 'string' ? preferredRoot.trim() : '';
+  if (rawPref) {
+    const prefFs = uriToFsPath(rawPref) || (path.isAbsolute(rawPref) ? rawPref : '');
+    if (prefFs) {
+      let prefReal = path.resolve(prefFs);
+      try { prefReal = fs.realpathSync(prefReal); } catch { /* fail open: fallback to path.resolve */ }
+      const matched = roots.find((r) => {
+        if (r === prefFs || path.resolve(r) === prefReal) return true;
+        try { return fs.realpathSync(r) === prefReal; } catch { /* fail open: ignore non-realpathable root */ return false; }
+      });
+      if (matched) primaryRoot = matched;
+    }
+  }
   return { roots, primaryRoot };
 }
 
-export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
-  const { roots, primaryRoot } = resolveWorkspaceRoots(rawWorkspaces);
+export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferredRoot = '') {
+  const { roots, primaryRoot } = resolveWorkspaceRoots(rawWorkspaces, '', preferredRoot);
   const scopeEntries = [];
   const seenScopeRoots = new Set();
   const pushScopeEntry = (rootDir, scopeRel) => {
@@ -1194,14 +1543,24 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
         recentLedger = readJsonlRecords(ledgerPath).records.slice(-5).reverse();
       }
     } catch { /* fail open: malformed or missing ledger.jsonl */ recentLedger = []; }
-    const goals = goalsData.goals.map((g) => ({
-      id: String(g.id || ''),
-      title: String(g.title || g.objective || ''),
-      rigor: String(g.rigor || 'light'),
-      status: String(g.status || 'pending'),
-      dependsOn: Array.isArray(g.depends_on) ? g.depends_on : [],
-      productFailures: Number(g.product_failures || 0),
-    }));
+    const relPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
+    const briefPath = fs.existsSync(path.join(sc.root, '.omagy', 'ultragoal', 'brief.md')) ? `${relPrefix}.omagy/ultragoal/brief.md` : '';
+    const notepadPath = fs.existsSync(path.join(sc.root, '.omagy', 'ultragoal', 'notepad.md')) ? `${relPrefix}.omagy/ultragoal/notepad.md` : '';
+    const goals = goalsData.goals.map((g) => {
+      const gid = String(g.id || '');
+      const evFile = gid && fs.existsSync(path.join(sc.root, '.omagy', 'evidence', `goal-${gid}.json`))
+        ? `${relPrefix}.omagy/evidence/goal-${gid}.json`
+        : '';
+      return {
+        id: gid,
+        title: String(g.title || g.objective || ''),
+        rigor: String(g.rigor || 'light'),
+        status: String(g.status || 'pending'),
+        dependsOn: Array.isArray(g.depends_on) ? g.depends_on : [],
+        productFailures: Number(g.product_failures || 0),
+        evidencePath: evFile,
+      };
+    });
     const counts = { total: goals.length, complete: 0, inProgress: 0, pending: 0, blocked: 0, failed: 0 };
     for (const g of goals) {
       if (g.status === 'complete' || g.status === 'completed') counts.complete += 1;
@@ -1214,6 +1573,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
       scope: sc.scope,
       objective: String(goalsData.objective || ''),
       updatedAt: String(goalsData.updated_at || ''),
+      briefPath,
+      notepadPath,
       counts,
       goals,
       recentLedger,
@@ -1239,21 +1600,26 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           const updatedMs = Date.parse(board.updated_at || '') || 0;
           const allDone = tasks.length > 0 && tasks.every((t) => t.status === 'completed' || t.status === 'complete');
           if (allDone && updatedMs > 0 && nowMs - updatedMs > TEAM_COMPLETED_WINDOW_MS) continue;
+          const teamPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
           teams.push({
             team: String(board.team || slug),
             scope: sc.scope,
             objective: String(board.objective || ''),
             updatedAt: String(board.updated_at || ''),
-            tasks: tasks.map((t) => ({
-              id: String(t.id || ''),
-              title: String(t.title || ''),
-              role: String(t.role || 'executor'),
-              model: String(t.model || 'inherit'),
-              status: String(t.status || 'pending'),
-              dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
-              requiresCodeChange: Boolean(t.requires_code_change),
-              hasEvidence: fs.existsSync(path.join(sc.root, '.omagy', 'evidence', `task-${t.id}.json`)),
-            })),
+            tasks: tasks.map((t) => {
+              const evExists = fs.existsSync(path.join(sc.root, '.omagy', 'evidence', `task-${t.id}.json`));
+              return {
+                id: String(t.id || ''),
+                title: String(t.title || ''),
+                role: String(t.role || 'executor'),
+                model: String(t.model || 'inherit'),
+                status: String(t.status || 'pending'),
+                dependsOn: Array.isArray(t.depends_on) ? t.depends_on : (Array.isArray(t.dependsOn) ? t.dependsOn : []),
+                requiresCodeChange: Boolean(t.requires_code_change),
+                hasEvidence: evExists,
+                evidencePath: evExists ? `${teamPrefix}.omagy/evidence/task-${t.id}.json` : '',
+              };
+            }),
           });
         }
       }
@@ -1331,8 +1697,15 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     || allModeRecords.find((m) => m.mode === 'autopilot' && (m.raw?.state?.ralplan || m.raw?.state?.handoff_artifacts?.ralplan || m.raw?.handoff_artifacts?.ralplan));
   if (rpRecord) {
     const ho = rpRecord.raw?.state?.handoff_artifacts?.ralplan || rpRecord.raw?.handoff_artifacts?.ralplan || rpRecord.raw?.state?.ralplan || rpRecord.raw?.state || {};
+    const rpScope = rpRecord.scope || '.';
+    const rpPrefix = rpScope !== '.' ? `${rpScope}/` : '';
+    const hoArts = Array.isArray(ho.planning_artifacts) ? ho.planning_artifacts.map((p) => String(p).replace(/^\/+/, '')) : [];
+    const revLog = String(ho.review_log_path || '').trim().replace(/^\/+/, '');
+    const rcPath = String(ho.receipt_path || '').trim().replace(/^\/+/, '');
+    const combinedArts = [...new Set([...hoArts, ...(revLog ? [revLog] : []), ...(rcPath ? [rcPath] : [])])]
+      .map((p) => (rpPrefix && !p.startsWith(rpPrefix) && p.startsWith('.omagy/') ? `${rpPrefix}${p}` : p));
     reviews.ralplan = {
-      scope: rpRecord.scope || '.',
+      scope: rpScope,
       active: rpRecord.active,
       phase: rpRecord.phase,
       iteration: rpRecord.iteration ?? 1,
@@ -1340,7 +1713,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
       criticVerdict: String(ho.ralplan_critic_review?.verdict || ho.critic_verdict || ho.ralplan_execution_handoff?.critic_verdict || 'pending'),
       consensusComplete: Boolean(ho.ralplan_consensus_gate?.complete ?? ho.consensus_complete ?? ho.ralplan_execution_handoff?.authorized ?? false),
       executionAuthorized: Boolean(ho.ralplan_execution_handoff?.authorized ?? ho.execution_authorized ?? false),
-      planningArtifacts: Array.isArray(ho.planning_artifacts) ? ho.planning_artifacts.map(String) : [],
+      planningArtifacts: combinedArts,
     };
   }
   for (const sc of scopeEntries) {
@@ -1529,7 +1902,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
           if (!stData || typeof stData !== 'object') continue;
           const cpFile = path.join(dir, 'checkpoints.jsonl');
           const checkpoints = fs.existsSync(cpFile) ? readJsonlRecords(cpFile).records.slice(-10) : [];
-          const summaryText = readTextSafe(path.join(dir, 'summary.md'), 16 * 1024);
+          const summaryFile = path.join(dir, 'summary.md');
+          const summaryText = readTextSafe(summaryFile, 16 * 1024);
           const evalMatch = /\*{0,2}Verdict:\s*(PASS|FAIL|INCONCLUSIVE)\*{0,2}/i.exec(summaryText);
           benchmarks.performanceGoals.push({
             scope: sc.scope,
@@ -1543,6 +1917,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
             status: String(stData.status || 'active'),
             baseline: stData.baseline ?? null,
             lastValidation: stData.lastValidation ?? null,
+            summaryPath: summaryText ? `${relPrefix}.omagy/goals/performance/${slug}/summary.md` : '',
             checkpoints: checkpoints.map((c) => ({
               at: String(c.at || ''),
               status: String(c.status || 'unknown'),
@@ -1811,6 +2186,27 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     }
   } catch { /* fail open: omagy_wiki directory scan failed */ }
 
+  const wikiLog = [];
+  const wikiLogPath = path.join(wikiDir, 'log.md');
+  try {
+    if (fs.existsSync(wikiLogPath) && !fs.lstatSync(wikiLogPath).isSymbolicLink()) {
+      const logLines = readTextSafe(wikiLogPath, 32 * 1024)
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith('-'));
+      for (const rawLine of logLines.slice(-12).reverse()) {
+        const clean = redactSecrets(rawLine.replace(/^-\s*/, '').trim());
+        const dm = /\b(20\d{2}-\d{2}-\d{2}(?:T[^\s)\]]+)?)\b/.exec(clean);
+        const sm = /\[\[([a-zA-Z0-9_-]+)(?:\|[^\]]+)?\]\]/.exec(clean);
+        wikiLog.push({
+          date: dm ? dm[1] : '',
+          slug: sm ? sm[1] : '',
+          summary: clean.slice(0, 220),
+        });
+      }
+    }
+  } catch { /* fail open: omagy_wiki/log.md unavailable */ }
+
   // 9. Quality gates & Doctor / Hook Diagnostics
   const qg = validateQualityGates(primaryRoot);
   const runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
@@ -1837,6 +2233,12 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
   // 9.5 Code Health & Technical Debt (5s + git/transcript-mtime cached symbol reuse, openCallers, shortcut: debt, floorGuard, and verificationFreshness)
   const codeHealth = getCachedCodeHealth(primaryRoot, nowMs, latestRouting?.transcriptPath || '');
 
+  // 9.6 Shadow Checkpoints, Design System Governance, Session Forensics, & Notification Channel Booleans
+  const checkpoints = getCachedCheckpoints(primaryRoot, nowMs);
+  const designSystem = getCachedDesignSystem(primaryRoot);
+  const forensics = getCachedForensics(primaryRoot, latestRouting?.transcriptPath || '');
+  const notifications = readNotificationBooleans(primaryRoot);
+
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
 
@@ -1853,6 +2255,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
   const snapshotPayload = {
     at: new Date(nowMs).toISOString(),
     workspace: primaryRoot,
+    activeRoot: primaryRoot,
+    workspaces: roots,
     trackedScopes,
     statusLine,
     allowedViews: ALLOWED_VIEWS,
@@ -1867,7 +2271,12 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now()) {
     visualRalph,
     loft,
     codeHealth,
+    checkpoints,
+    designSystem,
+    forensics,
+    notifications,
     wiki,
+    wikiLog,
     qualityGates: qg.gates,
     doctor,
     catalog,
@@ -1928,21 +2337,29 @@ export function createHudServer(token, options = {}) {
       res.end(JSON.stringify({ error: 'unauthorized' }));
     };
     if (req.method === 'GET' && (reqUrl.pathname === '/' || reqUrl.pathname === '/index.html')) {
-      getLiveHudHtml().then((htmlBody) => {
-        if (!res.headersSent) {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        }
-        res.end(htmlBody);
-      });
+      getLiveHudHtml()
+        .then((htmlBody) => {
+          if (!res.headersSent) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          }
+          res.end(htmlBody);
+        })
+        .catch(() => { /* fail open: fall back to last valid cached HUD HTML */
+          if (!res.headersSent) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          }
+          res.end(liveHudHtml);
+        });
       return;
     }
+    const activeRootParam = (reqUrl.searchParams.get('activeRoot') || '').trim();
     if (req.method === 'GET' && reqUrl.pathname === '/api/status') {
       if (statusRequiresToken && !tokenValid) {
         denyUnauthorized();
         return;
       }
       const workspaces = parseWorkspacesQuery(reqUrl, options.workspaceRoot || '');
-      const snap = buildHudSnapshot(workspaces);
+      const snap = buildHudSnapshot(workspaces, Date.now(), activeRootParam);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(snap));
       return;
@@ -1969,7 +2386,7 @@ export function createHudServer(token, options = {}) {
       const sendSnapshotFrame = (force = false) => {
         if (closed) return;
         try {
-          const snap = buildHudSnapshot(workspaces);
+          const snap = buildHudSnapshot(workspaces, Date.now(), activeRootParam);
           if (!force && snap.digest === lastSentDigest) return;
           lastSentDigest = snap.digest;
           res.write(`event: snapshot\ndata: ${JSON.stringify(snap)}\n\n`);
@@ -2037,7 +2454,7 @@ export function createHudServer(token, options = {}) {
 
       function syncWatchers() {
         if (closed) return;
-        const { roots, primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '');
+        const { roots, primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRootParam);
         const scopeRoots = new Set([path.resolve(primaryRoot)]);
         for (const r of roots) {
           scopeRoots.add(path.resolve(r));
@@ -2130,14 +2547,83 @@ export function createHudServer(token, options = {}) {
       });
       return;
     }
+    if (req.method === 'GET' && reqUrl.pathname === '/api/wiki-search') {
+      if (!expectedToken || !tokenValid) {
+        denyUnauthorized();
+        return;
+      }
+      const workspaces = parseWorkspacesQuery(reqUrl, options.workspaceRoot || '');
+      const { primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRootParam);
+      const q = (reqUrl.searchParams.get('q') || '').trim().slice(0, 160);
+      if (!q) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, query: '', results: [] }));
+        return;
+      }
+      try {
+        const wikiDir = path.join(primaryRoot, 'omagy_wiki');
+        const wikiSt = fs.existsSync(wikiDir) ? fs.lstatSync(wikiDir) : null;
+        const idxPath = path.join(wikiDir, 'index.md');
+        const idxSafe = !fs.existsSync(idxPath) || !fs.lstatSync(idxPath).isSymbolicLink();
+        const searchOut = (wikiSt && !wikiSt.isSymbolicLink() && wikiSt.isDirectory() && idxSafe)
+          ? queryWikiPages(wikiDir, q)
+          : { results: [] };
+        const results = (Array.isArray(searchOut?.results) ? searchOut.results : []).map((r) => ({
+          slug: String(r.slug || ''),
+          file: String(r.file || ''),
+          title: redactSecrets(String(r.title || r.slug || '')),
+          tags: Array.isArray(r.tags) ? r.tags.map((t) => redactSecrets(String(t))) : [],
+          score: Number(r.score || 0),
+          snippet: redactSecrets(String(r.snippet || '')),
+        }));
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, query: q, results }));
+      } catch { /* fail open: return empty wiki search results on read error */
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ ok: true, query: q, results: [] }));
+      }
+      return;
+    }
+    if (req.method === 'GET' && reqUrl.pathname === '/api/skill-doc') {
+      if (!expectedToken || !tokenValid) {
+        denyUnauthorized();
+        return;
+      }
+      const catalogRoot = options.pluginRoot || PLUGIN_ROOT;
+      const skillParam = reqUrl.searchParams.get('skill') || '';
+      const refParam = reqUrl.searchParams.get('ref') || '';
+      const resolved = resolveSafeSkillDoc(catalogRoot, skillParam, refParam);
+      if (!resolved) {
+        res.writeHead(404, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
+        res.end(JSON.stringify({ error: 'Skill document not found or forbidden' }));
+        return;
+      }
+      try {
+        const safeText = redactSecrets(fs.readFileSync(resolved.filePath, 'utf8'));
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+        });
+        res.end(safeText);
+      } catch { /* fail open: return 500 JSON when skill markdown read fails */
+        res.writeHead(500, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
+        res.end(JSON.stringify({ error: 'Failed to read skill document' }));
+      }
+      return;
+    }
     if (req.method === 'GET' && reqUrl.pathname === '/api/artifact') {
       if (!expectedToken || !tokenValid) {
         denyUnauthorized();
         return;
       }
-      const wsParam = reqUrl.searchParams.get('workspace') || options.workspaceRoot || process.env.OMAGY_WORKSPACE || process.cwd();
+      const fallbackWs = options.workspaceRoot || process.env.OMAGY_WORKSPACE || process.cwd();
+      const wsParam = reqUrl.searchParams.get('workspace') || '';
+      const vettedWsList = parseWorkspacesQuery(reqUrl, fallbackWs);
+      const { primaryRoot: artPrimary } = resolveWorkspaceRoots(wsParam ? [wsParam, ...vettedWsList] : vettedWsList, fallbackWs, activeRootParam);
       const relParam = reqUrl.searchParams.get('rel') || '';
-      const resolved = resolveSafeArtifactFile(uriToFsPath(wsParam) || wsParam, relParam);
+      const resolved = resolveSafeArtifactFile(artPrimary, relParam);
       if (!resolved) {
         res.writeHead(404, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
         res.end(JSON.stringify({ error: 'Artifact not found or forbidden' }));
@@ -2413,6 +2899,24 @@ async function runSelftest() {
       'GET',
       `/api/artifact?workspace=${encodeURIComponent(wsFileUrl)}&rel=${encodeURIComponent('.omagy/artifacts/ideas/demo-idea.md')}`,
       {},
+    );
+    const unauthSkillDocRes = await invokeHttp('GET', '/api/skill-doc?skill=autopilot', {});
+    const defaultTokSkillDocRes = await invokeHttp('GET', '/api/skill-doc?skill=autopilot', {}, undefined, defaultTokenSrv);
+    const validSkillDocRes = await invokeHttp('GET', '/api/skill-doc?skill=autopilot', { 'x-sidecar-token': 'test-secret-token' });
+    const validSkillRefRes = await invokeHttp(
+      'GET',
+      '/api/skill-doc?skill=doctor&ref=' + encodeURIComponent('references/notifications.md'),
+      { 'x-sidecar-token': 'test-secret-token' },
+    );
+    const hostileSkillDocRes = await invokeHttp(
+      'GET',
+      '/api/skill-doc?skill=' + encodeURIComponent('../plugin.json'),
+      { 'x-sidecar-token': 'test-secret-token' },
+    );
+    const hostileSkillRefRes = await invokeHttp(
+      'GET',
+      '/api/skill-doc?skill=doctor&ref=' + encodeURIComponent('references/../../plugin.json'),
+      { 'x-sidecar-token': 'test-secret-token' },
     );
     const loftHttpRes = await invokeHttp(
       'GET',
@@ -3169,6 +3673,211 @@ async function runSelftest() {
       && HUD_HTML.includes('id="skills-match-count"')
       && HUD_HTML.includes('id="subagents-match-count"');
 
+    // H23: Workbench V2.1 Snapshot Telemetry (Workspaces, Evidence Artifacts, Wiki Search, DESIGN.md, Forensics, Notifications, Checkpoints, H15 Digest)
+    const wbWs = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-wb1-'));
+    const wbWs2 = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-wb2-'));
+    let h23Ok = false;
+    try {
+      const wbSecretTok = 'ghp_1234567890abcdefghij123456';
+      fs.mkdirSync(path.join(wbWs, '.omagy', 'evidence'), { recursive: true });
+      fs.mkdirSync(path.join(wbWs, '.omagy', 'ultragoal'), { recursive: true });
+      fs.mkdirSync(path.join(wbWs, '.omagy', 'state'), { recursive: true });
+      fs.mkdirSync(path.join(wbWs, '.omagy', 'logs'), { recursive: true });
+      fs.mkdirSync(path.join(wbWs, 'omagy_wiki'), { recursive: true });
+      fs.writeFileSync(path.join(wbWs, '.omagy', 'evidence', 'goal-G1.json'), JSON.stringify({ goal: 'G1', token: wbSecretTok }));
+      fs.writeFileSync(path.join(wbWs, '.omagy', 'ultragoal', 'brief.md'), '# Ultragoal Brief\nDone criteria\n');
+      fs.writeFileSync(path.join(wbWs, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({ mode: 'autopilot', active: false, current_phase: 'complete' }));
+      fs.writeFileSync(path.join(wbWs, '.omagy', 'notifications.json'), JSON.stringify({
+        slack: { enabled: true, webhookUrl: 'xoxb-secret-notif-1234567890' },
+        discord: { enabled: false },
+        webhook: { enabled: true, url: 'internal-hook' },
+      }));
+      fs.writeFileSync(
+        path.join(wbWs, 'DESIGN.md'),
+        [
+          '---',
+          'colors:',
+          '  background: "#ffffff"',
+          '  textPrimary: "#111827"',
+          'typography:',
+          '  body: "14px"',
+          'spacing:',
+          '  md: "16px"',
+          'shapes:',
+          '  radiusMd: "8px"',
+          '---',
+          '',
+          '# Design System',
+          '',
+          '## Overview',
+          'Workbench',
+          '',
+          '## Colors',
+          '- background `#ffffff`, textPrimary `#111827`',
+          '',
+          '## Typography',
+          '- body 14px',
+          '',
+          '## Layout',
+          'Grid',
+          '',
+          '## Elevation & Depth',
+          'Shadow',
+          '',
+          '## Shapes',
+          '- radiusMd 8px',
+          '',
+          '## Components',
+          'Card',
+          '',
+          '## Do\'s and Don\'ts',
+          'Do test',
+          '',
+        ].join('\n'),
+      );
+      fs.writeFileSync(
+        path.join(wbWs, '.omagy', 'logs', 'session-1.jsonl'),
+        [
+          JSON.stringify({ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'run tests' }),
+          JSON.stringify({ type: 'TOOL_RESULT', status: 'ERROR', toolName: 'bash', content: 'Command exited with code 1' }),
+        ].join('\n') + '\n',
+      );
+      fs.writeFileSync(path.join(wbWs, 'omagy_wiki', 'index.md'), '- [[arch]] — Architecture Hub — architecture — core\n');
+      fs.writeFileSync(path.join(wbWs, 'omagy_wiki', 'arch.md'), '---\ntitle: Architecture Hub\ncategory: architecture\ntags: [core]\n---\n\n## Overview\nSidecar hub architecture details.\n');
+      fs.writeFileSync(path.join(wbWs, 'omagy_wiki', 'log.md'), '# Wiki Log\n\n- 2026-11-12 [[arch]] Added architecture hub\n');
+
+      const vettedSel = resolveWorkspaceRoots([wbWs, wbWs2], '', wbWs2);
+      const unvettedSel = resolveWorkspaceRoots([wbWs, wbWs2], '', os.tmpdir());
+      const evArt = resolveSafeArtifactFile(wbWs, '.omagy/evidence/goal-G1.json');
+      const briefArt = resolveSafeArtifactFile(wbWs, '.omagy/ultragoal/brief.md');
+      const blockedStateArt = resolveSafeArtifactFile(wbWs, '.omagy/state/autopilot-state.json');
+
+      const wbSrv = createHudServer('wb-secret', { workspaceRoot: wbWs, runner: mockRunner });
+      const wbWsUrl = pathToFileURL(wbWs).href;
+      const beforeWbDigest = snapshotTreeDigest(wbWs);
+      const unauthWikiSearch = await invokeHttp('GET', `/api/wiki-search?workspace=${encodeURIComponent(wbWsUrl)}&q=architecture`, {}, undefined, wbSrv);
+      const authWikiSearch = await invokeHttp('GET', `/api/wiki-search?workspace=${encodeURIComponent(wbWsUrl)}&q=architecture`, { 'x-sidecar-token': 'wb-secret' }, undefined, wbSrv);
+      const evArtHttp = await invokeHttp('GET', `/api/artifact?workspace=${encodeURIComponent(wbWsUrl)}&rel=${encodeURIComponent('.omagy/evidence/goal-G1.json')}`, { 'x-sidecar-token': 'wb-secret' }, undefined, wbSrv);
+      const afterWbDigest = snapshotTreeDigest(wbWs);
+
+      const wbSnap1 = buildHudSnapshot([wbWs], baseNowMs);
+      const wbSnap2 = buildHudSnapshot([wbWs], baseNowMs + 100);
+      fs.appendFileSync(
+        path.join(wbWs, '.omagy', 'logs', 'session-1.jsonl'),
+        JSON.stringify({ type: 'TOOL_RESULT', status: 'ERROR', toolName: 'bash', content: 'Command exited with code 2' }) + '\n',
+      );
+      const wbSnap3 = buildHudSnapshot([wbWs], baseNowMs + 200);
+      const wikiSearchJson = authWikiSearch.json || {};
+      const wsReal1 = fs.realpathSync(wbWs);
+      const wsReal2 = fs.realpathSync(wbWs2);
+      h23Ok = vettedSel.primaryRoot === wsReal2
+        && unvettedSel.primaryRoot === wsReal1
+        && Boolean(evArt && briefArt)
+        && blockedStateArt === null
+        && unauthWikiSearch.status === 401
+        && authWikiSearch.status === 200
+        && Array.isArray(wikiSearchJson.results)
+        && wikiSearchJson.results.some((r) => r.slug === 'arch')
+        && evArtHttp.status === 200
+        && evArtHttp.text.includes('[REDACTED_TOKEN]')
+        && !evArtHttp.text.includes(wbSecretTok)
+        && beforeWbDigest === afterWbDigest
+        && typeof wbSnap1.digest === 'string'
+        && wbSnap1.digest === wbSnap2.digest
+        && wbSnap1.designSystem?.exists === true
+        && wbSnap1.designSystem?.ok === true
+        && wbSnap1.designSystem.contrastChecks.some((c) => c.pass)
+        && wbSnap1.forensics?.available === true
+        && wbSnap1.forensics?.totalSteps >= 2
+        && wbSnap1.forensics?.failedToolCalls >= 1
+        && wbSnap3.forensics?.totalSteps === wbSnap1.forensics.totalSteps + 1
+        && wbSnap3.forensics?.failedToolCalls >= 2
+        && wbSnap1.notifications?.slack === true
+        && wbSnap1.notifications?.discord === false
+        && wbSnap1.notifications?.webhook === true
+        && wbSnap1.notifications?.webhookUrl === undefined
+        && !JSON.stringify(wbSnap1.notifications).includes('xoxb-')
+        && Boolean(wbSnap1.checkpoints && typeof wbSnap1.checkpoints.count === 'number')
+        && wbSnap1.wikiLog?.length === 1
+        && wbSnap1.wikiLog[0].slug === 'arch';
+    } finally {
+      fs.rmSync(wbWs, { recursive: true, force: true });
+      fs.rmSync(wbWs2, { recursive: true, force: true });
+    }
+
+    // H24: Workbench Pure Helpers (DAG waves, Backlinks, Fence-stripped TOC, Command Palette) & CSS/HTML Contracts
+    const dagWaves = buildTaskDagWaves([
+      { id: 'T1', subject: 'Schema' },
+      { id: 'T2', subject: 'API', dependsOn: ['T1'] },
+      { id: 'T3', subject: 'UI', dependsOn: ['T2'] },
+    ]);
+    const cycleWaves = buildTaskDagWaves([
+      { id: 'A', dependsOn: ['B'] },
+      { id: 'B', dependsOn: ['A'] },
+    ]);
+    const backlinksMap = buildBacklinksIndex([
+      { slug: 'a', links: ['b'], body: '```md\n[[c]]\n```\nSee [[b]]' },
+      { slug: 'b', links: ['b', 'c'], body: 'Self [[b]] and [[c]]' },
+      { slug: 'c', links: [], body: '' },
+    ]);
+    const tocList = extractMarkdownToc('---\ntitle: Demo\n---\n```md\n## Ignored Fence Heading\n```\n## Heading [[arch|Architecture]]\n### Sub Details\n');
+    const sdoMdHtml = renderSafeMarkdown('<Purpose>\nRun end-to-end.\n</Purpose>');
+    const resolvedSkillAutopilot = resolveSafeSkillDoc(PLUGIN_ROOT, 'autopilot');
+    const resolvedSkillRefDoctor = resolveSafeSkillDoc(PLUGIN_ROOT, 'doctor', 'references/notifications.md');
+    const blockedSkillTrav1 = resolveSafeSkillDoc(PLUGIN_ROOT, '../plugin.json');
+    const blockedSkillTrav2 = resolveSafeSkillDoc(PLUGIN_ROOT, 'autopilot', '../../README.md');
+    const blockedSkillTrav3 = resolveSafeSkillDoc(PLUGIN_ROOT, 'doctor', 'references/../../plugin.json');
+    const paletteItems = buildCommandPaletteItems(snap);
+    const paletteCats = new Set(paletteItems.map((it) => it.category));
+    const h24Ok = dagWaves.length === 3
+      && dagWaves[0][0].id === 'T1'
+      && dagWaves[1][0].id === 'T2'
+      && dagWaves[2][0].id === 'T3'
+      && cycleWaves.length === 1
+      && cycleWaves[0].every((n) => n._cycle === true)
+      && JSON.stringify(backlinksMap.b) === JSON.stringify(['a'])
+      && JSON.stringify(backlinksMap.c) === JSON.stringify(['b'])
+      && tocList.length === 2
+      && tocList[0].level === 2 && tocList[0].text === 'Heading Architecture' && tocList[0].index === 0
+      && tocList[1].level === 3 && tocList[1].text === 'Sub Details' && tocList[1].index === 1
+      && sdoMdHtml.includes('<h3 class="md-h3">Purpose</h3>')
+      && sdoMdHtml.includes('<p class="md-p">Run end-to-end.</p>')
+      && !sdoMdHtml.includes('&lt;Purpose&gt;')
+      && !sdoMdHtml.includes('&lt;/Purpose&gt;')
+      && Boolean(resolvedSkillAutopilot && resolvedSkillAutopilot.relPath === 'skills/autopilot/SKILL.md')
+      && Boolean(resolvedSkillRefDoctor && resolvedSkillRefDoctor.relPath === 'skills/doctor/references/notifications.md')
+      && blockedSkillTrav1 === null
+      && blockedSkillTrav2 === null
+      && blockedSkillTrav3 === null
+      && unauthSkillDocRes.status === 401
+      && defaultTokSkillDocRes.status === 401
+      && validSkillDocRes.status === 200
+      && validSkillDocRes.headers['Content-Type'] === 'text/plain; charset=utf-8'
+      && validSkillDocRes.headers['X-Content-Type-Options'] === 'nosniff'
+      && validSkillDocRes.headers['Content-Security-Policy'] === "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+      && validSkillDocRes.text.includes('# Autopilot')
+      && validSkillRefRes.status === 200
+      && validSkillRefRes.text.includes('#')
+      && hostileSkillDocRes.status === 404
+      && hostileSkillRefRes.status === 404
+      && Boolean(doctorSkill && doctorSkill.file === 'skills/doctor/SKILL.md' && Array.isArray(doctorSkill.references) && doctorSkill.references.includes('references/notifications.md'))
+      && HUD_HTML.includes('openSkillMarkdownDrawer(')
+      && paletteCats.has('views')
+      && paletteCats.has('skills')
+      && paletteCats.has('subagents')
+      && paletteCats.has('artifacts')
+      && paletteCats.has('wiki')
+      && HUD_HTML.indexOf('id="cmd-palette"') > HUD_HTML.indexOf('id="artifact-drawer"')
+      && HUD_HTML.includes('id="wiki-query-box"')
+      && HUD_HTML.includes('--wiki-cat-architecture:')
+      && HUD_HTML.includes('.wf-arrow-idle')
+      && HUD_HTML.includes('id="handoff-btn"')
+      && HUD_HTML.includes('const matchesScope =')
+      && HUD_HTML.includes('class="hud-top-bar"')
+      && HUD_HTML.includes('id="workspace-select-wrap"')
+      && HUD_HTML.includes('.hud-select {')
+      && HUD_HTML.includes('class="status-cell-actions"');
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -3262,7 +3971,9 @@ async function runSelftest() {
       && h19Ok
       && h20Ok
       && h21Ok
-      && h22Ok;
+      && h22Ok
+      && h23Ok
+      && h24Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',
