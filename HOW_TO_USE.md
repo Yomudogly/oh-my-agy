@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.5.1`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, live HUD sidecar tab, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.5.2`)** for Google Antigravity.
 
 ---
 
@@ -17,8 +17,9 @@ This guide covers every workflow skill, role subagent, hook, state file, CLI uti
 4. [All 14 Role Subagents & How Delegation Works](#4-all-14-role-subagents--how-delegation-works)
 5. [Durable State (`.omagy/`), Ledgers & Resuming Work](#5-durable-state-omagy-ledgers--resuming-work)
 6. [Project Wiki (`omagy_wiki/`) & Subdirectory `AGENTS.md`](#6-project-wiki-omagy_wiki--subdirectory-agentsmd)
-7. [Lifecycle Hooks & CLI Utilities (32 Total)](#7-lifecycle-hooks--cli-utilities-32-total)
-8. [End-to-End Recipes](#8-end-to-end-recipes)
+7. [Live Auxiliary Pane HUD (`sidecars/hud/`)](#7-live-auxiliary-pane-hud-sidecarshud)
+8. [Lifecycle Hooks & CLI Utilities (32 Total)](#8-lifecycle-hooks--cli-utilities-32-total)
+9. [End-to-End Recipes](#9-end-to-end-recipes)
 
 ---
 
@@ -296,10 +297,10 @@ Maintains durable project knowledge under `omagy_wiki/` (`index.md`, `agreements
   ```
 
 #### `/hud` — Workflow Status Board, Live Aux Pane UI (`sidecar://oh-my-agy/hud/`) & `--handoff`
-Prints a compact read-only dashboard of active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` agreements, and surfaces `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` to toggle the live 5-tab Auxiliary Pane UI (`sidecars/hud/main.mjs` + `sidecars/hud/ui.mjs`):
-- **Live SSE & Stateful DOM Updates**: Streams `.omagy/` and `omagy_wiki/` changes over `GET /api/events` (`150 ms` debounce + duplicate-digest suppression + `15 s` fallback poll), preserving open `<details>`, input focus/selection, scroll positions, and the sibling `#artifact-drawer`.
-- **Slide-Over `#artifact-drawer`**: Previews symlink-safe `.omagy/{artifacts,plans,specs}` artifacts (`redactSecrets()` on `.md`/`.txt`) with asymmetric enter/exit transitions, background `inert` lock, and `120 ms`-delayed skeleton shimmer via a 3-mode Visual Ralph comparator (`side-by-side`, `split-slider`, `onion-skin`), an opaque-origin `srcdoc` Loft `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer">` (local `.js`/`.mjs`/`.css` & relative ES module imports bundled, active HUD theme CSS tokens injected, `--arena` `variant-a..c` + `arena-verdict.md` switcher), and an XSS-safe Markdown reader with per-code-block `Copy` buttons.
-- **Interactive Tabs & Shortcuts**: `Overview` quick actions (`Continue`, two-step `Cancel Mode`, `Create Handoff`, `Run /doctor`, `customization://oh-my-agy`), single-line workspace/scope pills, single `Current Workflow Mode` spotlight, GPU `scaleX` progress bars, 5-item `recentLedger`, 2-tab `Reviews` & `Research` switcher, 10-item collapsible Artifacts card, Checkpoints/Code-Health/Doctor cards, `Workflows` single-line horizontally scrollable animated step pipelines, `Skills` `--flag` composer chips + `<mark>` search highlights, `Subagents` `Model` pills (`inherit` | `flash_lite` | `flash` | `pro`), left-rule `Working Agreements` + interactive 3D Canvas `Wiki` mind-map (`3D Map` / `List` switch), GPU sliding tab pills, arrow-key `tablist` navigation, and silent `/` / `1`–`5` / `Escape` shortcuts.
+Prints a compact read-only dashboard of active `.omagy/state/*-state.json` modes, `/ultragoal` goal progress, `/team` task counts, and `omagy_wiki/` agreements, and surfaces `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` to toggle the live 5-tab Auxiliary Pane UI ([Section 7](#7-live-auxiliary-pane-hud-sidecarshud)):
+- **Live SSE & Multi-Workspace Workbench (`sidecars/hud/{main,ui,client}.mjs`)**: Streams `.omagy/` and `omagy_wiki/` changes over `GET /api/events` (`150 ms` debounce + duplicate-digest suppression + `15 s` fallback poll), preserving open `<details>`, input focus/selection, scroll positions, and `#artifact-drawer`. Includes `?activeRoot=` multi-workspace switching, inner-folder scope chips, header `Handoff`, and a `Cmd/Ctrl+K` Command Palette.
+- **Slide-Over `#artifact-drawer`**: Previews symlink-safe `.omagy/{artifacts,plans,specs,evidence,ultragoal,goals}` files + JSON `Receipt` payloads (`redactSecrets()` on `.md`/`.txt`/`.json`) via a 3-mode Visual Ralph comparator (`side-by-side`, `split-slider`, `onion-skin`), an opaque-origin `srcdoc` Loft `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer">` (local `.js`/`.mjs`/`.css` & relative ES module bundling, HUD theme token injection, `--arena` variant switcher), and an XSS-safe Markdown reader, plus `GET /api/skill-doc` **Skill `Preview`** buttons for inspecting `SKILL.md` and `references/*.md` playbooks.
+- **5 Tabs**: `Overview` (mode spotlight + remediations, Ultragoal & Team DAG wave progress, Reviews/Research, Artifacts, Code Health & `floor-guard`, Shadow Checkpoints, Stitch `DESIGN.md` WCAG audit, Session Forensics & Notification readiness, Doctor health), `Workflows` (scrollable animated stage pipelines), `Skills` (`--flag` composer chips, `Preview`, `<mark>` highlights), `Subagents` (`Model` tier selector), and `Wiki` (`3D Map` / `List` switch, `/api/wiki-search`, TOC chips, computed `[[slug]]` backlinks, Working Agreements).
 - **Flags**:
   - `--handoff [slug]`: Runs `hooks/run.sh handoff` to generate secret-redacted `.omagy/artifacts/handoff-<slug>-<UTC>.md` and `.omagy/artifacts/handoff-latest.md` (with active modes, ultragoal progress & `notepad.md`, dirty worktree summary, verification status, and copy-paste **Resume Prompt**) before `/compact` or switching sessions.
 - **Examples**:
@@ -318,7 +319,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
 
 #### `/doctor` — Diagnostics, Setup, Notifications, Deep Init & Session Forensics
 All-in-one operational health, setup, notification, and transcript forensics toolkit:
-- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`87/87`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`20` skills), `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest` (`H1`–`H22`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93,734 B`, `sidecars/hud/ui.mjs < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 14-agent `tools:` YAML frontmatter, `plugin.json` `v0.5.1` parity, and stale/waiting `.omagy/state/` files.
+- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`87/87`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`20` skills), `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest` (`H1`–`H24`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93,734 B`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 14-agent `tools:` YAML frontmatter, `plugin.json` `v0.5.2` parity, and stale/waiting `.omagy/state/` files.
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density and git churn and generates non-duplicative child `AGENTS.md` files where warranted.
@@ -427,7 +428,49 @@ Unlike `.omagy/` (transient workflow state), **`omagy_wiki/`** is designed to be
 
 ---
 
-## 7. Lifecycle Hooks & CLI Utilities (32 Total)
+## 7. Live Auxiliary Pane HUD (`sidecars/hud/`)
+
+The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.mjs), [`sidecars/hud/ui.mjs`](sidecars/hud/ui.mjs), [`sidecars/hud/client.mjs`](sidecars/hud/client.mjs), declared in [`sidecars/hud/sidecar.json`](sidecars/hud/sidecar.json)) turns Antigravity's side pane into a real-time observability workbench and authenticated prompt launcher (`agentapi`) with zero external dependencies.
+
+### 7.1 Opening & Top-Bar Controls
+- **How to open**: Click `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` in chat (returned by `/hud` and active workflow notices), or toggle **Oh My Agy** in Antigravity's Extensions Aux Pane menu.
+- **Workspace Root Switcher (`?activeRoot=`)**: When multiple repositories are open in Antigravity, the header dropdown switches the active primary workspace and reconnects `GET /api/events` cleanly to that root.
+- **Status Pill (`LIVE` / `POLL`)**: Shows live Server-Sent Events connection status (`150 ms` `.omagy/` & `omagy_wiki/` watcher debounce + duplicate SHA-256 `digest` suppression + `15 s` poll fallback).
+- **Top-Bar Actions**: One-click **Handoff** (`/hud --handoff` + confirmation badge), **Search / Command** (`Cmd/Ctrl+K` Command Palette), and **Refresh**.
+
+### 7.2 Tabs & Slide-Over `#artifact-drawer`
+1. **Overview**:
+   - **Scope Filter Chips & Mode Spotlight**: Filter panels by parent workspace or inner `<subfolder>/.omagy/` scope (`discoverOmagyScopes`); inspect the active mode highlight with contextual one-click remediations (`Continue`, two-step `Cancel Mode`, `/doctor`, `/wiki lint`) and `customization://oh-my-agy` shortcut.
+   - **Ultragoal & Team Task DAG Waves**: Track structured goal status counts and recent `ledger.jsonl` events alongside topological DAG wave completion bars (`buildTaskDagWaves`) and **`Receipt`** buttons that open `.omagy/evidence/*.json` or `.omagy/plans/ralplan-review-*.json` directly in `#artifact-drawer`.
+   - **Deep Interview, Reviews & Deep Research**: Inspect interview ambiguity convergence and `specs/` docs, open Code Review / Hyperplan summaries, and inspect verified claim counts & self-audit scores.
+   - **Visual Ralph & Loft Prototypes**: Launch the **3-mode image comparator** (`side-by-side`, `split-slider`, `onion-skin`) or open **Loft** prototypes inside an opaque-origin `srcdoc` `<iframe sandbox="allow-scripts" referrerpolicy="no-referrer">` with local ES module bundling, active HUD theme variables, and `--arena` `variant-a..c` + `arena-verdict.md` switching.
+   - **Governance & Diagnostics Cards**: View `Code Health & Technical Debt` (symbol reuse, orphaned callers, `shortcut:` ledger, cached `floor-guard` counters, `verificationFreshness`), `Shadow Checkpoints` (`refs/omagy/checkpoints/*`), Google Stitch `DESIGN.md` WCAG audit, `Session Forensics & Notification Readiness` (`slack`, `discord`, `telegram`, `webhook`, `command`), and `Diagnostics & Runtime Health` (`Skill Eval` score, configured quality gates, recent hook errors).
+2. **Workflows**: Interactive blueprints for all `oh-my-agy` workflows with live active-phase highlights, horizontally scrollable single-line step pipelines, state/artifact paths, and inline editable prompt boxes (`Run in Chat`, `New Chat`, `Copy`).
+3. **Skills**: Live-searchable catalog of all **20 skills** with category tabs, `<mark>` search highlights, mutually exclusive or toggleable **`--flag` composer chips**, inline editable command launcher (`Run in Chat`, `New Chat`, `Copy`), and a **`Preview`** button on every card (`GET /api/skill-doc`) that opens that skill's `SKILL.md` in `#artifact-drawer`—with top drawer chip tabs to switch between `SKILL.md` and any bundled `references/*.md` playbooks.
+4. **Subagents**: Lane-filtered cards for all **14 role subagents** with **`Model` tier pills** (`inherit` | `flash_lite` | `flash` | `pro`), editable task prompts, `invoke_subagent(...)` preview, **`Dispatch into Active Chat`**, and **`Launch Standalone Chat`**.
+5. **Wiki**: Switch mutually between the interactive **3D Canvas Mind-Map** (`3D Map`: Fibonacci-sphere + 3D force relaxation, inertial drag orbit, node focus) and the filtered **`List`** view; search across pages via server-indexed `GET /api/wiki-search`; navigate headings with fence-stripped **TOC jump chips**; jump through `[[slug]]` wikilinks and computed **Backlinks**; review left-rule **Working Agreements** (`omagy_wiki/agreements.md`), recent `omagy_wiki/log.md` entries, and `wiki-lint` issues.
+
+### 7.3 Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Cmd/Ctrl + K` | Toggle the **Command Palette** (`Views`, `Skills`, `Subagents`, `Artifacts`, `Wiki`) |
+| `1` – `5` | Switch between `Overview`, `Workflows`, `Skills`, `Subagents`, and `Wiki` tabs (when not typing in an input) |
+| `/` | Focus search inside `Skills`, `Subagents`, or `Wiki` (when not typing in an input) |
+| `ArrowLeft` / `ArrowRight` / `Home` / `End` | Roving focus navigation across `[role="tablist"]` tabs |
+| `Escape` | Close the open Command Palette or `#artifact-drawer` and restore focus |
+
+### 7.4 Security Boundaries & Sidecar Selftest
+- All read/write endpoints validate `X-Sidecar-Token` / `X-Omagy-Token` with constant-time comparison; `GET /api/status` and `GET /api/events` perform zero disk writes.
+- `GET /api/artifact` (`resolveSafeArtifactFile`) and `GET /api/skill-doc` (`resolveSafeSkillDoc`) reject symlinks, traversal, and disallowed files, enforce `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox`, and apply `redactSecrets()` to Markdown, plain-text, and JSON payloads.
+- Run the 24-suite HUD unit & HTTP/SSE/DOM selftest anytime:
+  ```bash
+  sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest
+  ```
+
+---
+
+## 8. Lifecycle Hooks & CLI Utilities (32 Total)
 
 `oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93,734 B`) for the 13 `COLD_CLI_EVENTS` evaluators, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
 
@@ -542,7 +585,7 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-init api-contract-audit
 
 ---
 
-## 8. End-to-End Recipes
+## 9. End-to-End Recipes
 
 ### Recipe 1: Greenfield Feature from Idea to Verified Code (`/autopilot`)
 ```text

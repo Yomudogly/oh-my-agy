@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.2 — 2026-11-12
+
+- **Modular 3-File HUD Workbench v2.2 (`sidecars/hud/main.mjs`, `sidecars/hud/ui.mjs`, `sidecars/hud/client.mjs`, `hooks/omagy-selftest.mjs`)**:
+  - Extracted the HUD browser runtime from `sidecars/hud/ui.mjs` (`104,414 B < 256 KB`) into a standalone `sidecars/hud/client.mjs` (`171,106 B < 256 KB`), preserving a strict acyclic 3-module structure (`main.mjs -> ui.mjs -> client.mjs`), mtime hot-reload on both UI modules, and inline `<script>` syntax + module size checks in `T52`.
+  - Added the **`Cmd/Ctrl+K` Command Palette (`#cmd-palette`)** indexing Views, Skills, Subagents, Artifacts, and Wiki pages via `buildCommandPaletteItems`; added multi-workspace **`?activeRoot=` switching** (`#workspace-select-wrap` with custom themed `.hud-select` styling) & Overview inner-folder **`scope-chip` filters**; added header `#handoff-btn` (`/hud --handoff`) & contextual remediation actions (`/cancel`, `/doctor`, `/wiki lint`); widened `.col-status` (`148px` with wrapping `.status-cell-actions`); and updated top-bar header-to-tab spacing (`.hud-top-bar`, `#main-tab-bar`).
+  - Added **Team Task DAG Wave Visualization** (`buildTaskDagWaves` with cycle detection) + JSON **`Receipt` Previews** (`openJsonReceiptDrawer` for `.omagy/evidence/*.json` & `.omagy/plans/ralplan-review-*.json`), **Google Stitch `DESIGN.md` WCAG Audit**, **Shadow Git Checkpoints** (`manageShadowCheckpoint('list')`), and **Session Transcript Forensics & Notification Readiness** cards in `Overview`.
+  - Upgraded the **`Wiki`** explorer with debounced token-gated **`GET /api/wiki-search`** (`queryWikiPages`), fence-stripped **TOC Jump Chips** (`extractMarkdownToc`), computed **`[[slug]]` Backlinks** (`buildBacklinksIndex`), semantic category token pills (`--wiki-cat-*`), an append-only `omagy_wiki/log.md` recent-activity accordion, and a mutually exclusive `3D Map` / `List` toggle (`H23`–`H24` selftests).
+- **Skill `SKILL.md` Drawer Previews & SDO Tag Rendering (`sidecars/hud/main.mjs`, `sidecars/hud/client.mjs`, `sidecars/hud/ui.mjs`)**:
+  - Attached lightweight `dir`, `file`, and `references/*.md` metadata in `buildPluginCatalog` without bloating `/api/status` or `/api/events` payloads, and added token-gated, symlink/`realpathSync`-contained **`GET /api/skill-doc`** (`resolveSafeSkillDoc`, `redactSecrets`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`).
+  - Added a **`Preview`** button to every card in the `Skills` tab (`openSkillMarkdownDrawer`) plus drawer header chip tabs to switch between `SKILL.md` and any bundled `references/*.md` playbooks inside `#artifact-drawer`.
+  - Enhanced `renderSafeMarkdown` so standalone SDO section tags in `SKILL.md` files (`<Purpose>`, `<Use_When>`, `<Steps>`, `<Good>`, `<Bad>`, etc.) render as clean `<h3>`/`<h4>` headings while preserving strict XSS HTML escaping.
+- **HUD Sidecar Documentation & Showcase Asset (`README.md`, `HOW_TO_USE.md`, `assets/sidecar-hud.gif`, `skills/hud/SKILL.md`, `skills/doctor/SKILL.md`)**:
+  - Added dedicated **Live Auxiliary Pane HUD (`sidecars/hud/`)** sections to [`README.md`](README.md) (embedding [`assets/sidecar-hud.gif`](assets/sidecar-hud.gif)) and [`HOW_TO_USE.md`](HOW_TO_USE.md) (Section 7: controls, all 5 tabs, `#artifact-drawer`, keyboard shortcuts, and security boundaries), synced `skills/hud/SKILL.md` & `skills/doctor/SKILL.md` (`H1`–`H24`), and updated `plugin.json` to `v0.5.2`.
+
 ## 0.5.1 — 2026-11-12
 
 - **4-Module Cold-Path CLI Split & Self-Contained `$skill` Authoring Suite (`hooks/omagy-hook.mjs`, `hooks/omagy-skill.mjs`, `skills/skill/`, `hooks/skill-eval-cases.json`)**:
