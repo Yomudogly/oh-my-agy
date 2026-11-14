@@ -6,7 +6,8 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
     const ALLOWED = ${JSON.stringify(allowedViews)};
     const MODEL_TIERS = ['inherit', 'flash_lite', 'flash', 'pro'];
     const params = new URLSearchParams(window.location.search);
-    const token = params.get('token') || '';
+    const metaTokenEl = document.querySelector('meta[name="omagy-hud-token"]');
+    const token = params.get('token') || (metaTokenEl ? metaTokenEl.getAttribute('content') || '' : '');
     let activeView = ALLOWED.includes(params.get('view')) ? params.get('view') : 'overview';
     let selectedWikiSlug = params.get('slug') || '';
     let wikiCategory = 'All';
@@ -16,10 +17,116 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
     let skillCategory = 'All';
     let subagentSearch = '';
     let subagentLane = 'All';
-    let workspaceUris = [];
+    const initWsParams = [...params.getAll('workspaces'), ...params.getAll('workspace')]
+      .flatMap((v) => String(v || '').split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+    let workspaceUris = [...new Set(initWsParams)];
     let latestData = null;
     let lastSnapshotDigest = '';
     let activeEventSource = null;
+
+    async function hudFetch(url, opts = {}) {
+      const sidecarBridge = !token && window.sidecar && typeof window.sidecar.fetch === 'function' ? window.sidecar : null;
+      if (sidecarBridge) {
+        const { signal, ...restOpts } = opts || {};
+        if (!signal) return sidecarBridge.fetch(url, restOpts);
+        return await Promise.race([
+          sidecarBridge.fetch(url, restOpts),
+          new Promise((_, reject) => {
+            if (signal.aborted) { reject(new Error('Request aborted')); return; }
+            signal.addEventListener('abort', () => reject(new Error('Request aborted')), { once: true });
+          }),
+        ]);
+      }
+      return fetch(url, opts);
+    }
+
+    function getHostConversationId() {
+      try {
+        const direct = String(window.sidecar?.conversationId || '').trim();
+        if (direct) return direct;
+      } catch { /* fail open: window.sidecar.conversationId unavailable */ }
+      try {
+        return (params.get('conversationId') || '').trim();
+      } catch { /* fail open: query conversationId unavailable */
+        return '';
+      }
+    }
+
+    function applyWorkspaceUris(nextUris, refreshNow = true) {
+      if (!Array.isArray(nextUris)) return;
+      const cleaned = [...new Set(nextUris.map((u) => String(u || '').trim()).filter(Boolean))];
+      if (JSON.stringify(cleaned) === JSON.stringify(workspaceUris)) return;
+      workspaceUris = cleaned;
+      if (refreshNow) {
+        lastSnapshotDigest = '';
+        connectEventStream();
+        loadSnapshot(true);
+      }
+    }
+
+    if (window.sidecar) {
+      try {
+        if (typeof window.sidecar.onWorkspaceChange === 'function') {
+          window.sidecar.onWorkspaceChange((next) => {
+            const list = Array.isArray(next) ? next : next?.workspaceUris;
+            applyWorkspaceUris(list, true);
+          });
+        }
+        if (typeof window.sidecar.getWorkspaceUris === 'function') {
+          Promise.resolve(window.sidecar.getWorkspaceUris())
+            .then((uris) => applyWorkspaceUris(uris, true))
+            .catch(() => { /* fail open: ignore unavailable host workspace URI probe */ });
+        }
+      } catch { /* fail open: ignore sidecar bridge workspace probe failure */ }
+    }
+
+    function syncLightClassFromComputedBg() {
+      try {
+        const bg = getComputedStyle(document.documentElement).getPropertyValue('--background').trim();
+        if (!bg) return;
+        let r = -1;
+        let g = -1;
+        let b = -1;
+        const hex = /^#([0-9a-f]{3,8})$/i.exec(bg);
+        if (hex) {
+          const h = hex[1];
+          if (h.length === 3 || h.length === 4) {
+            r = parseInt(h[0] + h[0], 16);
+            g = parseInt(h[1] + h[1], 16);
+            b = parseInt(h[2] + h[2], 16);
+          } else if (h.length >= 6) {
+            r = parseInt(h.slice(0, 2), 16);
+            g = parseInt(h.slice(2, 4), 16);
+            b = parseInt(h.slice(4, 6), 16);
+          }
+        } else {
+          const rgb = /^rgba?\\(\\s*([0-9]+(?:\\.[0-9]+)?)\\s*[, ]\\s*([0-9]+(?:\\.[0-9]+)?)\\s*[, ]\\s*([0-9]+(?:\\.[0-9]+)?)/i.exec(bg);
+          if (rgb) {
+            r = Number(rgb[1]);
+            g = Number(rgb[2]);
+            b = Number(rgb[3]);
+          }
+        }
+        if (r >= 0 && g >= 0 && b >= 0) {
+          const isLight = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5;
+          document.documentElement.classList.toggle('light', isLight);
+          document.documentElement.style.colorScheme = isLight ? 'light' : 'dark';
+        }
+      } catch { /* fail open: ignore unsupported CSS background token */ }
+    }
+
+    if (typeof MutationObserver === 'function' && document.documentElement) {
+      let syncingThemeStyle = false;
+      const themeObs = new MutationObserver(() => {
+        if (syncingThemeStyle) return;
+        syncingThemeStyle = true;
+        try { syncLightClassFromComputedBg(); } finally { syncingThemeStyle = false; }
+      });
+      themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+      syncLightClassFromComputedBg();
+    }
     let pendingCancelConfirm = false;
     let cancelConfirmTimer = null;
     const editedPrompts = {};
@@ -71,25 +178,33 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       el.classList.toggle('badge-live', Boolean(isLive));
     }
 
-    function buildStreamQuery() {
+    function buildStreamQuery(includeToken = false) {
       const q = new URLSearchParams();
-      if (token) q.set('token', token);
+      if (includeToken && token) q.set('token', token);
       if (workspaceUris.length) q.set('workspaces', JSON.stringify(workspaceUris));
       if (activeRoot) q.set('activeRoot', activeRoot);
       return q;
     }
 
-    function connectEventStream() {
+    function closeEventStream() {
       if (activeEventSource) {
         try { activeEventSource.close(); } catch { /* fail open: previous EventSource already closed */ }
         activeEventSource = null;
+      }
+    }
+
+    function connectEventStream() {
+      closeEventStream();
+      if (document.visibilityState === 'hidden') {
+        setSsePill('PAUSED', false);
+        return;
       }
       if (typeof window.EventSource !== 'function') {
         setSsePill('POLL', false);
         return;
       }
       try {
-        const es = new EventSource('/api/events?' + buildStreamQuery().toString());
+        const es = new EventSource('/api/events?' + buildStreamQuery(true).toString());
         activeEventSource = es;
         es.onopen = () => setSsePill('LIVE', true);
         es.addEventListener('snapshot', (ev) => {
@@ -107,8 +222,20 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       }
     }
 
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        closeEventStream();
+        setSsePill('PAUSED', false);
+      } else {
+        connectEventStream();
+        loadSnapshot(true);
+      }
+    });
+    window.addEventListener('pagehide', closeEventStream);
+    window.addEventListener('beforeunload', closeEventStream);
+
     window.addEventListener('message', (event) => {
-      if (!event.source || (event.source !== window.parent && event.source !== window)) return;
+      if (!event.source || (event.source !== window.parent && event.source !== window.top && event.source !== window)) return;
       if (event.data?.type === 'theme-change' && event.data.payload?.cssVariables) {
         for (const [k, v] of Object.entries(event.data.payload.cssVariables)) {
           document.documentElement.style.setProperty(k, v);
@@ -124,10 +251,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         }
         requestMindMapDraw();
       } else if (event.data?.type === 'workspace-change' && Array.isArray(event.data.payload?.workspaceUris)) {
-        workspaceUris = event.data.payload.workspaceUris;
-        lastSnapshotDigest = '';
-        connectEventStream();
-        loadSnapshot(true);
+        applyWorkspaceUris(event.data.payload.workspaceUris, true);
       }
     });
 
@@ -253,6 +377,14 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       try { window.scrollTo(state.scrollX, state.scrollY); } catch { /* fail open: scrollTo unavailable */ }
     }
 
+    function formatDefaultSkillPrompt(rawCmd, host) {
+      const txt = String(rawCmd || '');
+      if (host === 'codex' || host === 'claude') {
+        return txt.replace(/^(\\s*)\\/([a-z0-9-]+)(?=$|\\s)/, (_m, sp, slug) => sp + '$' + slug);
+      }
+      return txt;
+    }
+
     function getPromptValue(key, fallback) {
       return Object.prototype.hasOwnProperty.call(editedPrompts, key) ? editedPrompts[key] : fallback;
     }
@@ -264,7 +396,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         const previewEl = document.getElementById('sa-snippet-' + agentName);
         if (previewEl) {
           const tier = selectedSubagentModels[agentName] || previewEl.dataset.defaultTier || 'inherit';
-          previewEl.textContent = buildSubagentInvokeSnippet(agentName, tier, val);
+          previewEl.textContent = buildSubagentInvokeSnippet(agentName, tier, val, latestData?.host || 'antigravity');
         }
       }
     };
@@ -377,17 +509,15 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         else apply();
       };
       try {
-        const q = new URLSearchParams();
-        if (token) q.set('token', token);
         const headers = { 'Content-Type': 'application/json' };
         if (token) headers['X-Sidecar-Token'] = token;
-        const res = await fetch('/api/dispatch?' + q.toString(), {
+        const res = await hudFetch('/api/dispatch', {
           method: 'POST',
           headers,
           body: JSON.stringify({
             ...body,
             workspace: latestData?.workspace || (workspaceUris[0] || ''),
-            conversationId: latestData?.doctor?.latestRouting?.conversationId || '',
+            conversationId: body.conversationId || getHostConversationId(),
           }),
         });
         const data = await res.json().catch(() => { /* fail open: non-JSON dispatch error payload */ return {}; });
@@ -395,7 +525,14 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           finishDispatchFeedback('err', 'Error', 1800);
           return;
         }
-        if (data.fallback) {
+        if (data.modeUsed === 'clipboard-handoff') {
+          const clipTxt = data.clipboardPrompt || data.clipboardText || '';
+          let copied = Boolean(data.copiedToClipboard);
+          if (!copied && clipTxt && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            copied = await navigator.clipboard.writeText(clipTxt).then(() => true, () => false);
+          }
+          finishDispatchFeedback(copied ? 'ok' : 'err', copied ? 'Copied Prompt' : 'Copy Failed', 1800);
+        } else if (data.fallback) {
           finishDispatchFeedback('ok', 'New Chat', 1600);
         } else if (data.modeUsed === 'active-chat' || data.modeUsed === 'subagent-active') {
           finishDispatchFeedback('ok', 'Sent', 1500);
@@ -484,7 +621,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       const nextFlags = [...curSet];
       selectedSkillFlags[skillName] = nextFlags;
       const inputKey = 'skill:' + skillName;
-      const currentCmd = getPromptValue(inputKey, skillMeta.quickStart);
+      const currentCmd = getPromptValue(inputKey, formatDefaultSkillPrompt(skillMeta.quickStart, latestData?.host));
       const updatedCmd = buildSkillCommandWithFlags(currentCmd, nextFlags, skillMeta.flags || []);
       editedPrompts[inputKey] = updatedCmd;
       renderSkillsListOnly(latestData);
@@ -600,7 +737,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       if (activeRoot) q.set('activeRoot', activeRoot);
       q.set('rel', relPath);
       const headers = token ? { 'X-Sidecar-Token': token } : {};
-      return fetch('/api/artifact?' + q.toString(), { headers });
+      return hudFetch('/api/artifact?' + q.toString(), { headers });
     }
 
     window.openArtifactEntry = function(el) {
@@ -673,7 +810,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       q.set('skill', String(skillDir || '').trim());
       if (refRel) q.set('ref', String(refRel).trim());
       const headers = token ? { 'X-Sidecar-Token': token } : {};
-      return fetch('/api/skill-doc?' + q.toString(), { headers });
+      return hudFetch('/api/skill-doc?' + q.toString(), { headers });
     }
 
     window.openSkillMarkdownDrawer = async function(skillDir, refRel = '', skillName = '') {
@@ -1687,6 +1824,9 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         void rBtn.offsetWidth;
         rBtn.classList.add('is-spinning');
       }
+      if (!activeEventSource || activeEventSource.readyState === 2) {
+        connectEventStream();
+      }
       loadSnapshot(true);
     });
     document.getElementById('refresh-btn').addEventListener('animationend', () => {
@@ -1975,10 +2115,25 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
 
     setTab(activeView);
 
+    function getFreshRoutingHint(data) {
+      const lr = data?.doctor?.latestRouting;
+      if (!lr || !Array.isArray(lr.skills) || !lr.skills.length) return null;
+      const ts = lr.at ? Date.parse(lr.at) : NaN;
+      if (!Number.isFinite(ts) || (Date.now() - ts) > 30 * 60 * 1000) return null;
+      return lr;
+    }
+
     function applySnapshot(data, forceRender = false) {
       if (!data || typeof data !== 'object') return;
       latestData = data;
-      document.getElementById('status-line').textContent = data.statusLine || '[OMA] No active modes';
+      if (document.documentElement) {
+        if (data.host && data.host !== 'antigravity') document.documentElement.dataset.host = String(data.host);
+        else delete document.documentElement.dataset.host;
+      }
+      const freshRt = (!data.statusLine || data.statusLine === '[OMA] No active modes') ? getFreshRoutingHint(data) : null;
+      document.getElementById('status-line').textContent = freshRt
+        ? ('[OMA] Routed $' + freshRt.skills.join(', $') + ' (planning)')
+        : (data.statusLine || '[OMA] No active modes');
       if (!forceRender && data.digest && data.digest === lastSnapshotDigest) {
         return;
       }
@@ -1989,14 +2144,28 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
     }
 
     async function loadSnapshot(forceRender = false) {
+      if (!forceRender && document.visibilityState === 'hidden') return;
+      const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
       try {
-        const res = await fetch('/api/status?' + buildStreamQuery().toString(), {
-          headers: token ? { 'X-Sidecar-Token': token } : {}
+        const res = await hudFetch('/api/status?' + buildStreamQuery().toString(), {
+          headers: token ? { 'X-Sidecar-Token': token } : {},
+          ...(ctrl ? { signal: ctrl.signal } : {}),
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) setSsePill('AUTH ERR', false);
+          else setSsePill('ERR ' + res.status, false);
+          return;
+        }
         const snap = await res.json();
+        if (activeEventSource && activeEventSource.readyState === 1) setSsePill('LIVE', true);
+        else setSsePill('POLL', false);
         applySnapshot(snap, forceRender);
-      } catch { /* fail open: transient status fetch failure */ }
+      } catch { /* fail open: transient status fetch failure or timeout */
+        setSsePill('OFFLINE', false);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
 
     window.navigateToWikiSlug = function(slug) {
@@ -2147,7 +2316,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         try {
           const sp = buildStreamQuery();
           sp.set('q', q);
-          const res = await fetch('/api/wiki-search?' + sp.toString(), {
+          const res = await hudFetch('/api/wiki-search?' + sp.toString(), {
             headers: token ? { 'X-Sidecar-Token': token } : {},
           });
           if (!res.ok) return;
@@ -2248,13 +2417,22 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
             </div>
           </div>\`;
       } else {
+        const freshRouting = getFreshRoutingHint(data);
         currentModeBodyHtml = \`
           <div class="mode-spotlight">
+            \${freshRouting ? \`
+            <div class="row-wrap-sm min0">
+              <code class="fw-600 fs-13">\${esc(freshRouting.skills.map((s) => '$' + s).join(' '))}</code>
+              <span class="badge badge-active">Planning / awaiting state write</span>
+              <span class="muted fs-12">Hook routed; state writes after plan approval</span>
+            </div>
+            \` : \`
             <div class="row-wrap-sm min0">
               <code class="fw-600 fs-13">solo</code>
               <span class="badge">default lane</span>
               <span class="muted fs-12">No active workflow mode</span>
             </div>
+            \`}
             \${lastCompleted ? \`<span class="muted tabular fs-12" title="Most recent completed mode">Last: <code>\${esc(lastCompleted.mode)}</code> (\${esc(lastCompleted.phase)})</span>\` : ''}
           </div>
           <div class="launchpad-grid">
@@ -2288,7 +2466,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           \${cancelControlHtml}
           <button type="button" class="action-btn" onclick="runQuickCommand(this, '/hud --handoff', 'active-chat')">Create Handoff</button>
           <button type="button" class="action-btn" onclick="runQuickCommand(this, '/doctor', 'active-chat')">Run /doctor</button>
-          <a class="action-btn" href="customization://oh-my-agy" title="Open oh-my-agy settings">Plugin Settings</a>
+          \${(!data.host || data.host === 'antigravity') ? '<a class="action-btn" href="customization://oh-my-agy" title="Open oh-my-agy settings">Plugin Settings</a>' : ''}
         </div>\`;
 
       const qgRows = (data.qualityGates || []).map((g) => \`<li><code>\${esc(g.stage)}</code> &rarr; <code>\${esc(g.skill)}</code> (\${esc(g.mode)}, \${esc(g.model)})</li>\`).join('');
@@ -2976,7 +3154,13 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         }).join('');
         const inputKey = 'wf:' + wf.id;
         const inputId = 'input-wf-' + wf.id;
-        const val = getPromptValue(inputKey, wf.quickStart);
+        const isCodex = data.host === 'codex';
+        const val = getPromptValue(inputKey, formatDefaultSkillPrompt(wf.quickStart, data.host));
+        const wfActionsHtml = isCodex
+          ? \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy workflow prompt for Codex">Copy</button>\`
+          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
+                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this command">New Chat</button>
+                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>\`;
         return \`
           <div class="card wf-card">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
@@ -2989,9 +3173,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
             <div class="cmd-box">
               <input type="text" class="cmd-input" id="\${esc(inputId)}" data-input-key="\${esc(inputKey)}" value="\${esc(val)}" oninput="onPromptEdit(this.dataset.inputKey, this.value)" />
               <div class="cmd-actions">
-                <button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
-                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this command">New Chat</button>
-                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>
+                \${wfActionsHtml}
               </div>
             </div>
           </div>\`;
@@ -3038,7 +3220,15 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         }).join(' ');
         const inputKey = 'skill:' + s.name;
         const inputId = 'input-skill-' + s.name;
-        const val = getPromptValue(inputKey, s.quickStart);
+        const isCodex = data.host === 'codex';
+        const val = getPromptValue(inputKey, formatDefaultSkillPrompt(s.quickStart, data.host));
+        const skillActionsHtml = isCodex
+          ? \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy skill prompt for Codex">Copy</button>
+                <button type="button" class="action-btn" data-skill="\${esc(s.dir || s.name)}" data-skill-name="\${esc(s.name)}" onclick="openSkillMarkdownDrawer(this.dataset.skill, '', this.dataset.skillName)" title="Preview \${esc(s.file || ('skills/' + s.name + '/SKILL.md'))}">Preview</button>\`
+          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
+                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this skill command">New Chat</button>
+                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>
+                <button type="button" class="action-btn" data-skill="\${esc(s.dir || s.name)}" data-skill-name="\${esc(s.name)}" onclick="openSkillMarkdownDrawer(this.dataset.skill, '', this.dataset.skillName)" title="Preview \${esc(s.file || ('skills/' + s.name + '/SKILL.md'))}">Preview</button>\`;
         return \`
           <div class="card">
             <div class="row-between mb-xs">
@@ -3053,10 +3243,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
             <div class="cmd-box">
               <input type="text" class="cmd-input" id="\${esc(inputId)}" data-input-key="\${esc(inputKey)}" value="\${esc(val)}" oninput="onPromptEdit(this.dataset.inputKey, this.value)" />
               <div class="cmd-actions">
-                <button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
-                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this skill command">New Chat</button>
-                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>
-                <button type="button" class="action-btn" data-skill="\${esc(s.dir || s.name)}" data-skill-name="\${esc(s.name)}" onclick="openSkillMarkdownDrawer(this.dataset.skill, '', this.dataset.skillName)" title="Preview \${esc(s.file || ('skills/' + s.name + '/SKILL.md'))}">Preview</button>
+                \${skillActionsHtml}
               </div>
             </div>
           </div>\`;
@@ -3113,35 +3300,39 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         container.innerHTML = '<div class="card muted">No subagents match the current filter.</div>';
         return;
       }
+      const isCodex = data.host === 'codex';
       container.innerHTML = filtered.map((a) => {
         const inputKey = 'sa:' + a.name;
         const inputId = 'input-sa-' + a.name;
         const val = getPromptValue(inputKey, a.defaultPrompt || '');
         const defaultTier = a.cliModel || 'inherit';
         const activeTier = selectedSubagentModels[a.name] || defaultTier;
-        const modelPills = MODEL_TIERS.map((tier) => \`
+        const modelPills = isCodex ? '' : MODEL_TIERS.map((tier) => \`
           <button type="button" class="chip-btn \${activeTier === tier ? 'chip-active' : ''}" aria-pressed="\${activeTier === tier ? 'true' : 'false'}" data-agent="\${esc(a.name)}" data-tier="\${tier}" onclick="setSubagentModel(this.dataset.agent, this.dataset.tier)"><code>\${tier}</code></button>\`).join('');
-        const snippet = buildSubagentInvokeSnippet(a.name, activeTier, val);
+        const snippet = buildSubagentInvokeSnippet(a.name, activeTier, val, data.host || 'antigravity');
+        const subagentActionsHtml = isCodex
+          ? \`<button type="button" class="action-btn action-btn-primary" data-agent="\${esc(a.name)}" onclick="copySubagentSnippet(this, this.dataset.agent)" title="Copy Codex subagent invocation prompt">Copy</button>\`
+          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(activeTier)}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-active')" title="Send into the active chat so the leader agent calls invoke_subagent">Dispatch into Active Chat</button>
+              <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(activeTier)}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-standalone')" title="Open a standalone specialist chat with --profile=\${esc(a.name)}">Launch Standalone Chat</button>
+              <button type="button" class="action-btn" data-agent="\${esc(a.name)}" onclick="copySubagentSnippet(this, this.dataset.agent)" title="Copy invoke_subagent call snippet">Copy Snippet</button>\`;
         return \`
         <div class="card">
           <div class="row-between mb-xs">
             <code class="fw-600 fs-13">\${highlightMatch(a.name, subagentSearch)}</code>
             <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
               <span class="badge">\${highlightMatch(a.lane, subagentSearch)}</span>
-              <span class="badge">Model: \${esc(activeTier)}</span>
+              \${isCodex ? '' : \`<span class="badge">Model: \${esc(activeTier)}</span>\`}
             </div>
           </div>
           <div class="mb-sm">\${highlightMatch(a.whenToUse, subagentSearch)}</div>
-          <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:4px;" role="group" aria-label="Model tier for \${esc(a.name)}">
+          \${isCodex ? '' : \`<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:4px;" role="group" aria-label="Model tier for \${esc(a.name)}">
             <span class="muted fs-12">Model:</span>\${modelPills}
-          </div>
+          </div>\`}
           <div class="cmd-box">
             <input type="text" class="cmd-input" id="\${esc(inputId)}" data-input-key="\${esc(inputKey)}" value="\${esc(val)}" oninput="onPromptEdit(this.dataset.inputKey, this.value)" placeholder="Task for \${esc(a.name)}&hellip;" />
             <div class="snippet-preview"><code id="sa-snippet-\${esc(a.name)}" data-default-tier="\${esc(defaultTier)}">\${esc(snippet)}</code></div>
             <div class="cmd-actions">
-              <button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(activeTier)}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-active')" title="Send into the active chat so the leader agent calls invoke_subagent">Dispatch into Active Chat</button>
-              <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(activeTier)}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-standalone')" title="Open a standalone specialist chat with --profile=\${esc(a.name)}">Launch Standalone Chat</button>
-              <button type="button" class="action-btn" data-agent="\${esc(a.name)}" onclick="copySubagentSnippet(this, this.dataset.agent)" title="Copy invoke_subagent call snippet">Copy Snippet</button>
+              \${subagentActionsHtml}
             </div>
           </div>
         </div>\`;
@@ -3153,13 +3344,16 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       const lanes = ['All', ...new Set(allSubagents.map((a) => a.lane))];
       const laneBtns = lanes.map((l) => \`
         <button type="button" class="tab-btn \${subagentLane === l ? 'active' : ''}" role="tab" aria-selected="\${subagentLane === l ? 'true' : 'false'}" tabindex="\${subagentLane === l ? '0' : '-1'}" data-sa-lane="\${esc(l)}" onclick="setSubagentLane(this.dataset.saLane)">\${esc(l)}</button>\`).join('');
+      const subagentSubtitle = data.host === 'codex'
+        ? 'Configured via <code>~/.codex/config.toml</code> (<code>[agents.&lt;role&gt;]</code>). Edit the task below and click Copy to paste a <code>spawn_agent</code> prompt into Codex chat.'
+        : 'Work-shape model routing: <code>flash_lite</code> / <code>flash</code> for quick mechanical lookups, <code>inherit</code> for cohesive implementation, and <code>pro</code> for architecture, critique, causal tracing, and security review.';
       document.getElementById('view-subagents').innerHTML = \`
         <div class="card">
           <div class="row-between mb-xs">
             <span class="fw-600">Role Subagents</span>
             <span id="subagents-match-count" class="badge tabular" aria-live="polite">\${allSubagents.length} specialists</span>
           </div>
-          <div class="muted mb-md">Work-shape model routing: <code>flash_lite</code> / <code>flash</code> for quick mechanical lookups, <code>inherit</code> for cohesive implementation, and <code>pro</code> for architecture, critique, causal tracing, and security review.</div>
+          <div class="muted mb-md">\${subagentSubtitle}</div>
           <input type="text" id="subagent-search-input" class="search-input" placeholder="Press / to search subagents by role, lane, or capability&hellip;" value="\${esc(subagentSearch)}" oninput="onSubagentSearchInput(this.value)" />
           <div class="tab-bar mb-0" data-sliding-tabs="sa-lane" role="tablist" aria-label="Subagent lanes">\${laneBtns}</div>
         </div>

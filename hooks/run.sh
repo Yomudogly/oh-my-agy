@@ -27,10 +27,19 @@ else
   fi
 fi
 if [ -z "$NODE" ]; then
+  _omagy_host="${OMAGY_HOST:-}"
+  _prev=""
+  for _a in "$@"; do
+    case "$_a" in
+      --host=claude|--host=codex|--host=antigravity) _omagy_host="${_a#--host=}" ;;
+    esac
+    if [ "$_prev" = "--host" ]; then _omagy_host="$_a"; fi
+    _prev="$_a"
+  done
   case "${1:-}" in
-    session-start|pre-invocation|pre-tool-use|stop|"")
+    session-start|pre-invocation|user-prompt-submit|pre-tool-use|post-tool-use|subagent-start|subagent-stop|pre-compact|post-compact|stop|"")
       while IFS= read -r _omagy_line || [ -n "$_omagy_line" ]; do :; done
-      if [ "${1:-}" = "stop" ]; then echo '{"decision":"stop"}'; else echo '{}'; fi
+      if [ "${1:-}" = "stop" ] && [ "$_omagy_host" != "claude" ] && [ "$_omagy_host" != "codex" ]; then echo '{"decision":"stop"}'; else echo '{}'; fi
       exit 0
       ;;
     *)

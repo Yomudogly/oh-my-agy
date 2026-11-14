@@ -34,12 +34,20 @@ export function buildSkillCommandWithFlags(baseCmd, flags = [], knownFlags = [])
   return [cmdToken, ...selected, ...rest].join(' ').trim();
 }
 
-export function buildSubagentInvokeSnippet(agentName, model = 'inherit', prompt = '') {
+export function buildSubagentInvokeSnippet(agentName, model = 'inherit', prompt = '', host = 'antigravity') {
   const agent = String(agentName || 'executor').trim() || 'executor';
+  const taskText = String(prompt || '').trim() || `Complete bounded slice for ${agent}`;
+  if (host === 'codex') {
+    const codexTask = taskText.replace(/^\/([a-z0-9-]+)(?=$|\s)/, (_m, slug) => '$' + slug);
+    return `Use spawn_agent (agent_type: ${JSON.stringify(agent)}) to: ${codexTask}`;
+  }
+  if (host === 'claude') {
+    const claudeTask = taskText.replace(/^\/([a-z0-9-]+)(?=$|\s)/, (_m, slug) => '$' + slug);
+    return `Use the ${agent} subagent to: ${claudeTask}`;
+  }
   const rawModel = String(model || 'inherit').trim();
   const allowedModels = ['inherit', 'flash_lite', 'flash', 'pro'];
   const tier = allowedModels.includes(rawModel) ? rawModel : 'inherit';
-  const taskText = String(prompt || '').trim() || `Complete bounded slice for ${agent}`;
   return `invoke_subagent({ TypeName: ${JSON.stringify(agent)}, Model: ${JSON.stringify(tier)}, Prompt: ${JSON.stringify(taskText)} })`;
 }
 
@@ -982,6 +990,7 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Oh My Agy</title>
+  <script src="/preload.js"></script>
   <style>
     /* hallmark: developer-workbench | system-sans + ui-monospace | concentric-surfaces | critique: h:9 r:9 c:9 t:8 d:9 */
     :root {
@@ -1042,8 +1051,24 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
       --wiki-cat-session-log: #ec4899; --wiki-cat-session-log-hi: #fce7f3; --wiki-cat-session-log-rim: #831843;
       --wiki-cat-default: #64748b; --wiki-cat-default-hi: #f1f5f9; --wiki-cat-default-rim: #1e293b;
     }
+    :root[data-host="codex"] {
+      --hud-bg: var(--background, #212121);
+      --hud-content: var(--content, #262626);
+      --hud-card: var(--card, #2a2a2a);
+      --hud-sidebar: var(--sidebar, #1b1b1b);
+      --hud-border: var(--border, rgba(255, 255, 255, 0.11));
+      --hud-border-strong: rgba(255, 255, 255, 0.22);
+      --hud-fg: var(--foreground, #ececec);
+      --hud-muted: var(--muted-foreground, #a1a1aa);
+      --hud-surface-subtle: rgba(255, 255, 255, 0.045);
+      --hud-surface-hover: rgba(255, 255, 255, 0.08);
+      --hud-surface-active: rgba(255, 255, 255, 0.12);
+      --hud-input-bg: rgba(0, 0, 0, 0.26);
+      --hud-scrim: rgba(0, 0, 0, 0.58);
+    }
     @media (prefers-color-scheme: light) {
-      :root {
+      :root,
+      :root[data-host="codex"] {
         --hud-bg: var(--background, #f8fafc);
         --hud-content: var(--content, #ffffff);
         --hud-card: var(--card, #ffffff);
@@ -1080,7 +1105,8 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
         --hud-shadow-drawer: -10px 0 28px rgba(15, 23, 42, 0.16);
       }
     }
-    html.light {
+    html.light,
+    html.light[data-host="codex"] {
       --hud-bg: var(--background, #f8fafc);
       --hud-content: var(--content, #ffffff);
       --hud-card: var(--card, #ffffff);
@@ -1102,7 +1128,9 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
     }
     @supports (color: color-mix(in srgb, #000, #fff)) {
       :root,
-      html.light {
+      :root[data-host="codex"],
+      html.light,
+      html.light[data-host="codex"] {
         --hud-border-strong: color-mix(in srgb, var(--hud-fg) 22%, var(--hud-border));
         --hud-surface-subtle: color-mix(in srgb, var(--hud-fg) 5.5%, transparent);
         --hud-surface-hover: color-mix(in srgb, var(--hud-fg) 10%, transparent);

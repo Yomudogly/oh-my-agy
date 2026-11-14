@@ -43,3 +43,26 @@ Resolve `SRC` (this plugin's directory, two levels up from `skills/doctor/SKILL.
 - **Update**: pull or replace the plugin directory (symlinked checkouts update in place), re-verify executable bits, and restart Antigravity.
 - **Uninstall**: remove the plugin directory (or use the `plugin` skill's `DeletePlugin` keyed on `<dir>`; if the plugin is currently disabled, set `"enabled": true` via `JetboxWriteState` first so `~/.gemini/config/config.json` does not retain a stale disabled entry on reinstall). Leave workspace `.omagy/` and `omagy_wiki/` intact unless the user explicitly asks to purge them.
 - **Exit evidence**: report chosen scope, target path (and whether it is a symlink), executable bits, `.gitignore` / `AGENTS.md` changes, and the restart requirement.
+
+## 6. Cross-Host Bundles (`Claude Code` & `OpenAI Codex` — Experimental)
+
+Keep the canonical repository pure Antigravity (`plugin.json` strict schema, zero tracked build output) and emit experimental host bundles on demand:
+
+```bash
+# Global (user-scope default: ~/.codex or ~/.claude — no --workspace required)
+sh "<PLUGIN_DIR>/hooks/run.sh" host-setup codex
+sh "<PLUGIN_DIR>/hooks/run.sh" host-setup claude
+
+# Per-project (defaults --scope project when --workspace is passed)
+sh "<PLUGIN_DIR>/hooks/run.sh" host-setup codex --workspace "<repo>"
+sh "<PLUGIN_DIR>/hooks/run.sh" host-setup claude --workspace "<repo>"
+
+# Strict offline bundle validation (omitting <bundleDir> auto-resolves user or --workspace bundle)
+sh "<PLUGIN_DIR>/hooks/run.sh" host-validate codex --strict --json
+sh "<PLUGIN_DIR>/hooks/run.sh" host-validate claude [--workspace "<repo>"] --strict --json
+```
+
+- **Flags**: `--scope user|project`, `--dir <bundleDir>`, `--workspace <proj>`, `--codex-home <dir>`, `--copy` (default standalone copy mode, accepted for compatibility), `--symlink` (optional contributor live symlinks), `--dry-run`, `--json`.
+- **Bundle Sync, Updating, Native Codex Plugin & Drift**: Copy mode is the default so global installs (`~/.codex`, `~/.claude`) stay standalone without Antigravity symlinks; re-run `host-setup <codex|claude>` after updating `oh-my-agy` to refresh files and cache versions. Codex `--scope user` registers native `oh-my-agy@oh-my-agy-local` across `marketplaces/oh-my-agy`, `plugins/cache/oh-my-agy-local/oh-my-agy/<ver>`, and `config.toml` (`[agents].enabled = true`, `[features].hooks = true`, stripping deprecated `[features].multi_agent`) while cleaning duplicate legacy entries in `hooks.json` and `skills/`, adapting `AGENTS.md`, `agents/`, and `skills/` prose cleanly, and writing `host-bundle.json` (`version`, `codexVersion`). On `SessionStart`, `checkHostBundleDrift` warns if canonical `plugin.json` is newer.
+- **Desktop-Only HUD**: `SessionStart` (and `$hud` `UserPromptSubmit`) spawns `sidecars/hud/main.mjs desktop-serve` idempotently **only** inside Desktop apps (`Claude Desktop` `.claude/launch.json` Preview `oh-my-agy-hud` on `48800..49799` or daemon `47800..48799`, and `Codex Desktop` Web Preview on `47800..48799`), and `sidecars/hud/run.sh desktop-ensure` returns `{ ok, url }` for clickable `/hud` links — never on CLI, VS Code, Cursor, JetBrains, or CI. Override with `OMAGY_DESKTOP_HUD=1` (force outside CLI/IDE/CI) or `OMAGY_DESKTOP_HUD=0` (disable).
+- **Codex `/hooks` Approval**: Never forge `[hooks.state]` in `.codex/config.toml`; instruct users to approve `oh-my-agy` hooks via Codex's built-in `/hooks` prompt.

@@ -54,6 +54,25 @@ import {
   resolveWorkflowStageState,
   selectCurrentMode,
 } from './ui.mjs';
+import {
+  dispatchDesktopHostAction,
+  inferRoutingRecordHost,
+  isRoutingHostCompatible,
+  normalizeHostPromptSigil,
+  resolveAntigravityBrainDir,
+  routingMatchesWorkspaces,
+  verifyAntigravityTargetConversation,
+} from './dispatch.mjs';
+import { computeDesktopHudPort, desktopHudRegistryFile } from '../../hooks/omagy-host.mjs';
+
+const ALLOWED_HUD_HOSTS = new Set(['antigravity', 'claude', 'codex']);
+const LOOPBACK_HOST_HEADER_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i;
+
+/** Normalize an explicit HUD host identifier, defaulting to 'antigravity'. */
+export function normalizeExplicitHudHost(rawHost) {
+  const host = String(rawHost || '').trim().toLowerCase();
+  return ALLOWED_HUD_HOSTS.has(host) ? host : 'antigravity';
+}
 
 export {
   HUD_HTML,
@@ -90,7 +109,23 @@ const WIKI_CATEGORIES = new Set(['architecture', 'decision', 'pattern', 'debuggi
 const ALLOWED_DISPATCH_MODES = new Set(['active-chat', 'new-chat', 'subagent-active', 'subagent-standalone']);
 const ALLOWED_CLI_MODELS = new Set(['flash_lite', 'flash', 'pro']);
 export const ALLOWED_VIEWS = ['overview', 'workflows', 'skills', 'subagents', 'wiki'];
-const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const SELF_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+function resolveCanonicalPluginRoot(selfRoot) {
+  const envRoot = String(process.env.OMAGY_PLUGIN_ROOT || '').trim();
+  if (envRoot && fs.existsSync(path.join(envRoot, 'plugin.json'))) return path.resolve(envRoot);
+  const metaPath = path.join(selfRoot, 'host-bundle.json');
+  if (fs.existsSync(metaPath)) {
+    try {
+      const meta = JSON.parse(stripUtf8Bom(fs.readFileSync(metaPath, 'utf8')));
+      if (meta?.pluginRoot && fs.existsSync(path.join(meta.pluginRoot, 'plugin.json'))) {
+        return path.resolve(meta.pluginRoot);
+      }
+    } catch { /* fail open: ignore unreadable host-bundle.json */ }
+  }
+  return selfRoot;
+}
+const PLUGIN_ROOT = resolveCanonicalPluginRoot(SELF_PLUGIN_ROOT);
+const SIDECAR_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
 const UI_MODULE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'ui.mjs');
 const CLIENT_MODULE_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'client.mjs');
 let liveUiMtimeMs = 0;
@@ -625,9 +660,12 @@ function readGitMetadataSignature(rootDir) {
   return `${indexSig}|${headSig}|${refSig}`;
 }
 
-function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy')) {
+function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy'), filterOpts = {}) {
   try {
     if (!fs.existsSync(runtimeDir) || fs.lstatSync(runtimeDir).isSymbolicLink()) return null;
+    const expectedHost = String(filterOpts?.host || 'antigravity').trim().toLowerCase() || 'antigravity';
+    const targetRoots = Array.isArray(filterOpts?.roots) ? filterOpts.roots : (filterOpts?.roots ? [filterOpts.roots] : []);
+    const brainDir = expectedHost === 'antigravity' ? resolveAntigravityBrainDir(filterOpts?.brainDir) : '';
     const routingFiles = fs.readdirSync(runtimeDir)
       .filter((f) => f.endsWith('.routing.json'))
       .map((f) => {
@@ -640,14 +678,28 @@ function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.jo
       .filter(Boolean)
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
     if (!routingFiles.length) return null;
-    const data = readJsonSafe(routingFiles[0].path);
-    if (!data) return null;
-    return {
-      conversationId: routingFiles[0].file.replace(/\.routing\.json$/, ''),
-      at: String(data.at || new Date(routingFiles[0].mtimeMs).toISOString()),
-      skills: Array.isArray(data.skills) ? data.skills.map(String) : [],
-      transcriptPath: String(data.transcriptPath || ''),
-    };
+    let unscopedFallback = null;
+    for (const rf of routingFiles) {
+      const data = readJsonSafe(rf.path);
+      if (!data) continue;
+      if (data.isSubagent === true) continue;
+      const conversationId = rf.file.replace(/\.routing\.json$/, '');
+      if (!isRoutingHostCompatible(data, expectedHost, conversationId, brainDir)) continue;
+      const workspaces = Array.isArray(data.workspaces) ? data.workspaces.map(String).filter(Boolean) : [];
+      const wsMatch = routingMatchesWorkspaces(workspaces, targetRoots);
+      if (wsMatch === 'mismatch') continue;
+      const record = {
+        conversationId,
+        host: inferRoutingRecordHost(data),
+        at: String(data.at || new Date(rf.mtimeMs).toISOString()),
+        skills: Array.isArray(data.skills) ? data.skills.map(String) : [],
+        workspaces,
+        transcriptPath: String(data.transcriptPath || ''),
+      };
+      if (wsMatch === 'match') return record;
+      if (!unscopedFallback) unscopedFallback = record;
+    }
+    return unscopedFallback;
   } catch { /* fail open: runtime directory unavailable */
     return null;
   }
@@ -655,7 +707,7 @@ function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.jo
 
 export function getCachedCodeHealth(primaryRoot, nowMs = Date.now(), transcriptPath = null) {
   const rootKey = path.resolve(primaryRoot);
-  const txPath = typeof transcriptPath === 'string' ? transcriptPath.trim() : (readLatestRouting()?.transcriptPath || '');
+  const txPath = typeof transcriptPath === 'string' ? transcriptPath.trim() : (readLatestRouting(undefined, { roots: [rootKey] })?.transcriptPath || '');
   const txSig = txPath ? `${txPath}:${statMtimeToken(txPath)}` : 'notx';
   const gitSig = `${readGitMetadataSignature(rootKey)}|${txSig}`;
   const cached = codeHealthCache.get(rootKey);
@@ -1215,12 +1267,32 @@ export function resolveSafeSkillDoc(pluginRoot = PLUGIN_ROOT, skillKey = '', ref
   }
 }
 
-export function resolveActiveConversationId(workspaceRoot = process.cwd(), explicitId = '') {
+/**
+ * Resolve ordered active conversation candidates filtered by host, workspace, and Antigravity brain dir.
+ */
+export function resolveActiveConversationCandidates(workspaceRoot = process.cwd(), explicitId = '', options = {}) {
   const validIdRe = /^[a-zA-Z0-9_-]{6,80}$/;
-  const trimmedExplicit = String(explicitId || '').trim();
-  if (validIdRe.test(trimmedExplicit)) return trimmedExplicit;
+  const host = String(options?.host || 'antigravity').trim().toLowerCase() || 'antigravity';
+  const runtimeDir = options?.runtimeDir || process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
+  const effectiveBrainDir = host === 'antigravity' ? resolveAntigravityBrainDir(options?.brainDir) : '';
+  const targetRoots = Array.isArray(options?.workspaceRoots) && options.workspaceRoots.length
+    ? options.workspaceRoots
+    : (() => {
+      const p = uriToFsPath(workspaceRoot) || String(workspaceRoot || '').trim();
+      return p ? [p] : [];
+    })();
 
-  const runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
+  const candidates = [];
+  const seen = new Set();
+  const pushCandidate = (rawId) => {
+    const id = String(rawId || '').trim();
+    if (!id || !validIdRe.test(id) || seen.has(id)) return;
+    seen.add(id);
+    candidates.push(id);
+  };
+
+  pushCandidate(explicitId);
+
   try {
     if (fs.existsSync(runtimeDir) && !fs.lstatSync(runtimeDir).isSymbolicLink()) {
       const routingFiles = fs.readdirSync(runtimeDir)
@@ -1229,12 +1301,28 @@ export function resolveActiveConversationId(workspaceRoot = process.cwd(), expli
           const p = path.join(runtimeDir, f);
           try {
             const st = fs.lstatSync(p);
-            return st.isFile() && !st.isSymbolicLink() ? { id: f.replace(/\.routing\.json$/, ''), mtimeMs: st.mtimeMs } : null;
+            return st.isFile() && !st.isSymbolicLink()
+              ? { id: f.replace(/\.routing\.json$/, ''), path: p, mtimeMs: st.mtimeMs }
+              : null;
           } catch { /* fail open: skip unreadable routing file */ return null; }
         })
         .filter((r) => r && validIdRe.test(r.id))
         .sort((a, b) => b.mtimeMs - a.mtimeMs);
-      if (routingFiles.length) return routingFiles[0].id;
+
+      const matched = [];
+      const unscoped = [];
+      for (const rf of routingFiles) {
+        const data = readJsonSafe(rf.path);
+        if (!data || data.isSubagent === true) continue;
+        if (!isRoutingHostCompatible(data, host, rf.id, effectiveBrainDir)) continue;
+        const workspaces = Array.isArray(data.workspaces) ? data.workspaces.map(String).filter(Boolean) : [];
+        const wsMatch = routingMatchesWorkspaces(workspaces, targetRoots);
+        if (wsMatch === 'mismatch') continue;
+        if (wsMatch === 'match') matched.push(rf.id);
+        else unscoped.push(rf.id);
+      }
+      for (const id of matched) pushCandidate(id);
+      for (const id of unscoped) pushCandidate(id);
     }
   } catch { /* fail open: runtime directory unavailable */ }
 
@@ -1257,15 +1345,59 @@ export function resolveActiveConversationId(workspaceRoot = process.cwd(), expli
     const sorted = records
       .filter((r) => validIdRe.test(r.owner))
       .sort((a, b) => b.updatedMs - a.updatedMs);
-    if (sorted.length) return sorted[0].owner;
+    for (const r of sorted) {
+      if (effectiveBrainDir) {
+        try {
+          const st = fs.lstatSync(path.join(effectiveBrainDir, r.owner));
+          if (!st.isDirectory() || st.isSymbolicLink()) continue;
+        } catch { /* fail open: skip state owner absent from antigravity brain directory */
+          continue;
+        }
+      }
+      pushCandidate(r.owner);
+    }
   } catch { /* fail open: state directory unavailable */ }
 
-  return '';
+  if (effectiveBrainDir) {
+    try {
+      const brainEntries = fs.readdirSync(effectiveBrainDir)
+        .filter((name) => name && !name.startsWith('.') && !name.startsWith('tempmedia') && validIdRe.test(name))
+        .map((name) => {
+          const dirPath = path.join(effectiveBrainDir, name);
+          try {
+            const st = fs.lstatSync(dirPath);
+            if (!st.isDirectory() || st.isSymbolicLink()) return null;
+            let sortMs = st.mtimeMs;
+            try {
+              const txStat = fs.lstatSync(path.join(dirPath, '.system_generated', 'logs', 'transcript.jsonl'));
+              if (txStat.isFile() && !txStat.isSymbolicLink()) sortMs = txStat.mtimeMs;
+            } catch { /* fail open: fallback to brain directory mtime when transcript is absent */ }
+            return { id: name, mtimeMs: sortMs };
+          } catch { /* fail open: skip unreadable brain directory entry */
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        .slice(0, 8);
+      for (const entry of brainEntries) pushCandidate(entry.id);
+    } catch { /* fail open: antigravity brain directory scan unavailable */ }
+  }
+
+  return candidates;
+}
+
+export function resolveActiveConversationId(workspaceRoot = process.cwd(), explicitId = '', options = {}) {
+  return resolveActiveConversationCandidates(workspaceRoot, explicitId, options)[0] || '';
 }
 
 function resolveAgentApiBinary() {
   if (process.env.OMAGY_AGENTAPI_BIN) {
     return { bin: process.env.OMAGY_AGENTAPI_BIN, prefixArgs: [] };
+  }
+  const envExe = String(process.env.ANTIGRAVITY_AGENTAPI_EXE || '').trim();
+  if (envExe && fs.existsSync(envExe)) {
+    return { bin: envExe, prefixArgs: ['agentapi'] };
   }
   const homeBin = path.join(os.homedir(), '.gemini', 'antigravity', 'bin', 'agentapi');
   if (fs.existsSync(homeBin)) {
@@ -1283,7 +1415,7 @@ function makeDispatchTitle(prefix, prompt) {
   return `[${prefix}] ${clean}`;
 }
 
-export function dispatchHudAction(payload = {}, options = {}) {
+function validateDispatchRequest(payload = {}, options = {}) {
   const mode = String(payload?.mode || '').trim();
   if (!ALLOWED_DISPATCH_MODES.has(mode)) {
     return { ok: false, status: 400, error: `Invalid dispatch mode: ${mode || '(empty)'}` };
@@ -1313,6 +1445,14 @@ export function dispatchHudAction(payload = {}, options = {}) {
     cliModel = requestedModel ? normalizeCliModel(requestedModel) : subagentMeta.cliModel;
   }
 
+  return { ok: true, mode, rawPrompt, pluginRoot, workspaceRoot, agentName, cliModel };
+}
+
+export function dispatchHudAction(payload = {}, options = {}) {
+  const reqCheck = validateDispatchRequest(payload, options);
+  if (!reqCheck.ok) return reqCheck;
+  const { mode, rawPrompt, workspaceRoot, agentName, cliModel } = reqCheck;
+
   const { bin, prefixArgs } = resolveAgentApiBinary();
   const runner = typeof options.runner === 'function'
     ? options.runner
@@ -1331,8 +1471,23 @@ export function dispatchHudAction(payload = {}, options = {}) {
       return { ok: true, status: 200, modeUsed: 'new-chat', fallback: false, ...res };
     }
 
+    const explicitConvId = String(payload?.conversationId || '').trim();
+    const resolveTargetConv = () => {
+      const targetWs = uriToFsPath(workspaceRoot) || String(workspaceRoot || '').trim();
+      const candidates = resolveActiveConversationCandidates(workspaceRoot, explicitConvId, {
+        host: 'antigravity',
+        workspaceRoots: targetWs ? [targetWs] : [],
+      });
+      return verifyAntigravityTargetConversation({
+        candidates,
+        explicitId: explicitConvId,
+        workspaceRoots: targetWs ? [targetWs] : [],
+        invoke: (args) => invokeAgentApi(args),
+      });
+    };
+
     if (mode === 'active-chat') {
-      const convId = resolveActiveConversationId(workspaceRoot, payload?.conversationId);
+      const convId = resolveTargetConv();
       const title = makeDispatchTitle('HUD', rawPrompt);
       if (convId) {
         try {
@@ -1350,7 +1505,7 @@ export function dispatchHudAction(payload = {}, options = {}) {
       const modelLabel = cliModel || 'inherit';
       const delegationPrompt = `Use invoke_subagent with TypeName="${agentName}" and Model="${modelLabel}" to complete this task: ${rawPrompt}`;
       const title = makeDispatchTitle(agentName, rawPrompt);
-      const convId = resolveActiveConversationId(workspaceRoot, payload?.conversationId);
+      const convId = resolveTargetConv();
       if (convId) {
         try {
           const res = invokeAgentApi(['send-message', `--title=${title}`, '--', convId, delegationPrompt]);
@@ -1407,6 +1562,34 @@ export function dispatchHudAction(payload = {}, options = {}) {
   }
 }
 
+/** Dispatch validated HUD actions across Antigravity (sync) or Claude/Codex Desktop transports. */
+export async function dispatchHudActionAsync(payload = {}, options = {}) {
+  const rawOptHost = String(options.host || '').trim().toLowerCase();
+  const host = ALLOWED_HUD_HOSTS.has(rawOptHost) ? rawOptHost : normalizeExplicitHudHost(payload?.host);
+  if (host === 'antigravity') {
+    return dispatchHudAction(payload, options);
+  }
+  const reqCheck = validateDispatchRequest(payload, options);
+  if (!reqCheck.ok) return reqCheck;
+  const normPrompt = normalizeHostPromptSigil(reqCheck.rawPrompt, host, options.skillSlugs ? new Set(options.skillSlugs) : undefined);
+  const effectivePrompt = reqCheck.mode === 'subagent-active'
+    ? `Use ${reqCheck.agentName} subagent (${reqCheck.cliModel || 'inherit'}) to complete this task: ${normPrompt}`
+    : normPrompt;
+  return dispatchDesktopHostAction(
+    {
+      host,
+      mode: reqCheck.mode,
+      rawPrompt: normPrompt,
+      workspaceRoot: reqCheck.workspaceRoot,
+      agentName: reqCheck.agentName,
+      cliModel: reqCheck.cliModel,
+      effectivePrompt,
+    },
+    payload,
+    options,
+  );
+}
+
 function canonicalizeForDigest(value, isRoot = false) {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value === undefined ? null : value);
@@ -1443,12 +1626,23 @@ export function resolveWorkspaceRoots(rawWorkspaces = [], fallbackWorkspaceRoot 
   if (!candidates.length && process.env.OMAGY_WORKSPACE && fs.existsSync(process.env.OMAGY_WORKSPACE)) {
     candidates.push(process.env.OMAGY_WORKSPACE);
   }
+  if (!candidates.length && path.resolve(process.cwd()) === SIDECAR_DIR) {
+    const latestWs = readLatestRouting()?.workspaces || [];
+    for (const w of latestWs) {
+      if (typeof w === 'string' && path.isAbsolute(w) && fs.existsSync(w)) candidates.push(w);
+    }
+  }
   if (!candidates.length && fs.existsSync(process.cwd())) {
     candidates.push(process.cwd());
   }
   const roots = [...new Set(candidates.map(resolveStateRoot))];
   let primaryRoot = roots[0] || process.cwd();
   const rawPref = typeof preferredRoot === 'string' ? preferredRoot.trim() : '';
+  if (!rawPref && roots.length > 1 && !fs.existsSync(path.join(primaryRoot, '.omagy'))) {
+    primaryRoot = roots.find((r) => fs.existsSync(path.join(r, '.omagy', 'state')))
+      || roots.find((r) => fs.existsSync(path.join(r, '.omagy')))
+      || primaryRoot;
+  }
   if (rawPref) {
     const prefFs = uriToFsPath(rawPref) || (path.isAbsolute(rawPref) ? rawPref : '');
     if (prefFs) {
@@ -1464,7 +1658,7 @@ export function resolveWorkspaceRoots(rawWorkspaces = [], fallbackWorkspaceRoot 
   return { roots, primaryRoot };
 }
 
-export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferredRoot = '') {
+export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferredRoot = '', extraOpts = {}) {
   const { roots, primaryRoot } = resolveWorkspaceRoots(rawWorkspaces, '', preferredRoot);
   const scopeEntries = [];
   const seenScopeRoots = new Set();
@@ -1696,23 +1890,82 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   const rpRecord = allModeRecords.find((m) => m.mode === 'ralplan')
     || allModeRecords.find((m) => m.mode === 'autopilot' && (m.raw?.state?.ralplan || m.raw?.state?.handoff_artifacts?.ralplan || m.raw?.handoff_artifacts?.ralplan));
   if (rpRecord) {
-    const ho = rpRecord.raw?.state?.handoff_artifacts?.ralplan || rpRecord.raw?.handoff_artifacts?.ralplan || rpRecord.raw?.state?.ralplan || rpRecord.raw?.state || {};
+    const rpSub = (rpRecord.raw?.state?.ralplan && typeof rpRecord.raw.state.ralplan === 'object') ? rpRecord.raw.state.ralplan : {};
+    const hoRaw = rpRecord.raw?.state?.handoff_artifacts?.ralplan || rpRecord.raw?.handoff_artifacts?.ralplan;
+    const ho = (hoRaw && typeof hoRaw === 'object') ? hoRaw : (Object.keys(rpSub).length ? rpSub : (rpRecord.raw?.state || {}));
     const rpScope = rpRecord.scope || '.';
     const rpPrefix = rpScope !== '.' ? `${rpScope}/` : '';
-    const hoArts = Array.isArray(ho.planning_artifacts) ? ho.planning_artifacts.map((p) => String(p).replace(/^\/+/, '')) : [];
-    const revLog = String(ho.review_log_path || '').trim().replace(/^\/+/, '');
-    const rcPath = String(ho.receipt_path || '').trim().replace(/^\/+/, '');
-    const combinedArts = [...new Set([...hoArts, ...(revLog ? [revLog] : []), ...(rcPath ? [rcPath] : [])])]
-      .map((p) => (rpPrefix && !p.startsWith(rpPrefix) && p.startsWith('.omagy/') ? `${rpPrefix}${p}` : p));
+    const rpRoot = scopeEntries.find((sc) => sc.scope === rpScope)?.root || primaryRoot;
+    const toCleanRel = (p) => {
+      const s = String(p || '').trim();
+      if (!s) return '';
+      if (path.isAbsolute(s) && rpRoot) {
+        const rel = path.relative(rpRoot, s).replace(/\\/g, '/');
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+      }
+      return s.replace(/^\/+/, '');
+    };
+    const toScopedRel = (p) => {
+      const clean = toCleanRel(p);
+      return clean && rpPrefix && !clean.startsWith(rpPrefix) && clean.startsWith('.omagy/') ? `${rpPrefix}${clean}` : clean;
+    };
+    const stripScope = (p) => (rpPrefix && p.startsWith(rpPrefix) ? p.slice(rpPrefix.length) : p);
+    const rcPath = toCleanRel(ho.receipt_path || rpSub.receipt_path || '');
+    const safeRc = rcPath ? resolveSafeArtifactFile(rpRoot, stripScope(rcPath)) : null;
+    const rcJson = (safeRc && safeRc.filePath.endsWith('.json')) ? (readJsonSafe(safeRc.filePath) || {}) : {};
+    const combinedArts = [...new Set([
+      ...(Array.isArray(ho.planning_artifacts) ? ho.planning_artifacts : []),
+      ...(Array.isArray(rpSub.planning_artifacts) ? rpSub.planning_artifacts : []),
+      ...(Array.isArray(rcJson.planning_artifacts) ? rcJson.planning_artifacts : []),
+      ho.prd_path, rpSub.prd_path, rcJson.prd_path,
+      ho.test_spec_path, rpSub.test_spec_path, rcJson.test_spec_path,
+      ho.review_path, rpSub.review_path, rcJson.review_path,
+      ho.review_log_path, rpSub.review_log_path, rcJson.review_log_path,
+      rcPath,
+    ].map(toScopedRel).filter(Boolean))];
+    const revMdRel = toCleanRel(ho.review_path || rpSub.review_path || rcJson.review_path || ho.review_log_path || rpSub.review_log_path || '');
+    const safeRevMd = (revMdRel && revMdRel.endsWith('.md')) ? resolveSafeArtifactFile(rpRoot, stripScope(revMdRel)) : null;
+    const revMdText = safeRevMd ? readTextSafe(safeRevMd.filePath) : '';
+    const revArch = revMdText ? (/architect[^\n:]*:\s*`?(APPROVE|CLEAR|WATCH|BLOCK|ITERATE|REJECT)`?/i.exec(revMdText)?.[1] || '') : '';
+    const revCrit = revMdText ? (/critic[^\n:]*:\s*`?(APPROVE|ITERATE|REJECT)`?/i.exec(revMdText)?.[1] || '') : '';
+    const archVerdict = String(
+      ho.ralplan_architect_review?.verdict || rpSub.ralplan_architect_review?.verdict
+      || ho.architect_verdict || rpSub.architect_verdict || rcJson.architect_verdict
+      || ho.ralplan_execution_handoff?.architect_status || rpSub.architect_status || rcJson.architect_status
+      || (revArch ? revArch.toUpperCase() : '')
+      || ho.verdict || rpSub.verdict || rcJson.verdict
+      || 'pending',
+    );
+    const critVerdict = String(
+      ho.ralplan_critic_review?.verdict || rpSub.ralplan_critic_review?.verdict
+      || ho.critic_verdict || rpSub.critic_verdict || rcJson.critic_verdict
+      || ho.ralplan_execution_handoff?.critic_verdict || rpSub.critic_status || rcJson.critic_status
+      || (revCrit ? revCrit.toUpperCase() : '')
+      || ho.verdict || rpSub.verdict || rcJson.verdict
+      || 'pending',
+    );
+    const consensusDone = Boolean(
+      ho.ralplan_consensus_gate?.complete ?? rpSub.ralplan_consensus_gate?.complete
+      ?? ho.consensus_complete ?? rpSub.consensus_complete ?? rcJson.consensus_complete
+      ?? ho.ralplan_execution_handoff?.authorized
+      ?? (critVerdict.toUpperCase() === 'APPROVE'),
+    );
+    const execAuth = Boolean(
+      ho.ralplan_execution_handoff?.authorized
+      ?? ho.execution_authorized ?? rpSub.execution_authorized ?? rcJson.execution_authorized
+      ?? consensusDone,
+    );
+    const rpPhaseRaw = String(rpRecord.phase || '');
+    const inPlanPhase = ['ralplan', 'ralplan_gate', 'plan', 'planning'].includes(rpPhaseRaw.toLowerCase());
     reviews.ralplan = {
       scope: rpScope,
-      active: rpRecord.active,
-      phase: rpRecord.phase,
-      iteration: rpRecord.iteration ?? 1,
-      architectVerdict: String(ho.ralplan_architect_review?.verdict || ho.architect_verdict || ho.ralplan_execution_handoff?.architect_status || 'pending'),
-      criticVerdict: String(ho.ralplan_critic_review?.verdict || ho.critic_verdict || ho.ralplan_execution_handoff?.critic_verdict || 'pending'),
-      consensusComplete: Boolean(ho.ralplan_consensus_gate?.complete ?? ho.consensus_complete ?? ho.ralplan_execution_handoff?.authorized ?? false),
-      executionAuthorized: Boolean(ho.ralplan_execution_handoff?.authorized ?? ho.execution_authorized ?? false),
+      active: rpRecord.mode === 'autopilot' ? (rpRecord.active && inPlanPhase) : rpRecord.active,
+      phase: (rpRecord.mode === 'autopilot' && !inPlanPhase && consensusDone) ? 'complete' : rpRecord.phase,
+      iteration: Number(rpSub.iteration ?? (ho !== rpRecord.raw?.state ? ho.iteration : undefined) ?? rcJson.iteration ?? rpRecord.iteration ?? 1),
+      architectVerdict: archVerdict,
+      criticVerdict: critVerdict,
+      consensusComplete: consensusDone,
+      executionAuthorized: execAuth,
       planningArtifacts: combinedArts,
     };
   }
@@ -1747,20 +2000,34 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
               weakened,
               killed,
             });
-          } else if (name.startsWith('ralplan-review-') && !reviews.ralplan) {
+          } else if (name.startsWith('ralplan-review-')) {
+            const relFile = `${relPrefix}.omagy/plans/${name}`;
             const archMatch = /architect[^\n:]*:\s*`?(APPROVE|CLEAR|WATCH|BLOCK|ITERATE|REJECT)`?/i.exec(text);
             const critMatch = /critic[^\n:]*:\s*`?(APPROVE|ITERATE|REJECT)`?/i.exec(text);
-            reviews.ralplan = {
-              scope: sc.scope,
-              active: false,
-              phase: 'complete',
-              iteration: 1,
-              architectVerdict: archMatch ? archMatch[1].toUpperCase() : 'recorded',
-              criticVerdict: critMatch ? critMatch[1].toUpperCase() : 'recorded',
-              consensusComplete: Boolean(critMatch && critMatch[1].toUpperCase() === 'APPROVE'),
-              executionAuthorized: false,
-              planningArtifacts: [`${relPrefix}.omagy/plans/${name}`],
-            };
+            if (!reviews.ralplan) {
+              reviews.ralplan = {
+                scope: sc.scope,
+                active: false,
+                phase: 'complete',
+                iteration: 1,
+                architectVerdict: archMatch ? archMatch[1].toUpperCase() : 'recorded',
+                criticVerdict: critMatch ? critMatch[1].toUpperCase() : 'recorded',
+                consensusComplete: Boolean(critMatch && critMatch[1].toUpperCase() === 'APPROVE'),
+                executionAuthorized: false,
+                planningArtifacts: [relFile],
+              };
+            } else if ((reviews.ralplan.scope || '.') === (sc.scope || '.')) {
+              if (!reviews.ralplan.planningArtifacts.includes(relFile)) {
+                reviews.ralplan.planningArtifacts.push(relFile);
+              }
+              if (reviews.ralplan.architectVerdict === 'pending' && archMatch) {
+                reviews.ralplan.architectVerdict = archMatch[1].toUpperCase();
+              }
+              if (reviews.ralplan.criticVerdict === 'pending' && critMatch) {
+                reviews.ralplan.criticVerdict = critMatch[1].toUpperCase();
+                if (reviews.ralplan.criticVerdict === 'APPROVE') reviews.ralplan.consensusComplete = true;
+              }
+            }
           }
         }
       }
@@ -2210,7 +2477,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   // 9. Quality gates & Doctor / Hook Diagnostics
   const qg = validateQualityGates(primaryRoot);
   const runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
-  const latestRouting = readLatestRouting(runtimeDir);
+  const latestRouting = readLatestRouting(runtimeDir, { host: normalizeExplicitHudHost(extraOpts?.host), roots });
 
   const hookErrorsFile = path.join(primaryRoot, '.omagy', 'logs', 'hook-errors.jsonl');
   const hookErrors = fs.existsSync(hookErrorsFile)
@@ -2260,6 +2527,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
     trackedScopes,
     statusLine,
     allowedViews: ALLOWED_VIEWS,
+    host: normalizeExplicitHudHost(extraOpts?.host),
     modes,
     ultragoal,
     teams,
@@ -2295,6 +2563,100 @@ function verifyHudToken(expected, provided) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function parseCookieHeader(rawCookie) {
+  const map = new Map();
+  for (const part of String(rawCookie || '').split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) map.set(k, v);
+  }
+  return map;
+}
+
+const NON_BROWSER_UA_RE = /^(?:curl|wget|python-requests|python-urllib|aiohttp|httpx|go-http-client|node|undici|axios|libwww|httpie|fetch|ruby|java|php)\b/i;
+
+function isBrowserNavigationRequest(req) {
+  const headers = req?.headers || {};
+  const accept = String(headers.accept || '').toLowerCase();
+  const ua = String(headers['user-agent'] || '').trim();
+  const secSite = String(headers['sec-fetch-site'] || '').toLowerCase();
+  const secMode = String(headers['sec-fetch-mode'] || '').toLowerCase();
+  const secDest = String(headers['sec-fetch-dest'] || '').toLowerCase();
+  if (!accept.includes('text/html')) return false;
+  if (!ua || NON_BROWSER_UA_RE.test(ua)) return false;
+  if (!/(?:mozilla\/|applewebkit\/|chrome\/|safari\/|firefox\/|electron\/|codex|claude)/i.test(ua)) return false;
+  if (secSite !== 'none' && secSite !== 'same-origin') return false;
+  if (secMode !== 'navigate' || secDest !== 'document') return false;
+  return true;
+}
+
+function hasHostileFetchMetadata(req) {
+  const headers = req?.headers || {};
+  const secSite = String(headers['sec-fetch-site'] || '').toLowerCase();
+  const secDest = String(headers['sec-fetch-dest'] || '').toLowerCase();
+  if (secSite && secSite !== 'none' && secSite !== 'same-origin') return true;
+  if (secDest && (secDest === 'iframe' || secDest === 'frame' || secDest === 'object' || secDest === 'embed')) return true;
+  return false;
+}
+
+function verifySameUidLoopbackPeer(req, options = {}) {
+  if (typeof options.sameUidVerifier === 'function') return Boolean(options.sameUidVerifier(req));
+  if (process.platform !== 'linux' || typeof process.getuid !== 'function') return true;
+  const rPort = Number(req?.socket?.remotePort || 0);
+  const lPort = Number(req?.socket?.localPort || 0);
+  if (!rPort || !lPort) return false;
+  const rHex = rPort.toString(16).toUpperCase().padStart(4, '0');
+  const lHex = lPort.toString(16).toUpperCase().padStart(4, '0');
+  const myUid = process.getuid();
+  const loopbackHexIps = new Set(['0100007F', '00000000000000000000000001000000', '0000000000000000FFFF00000100007F']);
+  const activeStates = new Set(['01', '04', '05', '08']);
+  let procReadable = false;
+  for (const procPath of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let raw = '';
+    try {
+      raw = fs.readFileSync(procPath, 'utf8');
+      procReadable = true;
+    } catch { /* fail open: procfs unavailable */ continue; }
+    const lines = raw.split('\n').slice(1);
+    for (const line of lines) {
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 8 || !activeStates.has(String(cols[3] || '').toUpperCase())) continue;
+      const [locIpRaw, locPRaw] = String(cols[1] || '').split(':');
+      const [remIpRaw, remPRaw] = String(cols[2] || '').split(':');
+      if (
+        String(locPRaw || '').toUpperCase() === rHex
+        && String(remPRaw || '').toUpperCase() === lHex
+        && loopbackHexIps.has(String(locIpRaw || '').toUpperCase())
+        && loopbackHexIps.has(String(remIpRaw || '').toUpperCase())
+      ) {
+        return Number(cols[7]) === myUid;
+      }
+    }
+  }
+  return !procReadable;
+}
+
+function isPathInsideBase(candidate, baseRoot) {
+  if (!candidate || !baseRoot) return false;
+  let realCand = path.resolve(candidate);
+  let realBase = path.resolve(baseRoot);
+  try { realCand = fs.realpathSync(realCand); } catch { /* fail open: non-existent candidate */ }
+  try { realBase = fs.realpathSync(realBase); } catch { /* fail open: non-existent base */ }
+  return realCand === realBase || realCand.startsWith(realBase + path.sep);
+}
+
+function clampDesktopWorkspaces(workspaces, pinnedRoot, activeRoot = '') {
+  if (!pinnedRoot) return { workspaces, activeRoot };
+  const kept = (Array.isArray(workspaces) ? workspaces : []).filter((w) => {
+    const p = uriToFsPath(w) || (typeof w === 'string' && path.isAbsolute(w.trim()) ? w.trim() : '');
+    return p && isPathInsideBase(p, pinnedRoot);
+  });
+  const clampedActive = activeRoot && isPathInsideBase(uriToFsPath(activeRoot) || activeRoot, pinnedRoot) ? activeRoot : '';
+  return { workspaces: kept.length ? kept : [pinnedRoot], activeRoot: clampedActive };
+}
+
 function parseWorkspacesQuery(reqUrl, fallbackWorkspaceRoot = '') {
   let workspaces = [];
   const rawWs = reqUrl.searchParams.get('workspaces');
@@ -2318,58 +2680,151 @@ export function createHudServer(token, options = {}) {
     ? (envToken || crypto.randomBytes(24).toString('hex'))
     : String(token || '');
   const statusRequiresToken = options.statusRequiresToken ?? (token === undefined ? Boolean(envToken) : Boolean(expectedToken));
+  const hudHost = normalizeExplicitHudHost(options.host);
+  const desktopServe = Boolean(options.desktopServe);
+  const pinnedWorkspaceRoot = desktopServe && options.workspaceRoot ? path.resolve(options.workspaceRoot) : '';
   const debounceMs = Math.max(10, Number(options.debounceMs ?? 150));
   const sseHeartbeatMs = Math.max(25, Number(options.sseHeartbeatMs ?? 25000));
+  const maxSseClients = Math.max(1, Number(options.maxSseClients ?? 2));
   const forceFlatWatch = Boolean(options.forceFlatWatch);
   const activeSseCleanups = new Set();
+  const sessionSecret = crypto.randomBytes(32);
+  let activeDispatches = 0;
+  const dispatchTimestamps = [];
+  let cachedSkillSlugs = Array.isArray(options.skillSlugs) ? options.skillSlugs : null;
+  const getSkillSlugs = () => {
+    if (!cachedSkillSlugs) {
+      cachedSkillSlugs = buildPluginCatalog(options.pluginRoot || PLUGIN_ROOT).skills.map((s) => s.name);
+    }
+    return cachedSkillSlugs;
+  };
+
+  const mintSessionCookie = () => {
+    const ts = String(Date.now());
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const sig = crypto.createHmac('sha256', sessionSecret).update(`${ts}.${nonce}`).digest('hex');
+    return `omagy_hud_sess=${ts}.${nonce}.${sig}; HttpOnly; SameSite=Strict; Path=/`;
+  };
+
+  const verifySessionCookie = (req) => {
+    const raw = parseCookieHeader(req.headers.cookie).get('omagy_hud_sess');
+    if (!raw) return false;
+    const parts = raw.split('.');
+    if (parts.length !== 3) return false;
+    const [ts, nonce, sig] = parts;
+    const issuedAt = Number(ts);
+    if (!Number.isFinite(issuedAt) || Date.now() - issuedAt > 12 * 3600 * 1000 || issuedAt > Date.now() + 60_000) {
+      return false;
+    }
+    if (!/^[a-f0-9]{32}$/i.test(nonce) || !/^[a-f0-9]{64}$/i.test(sig)) return false;
+    const expectedSig = crypto.createHmac('sha256', sessionSecret).update(`${ts}.${nonce}`).digest('hex');
+    const a = Buffer.from(sig, 'hex');
+    const b = Buffer.from(expectedSig, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  };
 
   const server = http.createServer((req, res) => {
     const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    if (typeof options.onActivity === 'function') {
+      try { options.onActivity(); } catch { /* fail open: ignore activity callback error */ }
+    }
+    const hdrHost = String(req.headers.host || '').trim();
+    if (desktopServe) {
+      if (!hdrHost || !LOOPBACK_HOST_HEADER_RE.test(hdrHost)) {
+        res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+        res.end(JSON.stringify({ ok: false, error: 'forbidden_host' }));
+        return;
+      }
+      if (!verifySameUidLoopbackPeer(req, options)) {
+        res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+        res.end(JSON.stringify({ ok: false, error: 'forbidden_peer_uid' }));
+        return;
+      }
+    }
     const rawSidecarHdr = req.headers['x-sidecar-token'];
     const rawOmagyHdr = req.headers['x-omagy-token'];
-    const provided = (typeof rawSidecarHdr === 'string' && rawSidecarHdr)
+    const rawAuthHdr = typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7).trim()
+      : '';
+    const headerProvided = (typeof rawSidecarHdr === 'string' && rawSidecarHdr)
       || (typeof rawOmagyHdr === 'string' && rawOmagyHdr)
-      || reqUrl.searchParams.get('token')
+      || rawAuthHdr
       || '';
-    const tokenValid = verifyHudToken(expectedToken, provided);
+    const queryToken = reqUrl.searchParams.get('token') || '';
+    const headerTokenValid = verifyHudToken(expectedToken, headerProvided);
+    const tokenValid = headerTokenValid || (!desktopServe && verifyHudToken(expectedToken, queryToken));
+    const cookieValid = desktopServe && verifySessionCookie(req);
     const denyUnauthorized = () => {
       res.writeHead(401, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
     };
+    const denyForbidden = (reason) => {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+      res.end(JSON.stringify({ ok: false, error: reason }));
+    };
+    if (req.method === 'GET' && reqUrl.pathname === '/preload.js') {
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      res.end('/* sidecar preload stub */\n');
+      return;
+    }
     if (req.method === 'GET' && (reqUrl.pathname === '/' || reqUrl.pathname === '/index.html')) {
+      if (desktopServe && hasHostileFetchMetadata(req)) {
+        denyForbidden('forbidden_fetch_metadata');
+        return;
+      }
+      const allowMint = desktopServe && expectedToken && isBrowserNavigationRequest(req);
+      const serveRootHtml = (baseHtml) => {
+        const htmlOut = hudHost && hudHost !== 'antigravity'
+          ? String(baseHtml || '').replace('<html lang="en">', `<html lang="en" data-host="${hudHost}">`)
+          : baseHtml;
+        if (!res.headersSent) {
+          const hdrs = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+          if (allowMint) hdrs['Set-Cookie'] = mintSessionCookie();
+          res.writeHead(200, hdrs);
+        }
+        res.end(htmlOut);
+      };
       getLiveHudHtml()
-        .then((htmlBody) => {
-          if (!res.headersSent) {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-          }
-          res.end(htmlBody);
-        })
+        .then(serveRootHtml)
         .catch(() => { /* fail open: fall back to last valid cached HUD HTML */
-          if (!res.headersSent) {
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-          }
-          res.end(liveHudHtml);
+          serveRootHtml(liveHudHtml);
         });
       return;
     }
-    const activeRootParam = (reqUrl.searchParams.get('activeRoot') || '').trim();
+    const rawActiveRootParam = (reqUrl.searchParams.get('activeRoot') || '').trim();
+    const resolveScopedWorkspaces = () => {
+      const parsed = parseWorkspacesQuery(reqUrl, options.workspaceRoot || '');
+      return clampDesktopWorkspaces(parsed, pinnedWorkspaceRoot, rawActiveRootParam);
+    };
+    const isGetAuthorized = () => (!statusRequiresToken || tokenValid || cookieValid);
     if (req.method === 'GET' && reqUrl.pathname === '/api/status') {
-      if (statusRequiresToken && !tokenValid) {
+      if (!isGetAuthorized()) {
         denyUnauthorized();
         return;
       }
-      const workspaces = parseWorkspacesQuery(reqUrl, options.workspaceRoot || '');
-      const snap = buildHudSnapshot(workspaces, Date.now(), activeRootParam);
+      const { workspaces, activeRoot } = resolveScopedWorkspaces();
+      const snap = buildHudSnapshot(workspaces, Date.now(), activeRoot, { host: hudHost });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(snap));
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/events') {
-      if (statusRequiresToken && !tokenValid) {
+      if (!isGetAuthorized()) {
         denyUnauthorized();
         return;
       }
-      const workspaces = parseWorkspacesQuery(reqUrl, options.workspaceRoot || '');
+      while (activeSseCleanups.size >= maxSseClients) {
+        const oldestCleanup = activeSseCleanups.values().next().value;
+        if (!oldestCleanup) break;
+        const prevSize = activeSseCleanups.size;
+        try { oldestCleanup(); } catch { /* fail open: ignore evicted SSE client cleanup error */ activeSseCleanups.delete(oldestCleanup); }
+        if (activeSseCleanups.size >= prevSize) activeSseCleanups.delete(oldestCleanup);
+      }
+      const { workspaces, activeRoot } = resolveScopedWorkspaces();
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
@@ -2386,7 +2841,8 @@ export function createHudServer(token, options = {}) {
       const sendSnapshotFrame = (force = false) => {
         if (closed) return;
         try {
-          const snap = buildHudSnapshot(workspaces, Date.now(), activeRootParam);
+          if (typeof options.onActivity === 'function') options.onActivity();
+          const snap = buildHudSnapshot(workspaces, Date.now(), activeRoot, { host: hudHost });
           if (!force && snap.digest === lastSentDigest) return;
           lastSentDigest = snap.digest;
           res.write(`event: snapshot\ndata: ${JSON.stringify(snap)}\n\n`);
@@ -2454,7 +2910,7 @@ export function createHudServer(token, options = {}) {
 
       function syncWatchers() {
         if (closed) return;
-        const { roots, primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRootParam);
+        const { roots, primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRoot);
         const scopeRoots = new Set([path.resolve(primaryRoot)]);
         for (const r of roots) {
           scopeRoots.add(path.resolve(r));
@@ -2468,6 +2924,7 @@ export function createHudServer(token, options = {}) {
         }
         const hasWiki = addSubtreeWatch(path.join(primaryRoot, 'omagy_wiki'), 2, schedulePush);
         if (!hasWiki) addFlatWatch(primaryRoot, schedulePush);
+        addFlatWatch(process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy'), schedulePush);
       }
 
       syncWatchers();
@@ -2507,8 +2964,31 @@ export function createHudServer(token, options = {}) {
       return;
     }
     if (req.method === 'POST' && reqUrl.pathname === '/api/dispatch') {
-      if (!expectedToken || !tokenValid) {
+      if (desktopServe) {
+        const originHdr = String(req.headers.origin || '').trim().toLowerCase();
+        const secSiteHdr = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+        if (originHdr && originHdr !== `http://${hdrHost.toLowerCase()}`) {
+          denyForbidden('forbidden_origin');
+          return;
+        }
+        if (secSiteHdr && secSiteHdr !== 'same-origin' && secSiteHdr !== 'none') {
+          denyForbidden('forbidden_fetch_site');
+          return;
+        }
+        const sameOriginProof = originHdr === `http://${hdrHost.toLowerCase()}` || secSiteHdr === 'same-origin';
+        if (!expectedToken || !(headerTokenValid || (cookieValid && sameOriginProof))) {
+          denyUnauthorized();
+          return;
+        }
+      } else if (!expectedToken || !(headerTokenValid || verifyHudToken(expectedToken, queryToken))) {
         denyUnauthorized();
+        return;
+      }
+      const now = Date.now();
+      while (dispatchTimestamps.length && now - dispatchTimestamps[0] > 10_000) dispatchTimestamps.shift();
+      if (activeDispatches >= 4 || dispatchTimestamps.length >= 20) {
+        res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '2' });
+        res.end(JSON.stringify({ ok: false, error: 'rate_limit_exceeded' }));
         return;
       }
       const ct = String(req.headers['content-type'] || '').toLowerCase();
@@ -2517,13 +2997,25 @@ export function createHudServer(token, options = {}) {
         res.end(JSON.stringify({ ok: false, error: 'Content-Type must be application/json' }));
         return;
       }
+      dispatchTimestamps.push(now);
+      activeDispatches += 1;
+      let dispatchReleased = false;
+      const releaseDispatch = () => {
+        if (!dispatchReleased) {
+          dispatchReleased = true;
+          activeDispatches = Math.max(0, activeDispatches - 1);
+        }
+      };
       const chunks = [];
       let totalBytes = 0;
       let aborted = false;
+      req.on('close', releaseDispatch);
+      req.on('error', releaseDispatch);
       req.on('data', (chunk) => {
         totalBytes += chunk.length;
         if (totalBytes > MAX_DISPATCH_BODY_BYTES) {
           aborted = true;
+          releaseDispatch();
           res.writeHead(413, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ ok: false, error: 'Payload too large' }));
           req.destroy();
@@ -2531,29 +3023,47 @@ export function createHudServer(token, options = {}) {
         }
         chunks.push(chunk);
       });
-      req.on('end', () => {
+      req.on('end', async () => {
         if (aborted) return;
-        let payload = {};
         try {
-          payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-        } catch { /* fail open: reject malformed JSON request body */
-          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
-          return;
+          let payload = {};
+          try {
+            payload = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+          } catch { /* fail open: reject malformed JSON request body */
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
+            return;
+          }
+          const dispatchOpts = {
+            ...options,
+            host: hudHost,
+            ...(pinnedWorkspaceRoot ? { workspaceRoot: pinnedWorkspaceRoot } : {}),
+            allowPayloadWsUrl: desktopServe ? false : Boolean(options.allowPayloadWsUrl),
+            skillSlugs: getSkillSlugs(),
+          };
+          let result;
+          try {
+            result = await dispatchHudActionAsync(payload, dispatchOpts);
+          } catch (err) { /* fail open: return 500 JSON when async dispatch rejects */
+            result = { ok: false, status: 500, error: redactSecrets(String(err?.message || err || 'Dispatch failed')) };
+          }
+          if (!res.headersSent) {
+            res.writeHead(result.status || (result.ok ? 200 : 400), { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify(result));
+          }
+        } finally {
+          releaseDispatch();
         }
-        const result = dispatchHudAction(payload, options);
-        res.writeHead(result.status || (result.ok ? 200 : 400), { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(result));
       });
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/wiki-search') {
-      if (!expectedToken || !tokenValid) {
+      if (!expectedToken || !(tokenValid || cookieValid)) {
         denyUnauthorized();
         return;
       }
-      const workspaces = parseWorkspacesQuery(reqUrl, options.workspaceRoot || '');
-      const { primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRootParam);
+      const { workspaces, activeRoot } = resolveScopedWorkspaces();
+      const { primaryRoot } = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRoot);
       const q = (reqUrl.searchParams.get('q') || '').trim().slice(0, 160);
       if (!q) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -2585,7 +3095,7 @@ export function createHudServer(token, options = {}) {
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/skill-doc') {
-      if (!expectedToken || !tokenValid) {
+      if (!expectedToken || !(tokenValid || cookieValid)) {
         denyUnauthorized();
         return;
       }
@@ -2614,16 +3124,24 @@ export function createHudServer(token, options = {}) {
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/artifact') {
-      if (!expectedToken || !tokenValid) {
+      if (!expectedToken || !(tokenValid || cookieValid)) {
         denyUnauthorized();
         return;
       }
       const fallbackWs = options.workspaceRoot || process.env.OMAGY_WORKSPACE || process.cwd();
-      const wsParam = reqUrl.searchParams.get('workspace') || '';
-      const vettedWsList = parseWorkspacesQuery(reqUrl, fallbackWs);
-      const { primaryRoot: artPrimary } = resolveWorkspaceRoots(wsParam ? [wsParam, ...vettedWsList] : vettedWsList, fallbackWs, activeRootParam);
+      const rawWsParam = reqUrl.searchParams.get('workspace') || '';
+      const wsParam = (!pinnedWorkspaceRoot || (rawWsParam && isPathInsideBase(uriToFsPath(rawWsParam) || rawWsParam, pinnedWorkspaceRoot))) ? rawWsParam : '';
+      const { workspaces: vettedWsList, activeRoot } = resolveScopedWorkspaces();
+      const { roots: artRoots, primaryRoot: artPrimary } = resolveWorkspaceRoots(wsParam ? [wsParam, ...vettedWsList] : vettedWsList, fallbackWs, activeRoot);
       const relParam = reqUrl.searchParams.get('rel') || '';
-      const resolved = resolveSafeArtifactFile(artPrimary, relParam);
+      let resolved = resolveSafeArtifactFile(artPrimary, relParam);
+      if (!resolved && !pinnedWorkspaceRoot) {
+        for (const altRoot of artRoots) {
+          if (altRoot === artPrimary) continue;
+          resolved = resolveSafeArtifactFile(altRoot, relParam);
+          if (resolved) break;
+        }
+      }
       if (!resolved) {
         res.writeHead(404, { 'Content-Type': 'application/json', 'X-Content-Type-Options': 'nosniff' });
         res.end(JSON.stringify({ error: 'Artifact not found or forbidden' }));
@@ -2654,11 +3172,12 @@ export function createHudServer(token, options = {}) {
     res.end(JSON.stringify({ error: 'Not Found' }));
   });
 
-  server.on('close', () => {
+  server.closeAllSseClients = () => {
     for (const cleanup of [...activeSseCleanups]) {
       cleanup();
     }
-  });
+  };
+  server.on('close', server.closeAllSseClients);
   server.getActiveSseClientCount = () => activeSseCleanups.size;
   return server;
 }
@@ -3421,7 +3940,7 @@ async function runSelftest() {
       && !/allow-same-origin/i.test(HUD_HTML)
       && !/<iframe\b[^>]*\bsrc\s*=/i.test(HUD_HTML)
       && !/<iframe\b[^>]*token=/i.test(HUD_HTML)
-      && HUD_HTML.includes('if (!event.source || (event.source !== window.parent && event.source !== window)) return;')
+      && HUD_HTML.includes('if (!event.source || (event.source !== window.parent && event.source !== window.top && event.source !== window)) return;')
       && !preparedLoft.includes('cdn.example.invalid')
       && preparedLoft.includes('data-inlined-asset="./variant-a/styles.css"')
       && preparedLoft.includes('<\\/style><script>evil()')
@@ -3459,6 +3978,7 @@ async function runSelftest() {
     const cmdSubcmd = buildSkillCommandWithFlags('/skill list', ['validate'], ['list', 'init', 'validate']);
     const saSnippetPro = buildSubagentInvokeSnippet('executor', 'pro', 'Implement G4');
     const saSnippetInherit = buildSubagentInvokeSnippet('explore', 'inherit', 'Map exports');
+    const saSnippetCodex = buildSubagentInvokeSnippet('architect', 'pro', '/analyze auth', 'codex');
     const hostileMd = [
       '# Architecture Note',
       '',
@@ -3482,6 +4002,7 @@ async function runSelftest() {
       && saSnippetPro.includes('TypeName: "executor"')
       && saSnippetPro.includes('Model: "pro"')
       && saSnippetInherit.includes('Model: "inherit"')
+      && saSnippetCodex === 'Use spawn_agent (agent_type: "architect") to: $analyze auth'
       && HUD_HTML.includes(buildSkillCommandWithFlags.toString())
       && HUD_HTML.includes(buildSubagentInvokeSnippet.toString())
       && HUD_HTML.includes(renderSafeMarkdown.toString())
@@ -3878,6 +4399,513 @@ async function runSelftest() {
       && HUD_HTML.includes('.hud-select {')
       && HUD_HTML.includes('class="status-cell-actions"');
 
+    // H25: Desktop-exclusive HUD daemon, Host loopback guard, 0o600 registry, SessionStart reuse, RFC 6455 WS & Claude/Codex dispatch
+    let h25Ok = false;
+    const h25Ws = path.join(ws, 'h25-desktop');
+    let h25DaemonPid = 0;
+    let h25DesktopSrv = null;
+    let h25MockWsSrv = null;
+    try {
+      const { ensureDesktopHudDaemon } = await import('../../hooks/omagy-host.mjs');
+      const net = await import('node:net');
+      fs.mkdirSync(h25Ws, { recursive: true });
+      fs.mkdirSync(path.join(h25Ws, '.omagy'), { recursive: true });
+      const h25OutsideWs = path.join(ws, 'h25-outside');
+      fs.mkdirSync(path.join(h25OutsideWs, '.omagy'), { recursive: true });
+      const dPort1 = computeDesktopHudPort(h25Ws, { channel: 'daemon' });
+      const dPort2 = computeDesktopHudPort(h25Ws, { channel: 'daemon' });
+      const lPort = computeDesktopHudPort(h25Ws, { channel: 'launch' });
+      const regFile = desktopHudRegistryFile(h25Ws);
+
+      const prevClaudeEnv = process.env.CLAUDE_PROJECT_DIR;
+      const prevCodexEnv = process.env.CODEX_DESKTOP;
+      let defaultHostSnap = null;
+      let defaultHostSync = null;
+      let defaultHostAsync = null;
+      try {
+        process.env.CLAUDE_PROJECT_DIR = h25Ws;
+        process.env.CODEX_DESKTOP = '1';
+        defaultHostSnap = buildHudSnapshot([h25Ws]);
+        defaultHostSync = dispatchHudAction({ mode: 'new-chat', prompt: 'hello default' }, { runner: () => 'ok' });
+        defaultHostAsync = await dispatchHudActionAsync({ mode: 'new-chat', prompt: 'hello default async' }, { runner: () => 'ok' });
+      } finally {
+        if (prevClaudeEnv === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+        else process.env.CLAUDE_PROJECT_DIR = prevClaudeEnv;
+        if (prevCodexEnv === undefined) delete process.env.CODEX_DESKTOP;
+        else process.env.CODEX_DESKTOP = prevCodexEnv;
+      }
+
+      const dDaemon1 = await ensureDesktopHudDaemon({ host: 'codex', workspace: h25Ws, pluginRoot: PLUGIN_ROOT, env: { ...process.env, CODEX_DESKTOP: '1', OMAGY_RUNTIME_DIR: rtDir } });
+      const regData = JSON.parse(fs.readFileSync(dDaemon1.registryFile, 'utf8'));
+      h25DaemonPid = Number(regData.pid || 0);
+      const regMode = fs.statSync(dDaemon1.registryFile).mode & 0o777;
+      const dDaemon2 = await ensureDesktopHudDaemon({ host: 'codex', workspace: h25Ws, pluginRoot: PLUGIN_ROOT, env: { ...process.env, CODEX_DESKTOP: '1', OMAGY_RUNTIME_DIR: rtDir } });
+      const h25EnsureOut = JSON.parse(execFileSync(
+        process.execPath,
+        [fileURLToPath(import.meta.url), 'desktop-ensure', '--host', 'codex', '--workspace', h25Ws],
+        { env: { ...process.env, OMAGY_RUNTIME_DIR: rtDir }, encoding: 'utf8', timeout: 5000 },
+      ));
+      if (h25DaemonPid > 0) {
+        try { process.kill(h25DaemonPid, 'SIGTERM'); h25DaemonPid = 0; } catch { /* fail open: daemon already exited */ }
+      }
+
+      const claudeLaunchWs = path.join(ws, 'h25-launch');
+      fs.mkdirSync(path.join(claudeLaunchWs, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(claudeLaunchWs, '.claude', 'launch.json'), JSON.stringify({
+        version: '0.0.1',
+        configurations: [{ name: 'oh-my-agy-hud', runtimeExecutable: 'sh', runtimeArgs: ['run.sh', 'desktop-serve'], port: computeDesktopHudPort(claudeLaunchWs, { channel: 'launch' }) }],
+      }), 'utf8');
+      const dLaunchSkip = await ensureDesktopHudDaemon({ host: 'claude', workspace: claudeLaunchWs, pluginRoot: PLUGIN_ROOT, env: { ...process.env, OMAGY_RUNTIME_DIR: rtDir } });
+
+      h25DesktopSrv = await startDesktopHudServer({ workspace: h25Ws, host: 'codex', port: 0, registry: path.join(rtDir, 'h25-srv.json') });
+      const h25Req = (reqPath, headers = {}, method = 'GET', reqBody = '') => new Promise((resolve, reject) => {
+        const req = http.request({ host: BIND_HOST, port: h25DesktopSrv.port, path: reqPath, method, headers }, (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+        });
+        req.on('error', reject);
+        if (reqBody) req.write(reqBody);
+        req.end();
+      });
+      const h25Evil = await h25Req('/', { Host: `evil.example:${h25DesktopSrv.port}` });
+      const h25Curl = await h25Req('/', { Accept: '*/*', 'User-Agent': 'curl/8.6.0' });
+      const h25SpoofNoSecFetch = await h25Req('/', { Accept: 'text/html', 'User-Agent': 'Mozilla/5.0 Chrome/130.0' });
+      const h25Iframe = await h25Req('/', { Accept: 'text/html', 'User-Agent': 'Mozilla/5.0 Chrome/130.0', 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Dest': 'iframe' });
+      const h25Good = await h25Req('/', {
+        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0 AppleWebKit/537.36 Chrome/130.0 Safari/537.36',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Dest': 'document',
+      });
+      const rawSetCookie = h25Good.headers['set-cookie']?.[0] || '';
+      const sessCookiePair = rawSetCookie.split(';')[0] || '';
+      const h25CookieGet = await h25Req('/api/status', { Cookie: sessCookiePair });
+      const h25QueryTokGet = await h25Req(`/api/status?token=${h25DesktopSrv.token}`);
+      const h25QueryTokPost = await h25Req(
+        `/api/dispatch?token=${h25DesktopSrv.token}`,
+        { 'Content-Type': 'application/json' },
+        'POST',
+        JSON.stringify({ mode: 'new-chat', prompt: 'query tok' }),
+      );
+      const h25BadOriginPost = await h25Req(
+        '/api/dispatch',
+        { 'Content-Type': 'application/json', 'X-Sidecar-Token': h25DesktopSrv.token, Origin: 'http://evil.example' },
+        'POST',
+        JSON.stringify({ mode: 'new-chat', prompt: 'evil origin' }),
+      );
+      const h25CookiePost = await h25Req(
+        '/api/dispatch',
+        {
+          'Content-Type': 'application/json',
+          Cookie: sessCookiePair,
+          Origin: `http://127.0.0.1:${h25DesktopSrv.port}`,
+          'Sec-Fetch-Site': 'same-origin',
+        },
+        'POST',
+        JSON.stringify({ mode: 'new-chat', prompt: '/doctor --setup', wsUrl: 'ws://127.0.0.1:9/' }),
+      );
+      const h25CookieJson = JSON.parse(h25CookiePost.body || '{}');
+      const h25ClampedStatus = await h25Req(
+        `/api/status?workspaces=${encodeURIComponent(h25OutsideWs)}`,
+        { 'X-Sidecar-Token': h25DesktopSrv.token },
+      );
+      const h25ClampedSnap = JSON.parse(h25ClampedStatus.body || '{}');
+
+      // Test live SSE shutdown without hanging (closeAllSseClients + close)
+      const h25SseRes = await new Promise((resolve, reject) => {
+        const req = http.request({
+          host: BIND_HOST,
+          port: h25DesktopSrv.port,
+          path: '/api/events',
+          headers: { 'X-Sidecar-Token': h25DesktopSrv.token },
+        }, (res) => resolve({ req, res }));
+        req.on('error', reject);
+        req.end();
+      });
+      const sseActiveBefore = h25DesktopSrv.server.getActiveSseClientCount();
+      h25DesktopSrv.server.closeAllSseClients();
+      h25SseRes.req.destroy();
+      const sseActiveAfter = h25DesktopSrv.server.getActiveSseClientCount();
+      // Test rate limiting at end of HTTP suite
+      let rateLimitedStatus = 0;
+      for (let i = 0; i < 22; i += 1) {
+        const rr = await h25Req('/api/dispatch', { 'Content-Type': 'application/json', 'X-Sidecar-Token': h25DesktopSrv.token }, 'POST', '{}');
+        if (rr.status === 429) { rateLimitedStatus = rr.status; break; }
+      }
+
+      const claudeClip = await dispatchHudActionAsync({ mode: 'active-chat', prompt: 'sync desktop', host: 'claude' }, { clipboardRunner: () => {} });
+      const claudeClipFail = await dispatchHudActionAsync(
+        { mode: 'active-chat', prompt: '/tmp/path/keep check', host: 'claude' },
+        { clipboardRunner: () => { throw new Error('clipboard_disabled'); } },
+      );
+      let claudeExecArgs = null;
+      const claudeSub = await dispatchHudActionAsync(
+        { mode: 'subagent-standalone', agent: 'explore', model: 'flash', prompt: '--scan src', host: 'claude' },
+        { asyncRunner: async (cmd, args) => { claudeExecArgs = [cmd, ...args]; return { pid: 101 }; } },
+      );
+
+      const wsRpcSeq = [];
+      const makeServerWs = (obj) => {
+        const body = Buffer.from(JSON.stringify(obj), 'utf8');
+        const head = body.length < 126 ? Buffer.from([0x81, body.length]) : Buffer.from([0x81, 126, (body.length >> 8) & 0xff, body.length & 0xff]);
+        return Buffer.concat([head, body]);
+      };
+      h25MockWsSrv = net.createServer((sock) => {
+        let upgraded = false;
+        let rx = Buffer.alloc(0);
+        sock.on('data', (chunk) => {
+          rx = Buffer.concat([rx, chunk]);
+          if (!upgraded) {
+            const idx = rx.indexOf('\r\n\r\n');
+            if (idx < 0) return;
+            const headTxt = rx.subarray(0, idx).toString('utf8');
+            rx = rx.subarray(idx + 4);
+            const wsK = /sec-websocket-key:\s*([^\r\n]+)/i.exec(headTxt)?.[1]?.trim() || '';
+            const acc = crypto.createHash('sha1').update(`${wsK}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+            sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acc}\r\n\r\n`);
+            upgraded = true;
+          }
+          while (rx.length >= 6) {
+            const op = rx[0] & 0x0f;
+            const masked = Boolean(rx[1] & 0x80);
+            let len = rx[1] & 0x7f;
+            let off = 2;
+            if (len === 126) { if (rx.length < 4) return; len = rx.readUInt16BE(2); off = 4; }
+            const mOff = off;
+            if (masked) off += 4;
+            if (rx.length < off + len) return;
+            const data = Buffer.from(rx.subarray(off, off + len));
+            if (masked) for (let i = 0; i < len; i += 1) data[i] ^= rx[mOff + (i & 3)];
+            rx = rx.subarray(off + len);
+            if (op === 0x8) { sock.end(); return; }
+            if (op !== 0x1) continue;
+            const rpc = JSON.parse(data.toString('utf8'));
+            wsRpcSeq.push(rpc.method);
+            if (rpc.method === 'initialize') sock.write(makeServerWs({ jsonrpc: '2.0', id: rpc.id, result: { ok: true } }));
+            else if (rpc.method === 'thread/start') sock.write(makeServerWs({ jsonrpc: '2.0', id: rpc.id, result: { thread: { id: 'thr-h25' } } }));
+            else if (rpc.method === 'turn/start') sock.write(makeServerWs({ jsonrpc: '2.0', id: rpc.id, result: { turn: { id: 'trn-h25' }, echoInput: rpc.params?.input } }));
+          }
+        });
+      });
+      await new Promise((r) => h25MockWsSrv.listen(0, BIND_HOST, r));
+      const wsPort = h25MockWsSrv.address().port;
+      const codexWsOk = await dispatchHudActionAsync(
+        { mode: 'new-chat', prompt: 'run codex turn', wsUrl: `ws://127.0.0.1:${wsPort}/` },
+        { host: 'codex', workspaceRoot: h25Ws },
+      );
+      const codexSsrfBlocked = await dispatchHudActionAsync(
+        { mode: 'new-chat', prompt: 'ssrf', wsUrl: 'ws://example.com:4500/' },
+        { host: 'codex', workspaceRoot: h25Ws },
+      );
+      let codexExecArgs = null;
+      const codexSub = await dispatchHudActionAsync(
+        { mode: 'subagent-standalone', agent: 'executor', prompt: '/doctor fix build' },
+        { host: 'codex', workspaceRoot: h25Ws, asyncRunner: async (cmd, args) => { codexExecArgs = [cmd, ...args]; return { pid: 202 }; } },
+      );
+      let codexReadExecArgs = null;
+      const codexReadSub = await dispatchHudActionAsync(
+        { mode: 'subagent-standalone', agent: 'architect', prompt: 'review design' },
+        { host: 'codex', workspaceRoot: h25Ws, asyncRunner: async (cmd, args) => { codexReadExecArgs = [cmd, ...args]; return { pid: 203 }; } },
+      );
+
+      h25Ok = dPort1 === dPort2 && dPort1 >= 47800 && dPort1 <= 48799
+        && lPort >= 48800 && lPort <= 49799
+        && regFile.startsWith(rtDir)
+        && defaultHostSnap?.host === 'antigravity'
+        && defaultHostSync?.modeUsed === 'new-chat'
+        && defaultHostAsync?.modeUsed === 'new-chat'
+        && dDaemon1.started === true && regMode === 0o600
+        && !dDaemon1.url.includes('token') && !dDaemon1.message.includes('token')
+        && dDaemon2.reused === true && dDaemon2.port === dDaemon1.port
+        && h25EnsureOut.ok === true && h25EnsureOut.reused === true && h25EnsureOut.port === dDaemon1.port && h25EnsureOut.url === dDaemon1.url && !h25EnsureOut.url.includes('token')
+        && dLaunchSkip.mode === 'launch-json' && dLaunchSkip.started === false
+        && h25Evil.status === 403 && !h25Evil.body.includes(h25DesktopSrv.token)
+        && h25Curl.status === 200 && !h25Curl.body.includes('<meta name="omagy-hud-token"') && !h25Curl.body.includes(h25DesktopSrv.token) && !h25Curl.headers['set-cookie']
+        && h25SpoofNoSecFetch.status === 200 && !h25SpoofNoSecFetch.headers['set-cookie'] && !h25SpoofNoSecFetch.body.includes(h25DesktopSrv.token)
+        && h25Iframe.status === 403 && !h25Iframe.body.includes(h25DesktopSrv.token)
+        && h25Good.status === 200 && !h25Good.body.includes('<meta name="omagy-hud-token"') && !h25Good.body.includes(h25DesktopSrv.token)
+        && rawSetCookie.includes('HttpOnly') && rawSetCookie.includes('SameSite=Strict')
+        && h25Good.body.includes('customization://oh-my-agy')
+        && h25Good.body.includes('<html lang="en" data-host="codex">')
+        && h25Good.body.includes('--hud-bg: var(--background, #212121)')
+        && h25CookieGet.status === 200
+        && h25QueryTokGet.status === 401
+        && h25QueryTokPost.status === 401
+        && h25BadOriginPost.status === 403
+        && h25CookiePost.status === 200 && h25CookieJson.modeUsed === 'clipboard-handoff' && h25CookieJson.clipboardPrompt === '$doctor --setup'
+        && h25ClampedSnap?.workspace && fs.realpathSync(h25ClampedSnap.workspace) === fs.realpathSync(h25Ws)
+        && sseActiveBefore === 1 && sseActiveAfter === 0
+        && rateLimitedStatus === 429
+        && claudeClip.ok === true && claudeClip.modeUsed === 'clipboard-handoff' && claudeClip.clipboardPrompt === 'sync desktop' && claudeClip.copiedToClipboard === true
+        && claudeClipFail.ok === true && claudeClipFail.copiedToClipboard === false && claudeClipFail.clipboardPrompt === '/tmp/path/keep check' && !claudeClipFail.message.includes('Copied prompt')
+        && claudeSub.ok === true && claudeExecArgs?.[0] === 'claude' && claudeExecArgs.includes('--agent') && claudeExecArgs.includes('explore') && claudeExecArgs.includes('--') && claudeExecArgs.at(-1) === '--scan src'
+        && codexWsOk.ok === true && codexWsOk.threadId === 'thr-h25' && codexWsOk.turnId === 'trn-h25'
+        && JSON.stringify(wsRpcSeq) === JSON.stringify(['initialize', 'initialized', 'thread/start', 'turn/start'])
+        && codexSsrfBlocked.ok === false && codexSsrfBlocked.status === 403 && codexSsrfBlocked.error === 'non_loopback_ws_url_refused'
+        && codexSub.ok === true && codexExecArgs?.[0] === 'codex' && codexExecArgs?.[1] === 'exec'
+        && codexExecArgs.includes('--sandbox') && codexExecArgs[codexExecArgs.indexOf('--sandbox') + 1] === 'workspace-write'
+        && codexExecArgs.includes('--') && codexExecArgs.at(-1).includes('$doctor fix build')
+        && codexReadSub.ok === true && codexReadExecArgs.includes('--sandbox') && codexReadExecArgs[codexReadExecArgs.indexOf('--sandbox') + 1] === 'read-only';
+    } finally {
+      if (h25DaemonPid > 0) { try { process.kill(h25DaemonPid, 'SIGTERM'); } catch { /* fail open: daemon stopped */ } }
+      if (h25DesktopSrv?.server) {
+        try {
+          h25DesktopSrv.server.closeAllSseClients?.();
+          h25DesktopSrv.server.close();
+          h25DesktopSrv.server.closeAllConnections?.();
+        } catch { /* fail open: server already closed */ }
+      }
+      if (h25MockWsSrv) { try { h25MockWsSrv.close(); } catch { /* fail open: mock WS server already closed */ } }
+    }
+
+    // H26: SSE client cap/eviction, /preload.js + live-theme/visibility client hooks, multi-root .omagy priority & cross-root artifact, and $autopilot ralplan hydration
+    let h26Ok = false;
+    const h26Base = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-h26-'));
+    const h26EmptyWs = path.join(h26Base, 'h26-empty');
+    const h26StateWs = path.join(h26Base, 'h26-state');
+    const h26OtherWs = path.join(h26Base, 'h26-other');
+    fs.mkdirSync(h26EmptyWs, { recursive: true });
+    fs.mkdirSync(path.join(h26StateWs, '.omagy', 'state'), { recursive: true });
+    fs.mkdirSync(path.join(h26StateWs, '.omagy', 'plans'), { recursive: true });
+    fs.mkdirSync(path.join(h26OtherWs, '.omagy', 'artifacts'), { recursive: true });
+    fs.writeFileSync(path.join(h26OtherWs, '.omagy', 'artifacts', 'alt-note.txt'), 'alt-root-artifact', 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'prd-h26.md'), '# H26 PRD\n', 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'test-spec-h26.md'), '# H26 Test Spec\n', 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'ralplan-review-h26.md'), '# Review\n- Architect: CLEAR\n- Critic: APPROVE\n', 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'ralplan-receipt-h26.json'), JSON.stringify({
+      architect_verdict: 'CLEAR',
+      critic_verdict: 'APPROVE',
+      iteration: 3,
+    }), 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
+      mode: 'autopilot',
+      active: false,
+      current_phase: 'complete',
+      iteration: 1,
+      updated_at: new Date().toISOString(),
+      state: {
+        ralplan: {
+          iteration: 3,
+          prd_path: '.omagy/plans/prd-h26.md',
+          test_spec_path: '.omagy/plans/test-spec-h26.md',
+          review_path: '.omagy/plans/ralplan-review-h26.md',
+          receipt_path: '.omagy/plans/ralplan-receipt-h26.json',
+        },
+        handoff_artifacts: {
+          ralplan: {
+            verdict: 'APPROVE',
+            receipt_path: '.omagy/plans/ralplan-receipt-h26.json',
+          },
+        },
+      },
+    }), 'utf8');
+
+    const h26Srv = createHudServer('h26-tok', { maxSseClients: 2, workspaceRoot: h26EmptyWs });
+    const h26Reqs = [];
+    try {
+      await new Promise((resolve) => h26Srv.listen(0, BIND_HOST, resolve));
+      const h26Port = h26Srv.address().port;
+      const h26Get = (reqPath, headers = {}) => new Promise((resolve, reject) => {
+        const req = http.request({ host: BIND_HOST, port: h26Port, path: reqPath, method: 'GET', headers }, (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      const openH26Sse = () => new Promise((resolve, reject) => {
+        let ended = false;
+        const req = http.get({ host: BIND_HOST, port: h26Port, path: '/api/events', headers: { 'X-Sidecar-Token': 'h26-tok' } }, (res) => {
+          res.on('end', () => { ended = true; });
+          res.on('close', () => { ended = true; });
+          res.once('data', () => resolve({ req, res, isEnded: () => ended }));
+        });
+        req.on('error', () => { ended = true; });
+        h26Reqs.push(req);
+        setTimeout(() => reject(new Error('H26 SSE open timeout')), 3000).unref();
+      });
+
+      const sse1 = await openH26Sse();
+      const sse2 = await openH26Sse();
+      const sse3 = await openH26Sse();
+      await new Promise((r) => setTimeout(r, 80));
+      const sse1Evicted = sse1.isEnded();
+      const activeAfter3 = h26Srv.getActiveSseClientCount();
+      const h26StatusWhileSse = await h26Get('/api/status', { 'X-Sidecar-Token': 'h26-tok' });
+      const h26PreloadRes = await h26Get('/preload.js');
+      const h26ArtRes = await h26Get(
+        `/api/artifact?workspaces=${encodeURIComponent(`${h26StateWs},${h26OtherWs}`)}&rel=${encodeURIComponent('.omagy/artifacts/alt-note.txt')}`,
+        { 'X-Sidecar-Token': 'h26-tok' },
+      );
+
+      const h26Roots = resolveWorkspaceRoots([h26EmptyWs, h26StateWs]);
+      const h26Snap = buildHudSnapshot([h26EmptyWs, h26StateWs], Date.now());
+      const h26Rp = h26Snap.reviews?.ralplan;
+      const scriptMatch = /<script>([\s\S]*?)<\/script>\s*<\/body>/i.exec(HUD_HTML);
+      let clientScriptValid = false;
+      if (scriptMatch) {
+        try {
+          new Function(scriptMatch[1]);
+          clientScriptValid = true;
+        } catch { /* fail open: syntax error surfaced via clientScriptValid=false */ }
+      }
+
+      h26Ok = sse1Evicted === true
+        && activeAfter3 === 2
+        && h26StatusWhileSse.status === 200
+        && h26PreloadRes.status === 200
+        && String(h26PreloadRes.headers['content-type'] || '').includes('application/javascript')
+        && h26PreloadRes.headers['x-content-type-options'] === 'nosniff'
+        && HUD_HTML.includes('<script src="/preload.js"></script>')
+        && HUD_HTML.includes('visibilitychange')
+        && HUD_HTML.includes('AbortController')
+        && clientScriptValid === true
+        && fs.realpathSync(h26Roots.primaryRoot) === fs.realpathSync(h26StateWs)
+        && h26ArtRes.status === 200
+        && h26ArtRes.body === 'alt-root-artifact'
+        && h26Rp?.iteration === 3
+        && h26Rp?.architectVerdict === 'CLEAR'
+        && h26Rp?.criticVerdict === 'APPROVE'
+        && h26Rp?.consensusComplete === true
+        && Array.isArray(h26Rp?.planningArtifacts)
+        && h26Rp.planningArtifacts.includes('.omagy/plans/prd-h26.md')
+        && h26Rp.planningArtifacts.includes('.omagy/plans/test-spec-h26.md')
+        && h26Rp.planningArtifacts.includes('.omagy/plans/ralplan-review-h26.md')
+        && h26Rp.planningArtifacts.includes('.omagy/plans/ralplan-receipt-h26.json');
+    } finally {
+      for (const req of h26Reqs) { try { req.destroy(); } catch { /* fail open: SSE client destroyed */ } }
+      try {
+        h26Srv.closeAllSseClients?.();
+        h26Srv.close();
+        h26Srv.closeAllConnections?.();
+      } catch { /* fail open: H26 server already closed */ }
+      fs.rmSync(h26Base, { recursive: true, force: true });
+    }
+
+    // H27: HUD dispatch isolates Codex/legacy-input/foreign-workspace routing, verifies targets without `--`, and unwraps subagents.
+    const h27Base = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-h27-'));
+    const h27PrevRuntime = process.env.OMAGY_RUNTIME_DIR;
+    let h27Ok = false;
+    try {
+      const h27WsTarget = path.join(h27Base, 'ws-target');
+      const h27WsForeign = path.join(h27Base, 'ws-foreign');
+      const h27Rt = path.join(h27Base, 'runtime');
+      const h27Brain = path.join(h27Base, 'brain');
+      fs.mkdirSync(h27WsTarget, { recursive: true });
+      fs.mkdirSync(h27WsForeign, { recursive: true });
+      fs.mkdirSync(h27Rt, { recursive: true });
+      fs.mkdirSync(path.join(h27Brain, 'conv-sub-good'), { recursive: true });
+      fs.mkdirSync(path.join(h27Brain, 'conv-root-good'), { recursive: true });
+
+      const nowMs = Date.now();
+      const writeRoutingFixture = (id, body, ageMs) => {
+        const p = path.join(h27Rt, `${id}.routing.json`);
+        fs.writeFileSync(p, JSON.stringify({ at: new Date(nowMs - ageMs).toISOString(), ...body }));
+        const dt = new Date(nowMs - ageMs);
+        fs.utimesSync(p, dt, dt);
+      };
+      writeRoutingFixture('conv-sub-good', { host: 'antigravity', workspaces: [h27WsTarget], skills: ['/doctor'] }, 5000);
+      writeRoutingFixture('conv-foreign-agy', { host: 'antigravity', workspaces: [h27WsForeign], skills: ['/ralplan'] }, 4000);
+      writeRoutingFixture('conv-legacy-input', { lastUserKey: 'input:1183:app-generated', workspaces: [h27WsTarget], skills: ['/doctor'], transcriptPath: null }, 3000);
+      writeRoutingFixture('conv-codex-explicit', { host: 'codex', workspaces: [h27WsTarget], skills: ['/doctor'], transcriptPath: null }, 2000);
+      writeRoutingFixture('conv-agy-subagent', { host: 'antigravity', isSubagent: true, workspaces: [h27WsTarget], skills: ['/analyze'] }, 1000);
+
+      process.env.OMAGY_RUNTIME_DIR = h27Rt;
+      const h27AgySnap = buildHudSnapshot([h27WsTarget], nowMs, '', { host: 'antigravity' });
+      const h27CodexSnap = buildHudSnapshot([h27WsTarget], nowMs, '', { host: 'codex' });
+      const h27ResolvedId = resolveActiveConversationId(h27WsTarget, '', { host: 'antigravity', runtimeDir: h27Rt, brainDir: h27Brain });
+      const h27Cands = resolveActiveConversationCandidates(h27WsTarget, '', { host: 'antigravity', runtimeDir: h27Rt, brainDir: h27Brain });
+
+      const h27Calls = [];
+      const h27Runner = (_bin, args) => {
+        const subCmdIdx = args[0] === 'agentapi' ? 1 : 0;
+        const subArgs = args.slice(subCmdIdx);
+        h27Calls.push(subArgs);
+        if (subArgs[0] === 'get-conversation-metadata') {
+          const targetId = subArgs[1];
+          if (targetId === 'conv-foreign-meta') {
+            return JSON.stringify({ metadata: { rootConversationId: 'conv-foreign-meta', workspaceUris: [`file://${h27WsForeign}`] } });
+          }
+          if (targetId === 'conv-sub-good') {
+            return JSON.stringify({ metadata: { rootConversationId: 'conv-root-good', workspaceUris: [`file://${h27WsTarget}`] } });
+          }
+          if (targetId === 'conv-root-good') {
+            return JSON.stringify({ metadata: { rootConversationId: 'conv-root-good', workspaceUris: [`file://${h27WsTarget}`] } });
+          }
+          throw new Error('rpc error: code = NotFound desc = not_found: trajectory not found');
+        }
+        return 'dispatched-h27';
+      };
+
+      const h27Verified = verifyAntigravityTargetConversation({
+        candidates: ['conv-codex-stale', 'conv-foreign-meta', 'conv-sub-good'],
+        explicitId: 'conv-codex-stale',
+        workspaceRoots: [h27WsTarget],
+        runner: h27Runner,
+      });
+
+      const h27DispatchGood = dispatchHudAction(
+        { mode: 'active-chat', prompt: '/doctor', conversationId: 'conv-codex-stale', workspace: h27WsTarget },
+        { runner: h27Runner },
+      );
+
+      const h27FallbackCalls = [];
+      const h27FailRunner = (_bin, args) => {
+        const subCmdIdx = args[0] === 'agentapi' ? 1 : 0;
+        const subArgs = args.slice(subCmdIdx);
+        h27FallbackCalls.push(subArgs);
+        if (subArgs[0] === 'get-conversation-metadata') {
+          throw new Error('rpc error: code = NotFound desc = not_found: trajectory not found');
+        }
+        if (subArgs[0] === 'new-conversation') return 'created-new-h27';
+        throw new Error(`unexpected_subcmd:${subArgs[0]}`);
+      };
+      const h27DispatchFallback = dispatchHudAction(
+        { mode: 'active-chat', prompt: '/doctor', conversationId: 'conv-codex-stale', workspace: h27WsTarget },
+        { runner: h27FailRunner },
+      );
+
+      const metaCallsNoDash = h27Calls
+        .filter((a) => a[0] === 'get-conversation-metadata')
+        .every((a) => a.length >= 2 && a[1] !== '--');
+
+      const postDispatchIdx = HUD_HTML.indexOf('async function postDispatch');
+      const postDispatchSlice = postDispatchIdx >= 0 ? HUD_HTML.slice(postDispatchIdx, postDispatchIdx + 1800) : '';
+      const clientWiringOk = HUD_HTML.includes('getHostConversationId')
+        && postDispatchSlice.includes('getHostConversationId()')
+        && !postDispatchSlice.includes('latestRouting?.conversationId');
+
+      h27Ok = h27AgySnap?.doctor?.latestRouting?.conversationId === 'conv-sub-good'
+        && h27CodexSnap?.doctor?.latestRouting?.conversationId === 'conv-codex-explicit'
+        && h27ResolvedId === 'conv-sub-good'
+        && h27Cands.includes('conv-sub-good')
+        && h27Cands.includes('conv-root-good')
+        && !h27Cands.includes('conv-codex-explicit')
+        && !h27Cands.includes('conv-legacy-input')
+        && !h27Cands.includes('conv-foreign-agy')
+        && !h27Cands.includes('conv-agy-subagent')
+        && h27Verified === 'conv-root-good'
+        && metaCallsNoDash
+        && h27DispatchGood?.ok === true
+        && h27DispatchGood?.modeUsed === 'active-chat'
+        && h27DispatchGood?.conversationId === 'conv-root-good'
+        && h27DispatchGood?.fallback === false
+        && h27DispatchFallback?.ok === true
+        && h27DispatchFallback?.modeUsed === 'new-chat'
+        && h27DispatchFallback?.fallback === true
+        && h27FallbackCalls.every((a) => a[0] !== 'send-message')
+        && clientWiringOk;
+    } catch { /* fail open: capture H27 exception as false */
+      h27Ok = false;
+    } finally {
+      if (h27PrevRuntime === undefined) delete process.env.OMAGY_RUNTIME_DIR;
+      else process.env.OMAGY_RUNTIME_DIR = h27PrevRuntime;
+      fs.rmSync(h27Base, { recursive: true, force: true });
+    }
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -3973,7 +5001,10 @@ async function runSelftest() {
       && h21Ok
       && h22Ok
       && h23Ok
-      && h24Ok;
+      && h24Ok
+      && h25Ok
+      && h26Ok
+      && h27Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',
@@ -4005,17 +5036,259 @@ function sameModulePath(a, b) {
   }
 }
 
+function writePrivateRegistryFile(regPath, record) {
+  const dir = path.dirname(regPath);
+  try {
+    const dst = fs.lstatSync(dir);
+    if (dst.isSymbolicLink() || !dst.isDirectory()) throw new Error('insecure_registry_dir');
+    if (typeof process.getuid === 'function' && dst.uid !== process.getuid()) throw new Error('registry_dir_wrong_uid');
+  } catch (err) { /* fail open: directory absent before mkdir */
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(dir, 0o700); } catch { /* fail open: ignore dir chmod on restrictive fs */ }
+  try {
+    const rSt = fs.lstatSync(regPath);
+    if (rSt.isSymbolicLink() || !rSt.isFile()) throw new Error('registry_file_symlink_disallowed');
+    if (typeof process.getuid === 'function' && rSt.uid !== process.getuid()) throw new Error('registry_file_wrong_uid');
+  } catch (err) { /* fail open: registry file does not exist yet */
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+  const tmpPath = `${regPath}.tmp.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  try { fs.chmodSync(tmpPath, 0o600); } catch { /* fail open: ignore tmp chmod on restrictive fs */ }
+  fs.renameSync(tmpPath, regPath);
+  try { fs.chmodSync(regPath, 0o600); } catch { /* fail open: ignore registry chmod on restrictive fs */ }
+}
+
+function removeOwnRegistryFile(regPath, ownerPid) {
+  if (!regPath) return;
+  try {
+    const st = fs.lstatSync(regPath);
+    if (!st.isFile()) return;
+    if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return;
+    const cur = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+    if (cur && Number(cur.pid) === Number(ownerPid)) fs.unlinkSync(regPath);
+  } catch { /* fail open: ignore missing or rotated registry file */ }
+}
+
+export function parseDesktopServeArgs(argv = []) {
+  const out = { workspace: '', host: 'antigravity', port: NaN, registry: '', token: '', idleTimeoutMs: NaN };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = String(argv[i] || '');
+    const next = () => (i + 1 < argv.length ? String(argv[++i]) : '');
+    if (a === '--workspace') out.workspace = next();
+    else if (a.startsWith('--workspace=')) out.workspace = a.slice('--workspace='.length);
+    else if (a === '--host') out.host = next();
+    else if (a.startsWith('--host=')) out.host = a.slice('--host='.length);
+    else if (a === '--port') out.port = Number(next());
+    else if (a.startsWith('--port=')) out.port = Number(a.slice('--port='.length));
+    else if (a === '--registry') out.registry = next();
+    else if (a.startsWith('--registry=')) out.registry = a.slice('--registry='.length);
+    else if (a === '--token') out.token = next();
+    else if (a.startsWith('--token=')) out.token = a.slice('--token='.length);
+    else if (a === '--idle-timeout-ms') out.idleTimeoutMs = Number(next());
+    else if (a.startsWith('--idle-timeout-ms=')) out.idleTimeoutMs = Number(a.slice('--idle-timeout-ms='.length));
+  }
+  return out;
+}
+
+/** Start the loopback Desktop HUD HTTP/SSE server and write its 0o600 private registry. */
+export async function startDesktopHudServer(opts = {}) {
+  const workspaceRoot = path.resolve(opts.workspace || opts.workspaceRoot || process.env.OMAGY_WORKSPACE || process.cwd());
+  const hudHost = normalizeExplicitHudHost(opts.host);
+  const token = String(opts.token || process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '').trim() || crypto.randomBytes(24).toString('hex');
+  const envPort = Number(process.env.ANTIGRAVITY_SIDECAR_WEB_PORT);
+  const requestedPort = Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535
+    ? opts.port
+    : (Number.isInteger(envPort) && envPort >= 0 && envPort <= 65535 ? envPort : computeDesktopHudPort(workspaceRoot, { channel: 'daemon' }));
+  const registryPath = opts.registry === false
+    ? ''
+    : path.resolve(opts.registry || desktopHudRegistryFile(workspaceRoot, opts.runtimeRoot || process.env.OMAGY_RUNTIME_DIR || ''));
+  const rawIdle = Number(opts.idleTimeoutMs ?? process.env.OMAGY_HUD_IDLE_TIMEOUT_MS ?? 2 * 60 * 60 * 1000);
+  const idleTimeoutMs = Number.isFinite(rawIdle) && rawIdle >= 0 ? rawIdle : 2 * 60 * 60 * 1000;
+
+  let lastActivityAt = Date.now();
+  const server = createHudServer(token, {
+    ...opts,
+    workspaceRoot,
+    host: hudHost,
+    desktopServe: true,
+    statusRequiresToken: true,
+    onActivity: () => { lastActivityAt = Date.now(); },
+  });
+
+  const listenOnPort = (port) => new Promise((resolve, reject) => {
+    const onErr = (err) => {
+      server.off('listening', onOk);
+      reject(err);
+    };
+    const onOk = () => {
+      server.off('error', onErr);
+      resolve();
+    };
+    server.once('error', onErr);
+    server.once('listening', onOk);
+    server.listen(port, BIND_HOST);
+  });
+
+  try {
+    await listenOnPort(requestedPort);
+  } catch (err) { /* fail open: fall back to ephemeral loopback port only on EADDRINUSE when allowed */
+    if (err?.code === 'EADDRINUSE' && requestedPort > 0 && registryPath && opts.allowEphemeralFallback !== false) {
+      await listenOnPort(0);
+    } else {
+      throw err;
+    }
+  }
+
+  const addr = server.address();
+  const actualPort = typeof addr === 'object' && addr ? addr.port : requestedPort;
+  const url = `http://${BIND_HOST}:${actualPort}/`;
+  const registryRecord = {
+    pid: process.pid,
+    host: hudHost,
+    port: actualPort,
+    token,
+    workspace: workspaceRoot,
+    url,
+    startedAt: new Date().toISOString(),
+  };
+  if (registryPath) {
+    writePrivateRegistryFile(registryPath, registryRecord);
+  }
+
+  let idleTimer = null;
+  if (idleTimeoutMs > 0) {
+    const pollMs = Math.min(Math.max(25, Math.floor(idleTimeoutMs / 2)), 30000);
+    idleTimer = setInterval(() => {
+      if (server.getActiveSseClientCount() > 0) {
+        lastActivityAt = Date.now();
+        return;
+      }
+      if (Date.now() - lastActivityAt >= idleTimeoutMs) {
+        clearInterval(idleTimer);
+        idleTimer = null;
+        if (typeof opts.onIdleTimeout === 'function') opts.onIdleTimeout({ port: actualPort, registryPath });
+        removeOwnRegistryFile(registryPath, process.pid);
+        if (typeof server.closeAllSseClients === 'function') server.closeAllSseClients();
+        server.close();
+        if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      }
+    }, pollMs);
+    if (typeof idleTimer.unref === 'function') idleTimer.unref();
+  }
+
+  server.on('close', () => {
+    if (idleTimer) {
+      clearInterval(idleTimer);
+      idleTimer = null;
+    }
+    removeOwnRegistryFile(registryPath, process.pid);
+  });
+
+  return { server, port: actualPort, host: hudHost, token, workspace: workspaceRoot, url, registryPath };
+}
+
 const isMainModule = Boolean(process.argv[1] && sameModulePath(process.argv[1], fileURLToPath(import.meta.url)));
 if (isMainModule) {
   const modeArg = (process.argv[2] || '').toLowerCase();
   if (modeArg === 'selftest' || modeArg === '--selftest') {
-    runSelftest();
+    runSelftest().catch((err) => { /* fail open: report selftest failure cleanly */
+      process.stderr.write(`[oh-my-agy/hud] selftest failed: ${err?.message || err}\n`);
+      process.exitCode = 1;
+    });
+  } else if (modeArg === 'desktop-ensure') {
+    const cliOpts = parseDesktopServeArgs(process.argv.slice(3));
+    const targetHost = (cliOpts.host === 'claude' || cliOpts.host === 'codex') ? cliOpts.host : 'codex';
+    const ws = cliOpts.workspace || process.cwd();
+    import('../../hooks/omagy-host.mjs')
+      .then(({ ensureDesktopHudDaemon }) => ensureDesktopHudDaemon({
+        host: targetHost,
+        workspace: ws,
+        pluginRoot: PLUGIN_ROOT,
+        env: { ...process.env, OMAGY_DESKTOP_HUD: '1' },
+        argv1: process.argv[1],
+      }))
+      .then((res) => {
+        const ok = Boolean(res?.port && res?.url && !res?.error);
+        process.stdout.write(`${JSON.stringify({
+          ok,
+          host: targetHost,
+          workspace: path.resolve(ws),
+          port: res?.port || 0,
+          url: res?.url || '',
+          started: Boolean(res?.started),
+          reused: Boolean(res?.reused),
+          ...(res?.error ? { error: res.error } : {}),
+        })}\n`);
+        if (!ok) process.exitCode = 1;
+      })
+      .catch((err) => { /* fail open: report desktop-ensure error cleanly */
+        process.stdout.write(`${JSON.stringify({ ok: false, host: targetHost, error: err?.message || String(err) })}\n`);
+        process.exitCode = 1;
+      });
+  } else if (modeArg === 'desktop-serve') {
+    const cliOpts = parseDesktopServeArgs(process.argv.slice(3));
+    startDesktopHudServer({
+      workspace: cliOpts.workspace || undefined,
+      host: cliOpts.host,
+      port: Number.isInteger(cliOpts.port) ? cliOpts.port : undefined,
+      registry: cliOpts.registry || undefined,
+      token: cliOpts.token || undefined,
+      idleTimeoutMs: Number.isFinite(cliOpts.idleTimeoutMs) ? cliOpts.idleTimeoutMs : undefined,
+      allowEphemeralFallback: Boolean(cliOpts.registry),
+    }).then((srv) => {
+      let shuttingDown = false;
+      const shutdown = () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        removeOwnRegistryFile(srv.registryPath, process.pid);
+        if (typeof srv.server.closeAllSseClients === 'function') srv.server.closeAllSseClients();
+        srv.server.close(() => { process.exit(0); });
+        if (typeof srv.server.closeAllConnections === 'function') srv.server.closeAllConnections();
+        const forceExitTimer = setTimeout(() => { process.exit(0); }, 500);
+        if (typeof forceExitTimer.unref === 'function') forceExitTimer.unref();
+      };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
+      process.stdout.write(`[oh-my-agy/hud] desktop-serve (${srv.host}) listening on ${srv.url}\n`);
+    }).catch((err) => { /* fail open: report desktop-serve bind failure cleanly on stderr */
+      process.stderr.write(`[oh-my-agy/hud] desktop-serve failed: ${err?.message || err}\n`);
+      process.exit(1);
+    });
   } else {
     const port = Number(process.env.ANTIGRAVITY_SIDECAR_WEB_PORT || process.env.PORT || 0);
     const envToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '';
     const server = createHudServer(envToken || crypto.randomBytes(24).toString('hex'), {
       statusRequiresToken: Boolean(envToken),
     });
+    let shuttingDown = false;
+    let parentWatch = null;
+    const shutdown = () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      if (parentWatch) {
+        clearInterval(parentWatch);
+        parentWatch = null;
+      }
+      try { server.closeAllSseClients?.(); } catch { /* fail open: ignore SSE teardown error */ }
+      try {
+        server.close(() => process.exit(0));
+        server.closeAllConnections?.();
+      } catch { /* fail open: ignore HTTP server close error */ }
+      const forceExit = setTimeout(() => process.exit(0), 500);
+      if (typeof forceExit.unref === 'function') forceExit.unref();
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    const initialPpid = process.ppid;
+    if (initialPpid > 1) {
+      parentWatch = setInterval(() => {
+        if (process.ppid === 1) shutdown();
+      }, 15000);
+      if (typeof parentWatch.unref === 'function') parentWatch.unref();
+    }
     server.listen(port, BIND_HOST, () => {
       const addr = server.address();
       const actualPort = typeof addr === 'object' && addr ? addr.port : port;

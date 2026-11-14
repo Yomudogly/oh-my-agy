@@ -13,6 +13,18 @@ When `sidecars/hud/sidecar.json` is present and the plugin is enabled, include a
 
 - `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` (served by `sidecars/hud/main.mjs` + `sidecars/hud/ui.mjs` + `sidecars/hud/client.mjs` with live `GET /api/events` SSE updates, `15 s` fallback polling, digest-diffed stateful DOM preservation, `Cmd/Ctrl+K` Command Palette `#cmd-palette`, top-bar workspace `?activeRoot=` selector & `Handoff` button, wide Slide-Over `#artifact-drawer` with asymmetric transitions & code-block copy, GPU sliding tab pills, arrow-key `tablist` navigation, keyboard shortcuts `Cmd/Ctrl+K` / `/` / `1`–`5` / `Escape`, and light/dark CSS tokens across 5 tabs: `Overview` with workspace/scope filter chips, single `Current Workflow Mode` spotlight & contextual remediation buttons, GPU `scaleX` progress bars, Team Task DAG waves & JSON `Receipt` previews, 5-event `Recent Ledger Events`, 2-tab `Reviews`/`Research` switcher, 10-item collapsible `Plans, Specs, Handoffs & Artifacts`, quick actions including `customization://oh-my-agy`, and Benchmarks/Visual-Ralph/Loft/Code-Health/Shadow-Checkpoints/Stitch `DESIGN.md`/Forensics/Notifications/Doctor cards; `Workflows` horizontally scrollable animated step pipelines; searchable `Skills` catalog with `<mark>` match highlights, `--flag` composer chips & `Preview` drawer for `SKILL.md` + `references/*.md`; `Subagents` roster with `Model` tier pills `inherit`|`flash_lite`|`flash`|`pro` & `invoke_subagent` snippet preview; and interactive 3D Canvas mind-map / `List` `[[slug]]` Markdown `Wiki` explorer with `/api/wiki-search`, TOC jump chips, computed backlinks, `omagy_wiki/log.md` activity, and left-rule Working Agreements)
 
+## Desktop-Only HUD Surfaces (Antigravity, Claude Desktop & Codex Desktop)
+
+The HUD workbench runs **exclusively on Desktop apps** (no CLI `statusLine`/`tmux`, IDE extensions, or MCP Apps `ui://`):
+
+- **Antigravity Desktop**: `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` via `sidecars/hud/sidecar.json`. Defaults `host` to `'antigravity'` and keeps `customization://oh-my-agy` links visible.
+- **Claude Desktop**: Configured via `sh hooks/run.sh host-setup claude` in `<workspace>/.claude/launch.json` (`"oh-my-agy-hud"` on loopback port `48800..49799`) or auto-spawned on `SessionStart` via `sidecars/hud/main.mjs desktop-serve --host claude` on `47800..48799`. Interactive actions copy prompts cleanly (`clipboard-handoff`), and `subagent-standalone` executes `claude -p --agent <role>`.
+- **Codex Desktop**: Auto-spawned idempotently on Desktop `SessionStart` via `sidecars/hud/main.mjs desktop-serve --host codex` on loopback port `47800..48799` for Codex Desktop's in-app Web Preview. `POST /api/dispatch` supports loopback RFC 6455 Codex `app-server` JSON-RPC (`OMAGY_CODEX_APP_SERVER_URL`), `codex exec` (`subagent-standalone`), and `clipboard-handoff`.
+- **Desktop Gating & Security Controls**:
+  - `OMAGY_DESKTOP_HUD=1` forces auto-start on `'claude'`/`'codex'` (suppressed on plain CLI, VS Code, Cursor, JetBrains, and CI); `OMAGY_DESKTOP_HUD=0` disables Desktop auto-start completely.
+  - `OMAGY_HUD_IDLE_TIMEOUT_MS` configures idle shutdown (default 2 hours; postponed while `/api/events` SSE clients remain connected).
+  - `desktop-serve` validates loopback `Host` headers (`127.0.0.1`, `localhost`, `[::1]`, `403` otherwise) before injecting dynamic `<meta name="omagy-hud-token">` on `GET /`, stores its `0o600` registry under `runtimeDir()`, omits `?token=` from `SessionStart` output, and hides `customization://oh-my-agy` when `data.host !== 'antigravity'`.
+
 ## Presets
 - `minimal`: one line, e.g. `[OMA] autopilot:ultragoal | ultragoal:3/7`
 - `focused` (default): the minimal line plus each active mode's phase, iteration, and last-update age.

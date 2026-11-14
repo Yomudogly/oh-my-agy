@@ -28,6 +28,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
+import {
+  buildCompactClaudeContract, checkHostBundleDrift, desktopHudRegistryFile, detectHost, ensureDesktopHudDaemon,
+  expandTranscriptRecordForFreshness, extractHostTranscriptRecords, hasClaudeRulesFile,
+  isDesktopAppSession, normalizeLifecycleEvent, normalizeLifecyclePayload, resolveBundleRoot,
+  resolveCodexVersion, serializeHookOutcome,
+} from './omagy-host.mjs';
 
 export function hardenWindowsExeSearch() {
   if (process.platform === 'win32') {
@@ -127,11 +133,12 @@ export function runtimeFile(conversationId, kind) {
   return path.join(runtimeDir(), `${safeId(conversationId)}.${kind}.json`);
 }
 export function workspaceRoots(payload) {
-  const list = payload.workspacePaths || payload.workspace_paths || [];
-  const raw = (Array.isArray(list) ? list : [list]).filter((p) => typeof p === 'string' && p.trim());
+  const p = payload || {};
+  const list = p.workspacePaths || p.workspace_paths || p.cwd || p.project_dir || p.workspace || [];
+  const raw = (Array.isArray(list) ? list : [list]).filter((x) => typeof x === 'string' && x.trim());
   if (!raw.length && process.env.OMAGY_WORKSPACE) raw.push(process.env.OMAGY_WORKSPACE);
-  return raw.filter((p) => {
-    try { return fs.existsSync(p); } catch { return false; }
+  return raw.filter((x) => {
+    try { return fs.existsSync(x); } catch { return false; }
   });
 }
 function ago(ms) {
@@ -189,7 +196,7 @@ const SUBAGENT_PROMPT_RE = /^(?:\s*TEAM\s+\S+\s+[—-]\s+TASK\b|\s*<identity>\s*
 function isSubagentPayload(payload, userText = '') {
   if (!payload || typeof payload !== 'object') return false;
   if (payload.isSubagent === true || payload.is_subagent === true) return true;
-  if (payload.parentConversationId || payload.parent_conversation_id || payload.subagentType || payload.subagent_type) return true;
+  if (payload.parentConversationId || payload.parent_conversation_id || payload.subagentType || payload.subagent_type || payload.agent_id || payload.agent_type || payload.agentId || payload.agentType) return true;
   return Boolean(userText && (SUBAGENT_PROMPT_RE.test(userText) || userText.includes('<antigravity_runtime>')));
 }
 
@@ -436,8 +443,8 @@ export function loadWikiSummary(roots, nowMs = Date.now()) {
     const agreementsPath = path.join(root, 'omagy_wiki', 'agreements.md');
     let indexRaw = '';
     let agreementsRaw = '';
-    try { indexRaw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { /* ignore */ }
-    try { agreementsRaw = fs.readFileSync(agreementsPath, 'utf8').trim(); } catch { /* ignore */ }
+    try { if (!hasSymlinkSegment(root, indexPath)) indexRaw = fs.readFileSync(indexPath, 'utf8').trim(); } catch { /* fail open: optional wiki index */ }
+    try { if (!hasSymlinkSegment(root, agreementsPath)) agreementsRaw = fs.readFileSync(agreementsPath, 'utf8').trim(); } catch { /* fail open: optional wiki agreements */ }
     const agLines = filterAndRedactWikiLines(agreementsRaw, 25, nowMs);
     const idxLines = filterAndRedactWikiLines(indexRaw, MAX_WIKI_CONTEXT_LINES, nowMs);
     if (!agLines.length && !idxLines.length) continue;
@@ -496,7 +503,7 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
         const agentsFile = path.join(d, 'AGENTS.md');
         if (!seen.has(agentsFile)) {
           let raw = '';
-          try { raw = fs.readFileSync(agentsFile, 'utf8').trim(); } catch { raw = ''; }
+          try { if (!hasSymlinkSegment(root, agentsFile)) raw = fs.readFileSync(agentsFile, 'utf8').trim(); } catch { /* fail open: unreadable subdir AGENTS.md */ raw = ''; }
           if (raw) {
             seen.add(agentsFile);
             const rel = path.relative(root, agentsFile);
@@ -506,10 +513,12 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
         }
         const childWikiDir = path.join(d, 'omagy_wiki');
         if (!seen.has(childWikiDir)) {
+          const agFile = path.join(childWikiDir, 'agreements.md');
+          const idxFile = path.join(childWikiDir, 'index.md');
           let agRaw = '';
           let idxRaw = '';
-          try { agRaw = fs.readFileSync(path.join(childWikiDir, 'agreements.md'), 'utf8').trim(); } catch { agRaw = ''; }
-          try { idxRaw = fs.readFileSync(path.join(childWikiDir, 'index.md'), 'utf8').trim(); } catch { idxRaw = ''; }
+          try { if (!hasSymlinkSegment(root, agFile)) agRaw = fs.readFileSync(agFile, 'utf8').trim(); } catch { /* fail open: unreadable child agreements */ agRaw = ''; }
+          try { if (!hasSymlinkSegment(root, idxFile)) idxRaw = fs.readFileSync(idxFile, 'utf8').trim(); } catch { /* fail open: unreadable child index */ idxRaw = ''; }
           const agLines = filterAndRedactWikiLines(agRaw, 12, nowMs);
           const idxLines = filterAndRedactWikiLines(idxRaw, 15, nowMs);
           if (agLines.length || idxLines.length) {
@@ -2609,10 +2618,9 @@ function lastUserMessage(transcriptPath, payload = null) {
       if (!line) continue;
       let o;
       try { o = JSON.parse(line); } catch { /* fail open: partial line */ continue; }
-      const isUser = /USER_INPUT/i.test(String(o.type || '')) || o.source === 'USER_EXPLICIT' || o.role === 'user';
-      const content = o.content ?? o.text ?? o.message;
-      if (!isUser || typeof content !== 'string') continue;
-      return { key: `${o.step_index ?? o.stepIndex ?? ''}:${o.created_at ?? o.createdAt ?? ''}:${content.length}`, text: content };
+      const [nr] = extractHostTranscriptRecords([o]);
+      if (!nr?.isUser || typeof nr.text !== 'string') continue;
+      return { key: `${nr.keyHint}:${nr.text.length}`, text: nr.text };
     }
   }
   const directInput = payload?.lastUserInput ?? payload?.last_user_input ?? payload?.prompt;
@@ -2634,9 +2642,8 @@ function lastAssistantMessage(payload) {
     if (!line) continue;
     let o;
     try { o = JSON.parse(line); } catch { /* fail open: partial line */ continue; }
-    const isModel = /PLANNER_RESPONSE/i.test(String(o.type || '')) || o.source === 'MODEL' || o.role === 'assistant';
-    const content = o.content ?? o.text ?? o.message;
-    if (isModel && typeof content === 'string' && content.trim()) return content.trim();
+    const [nr] = extractHostTranscriptRecords([o]);
+    if (nr?.isModel && typeof nr.text === 'string' && nr.text.trim()) return nr.text.trim();
   }
   return '';
 }
@@ -2798,11 +2805,11 @@ export function sanitizeRelayedText(text) {
 export function detectSkills(text) {
   const raw = sanitizeRelayedText(text);
   const found = [];
-  const lead = /^\s*([$/])([a-z][a-z0-9-]*)\b/.exec(raw);
+  const lead = /^\s*\[?([$/])(?:oh-my-agy:)?([a-z][a-z0-9-]*)\b/.exec(raw);
   if (lead) {
     const [, sigil, name] = lead;
     if (SKILLS.includes(name) && !(sigil === '/' && AGY_SLASH.has(name))) {
-      const afterLead = raw.slice(lead[0].length).replace(/^\s*[:,-]?\s*/, '');
+      const afterLead = raw.slice(lead[0].length).replace(/^\s*\]?(?:\([^)]+\))?\s*[:,-]?\s*/, '');
       if (!isInformationalHelpPrompt(afterLead)) found.push(name);
       else return [];
     }
@@ -2810,7 +2817,7 @@ export function detectSkills(text) {
     return [];
   }
   const cleaned = stripQuotedAndNegatedRegions(raw);
-  const re = /(^|[\s(])([$/])([a-z][a-z0-9-]*)/g;
+  const re = /(^|[\s(\[])([$/])(?:oh-my-agy:)?([a-z][a-z0-9-]*)/g;
   let m;
   while ((m = re.exec(cleaned)) !== null) {
     const [, , sigil, name] = m;
@@ -2847,7 +2854,9 @@ function detectCompactionEpoch(transcriptPath, payload) {
       const o = JSON.parse(line);
       if (/^(?:PLANNER_RESPONSE|GENERIC|EPHEMERAL_MESSAGE)$/i.test(String(o?.type || ''))
         || o?.source === 'MODEL' || o?.role === 'assistant' || o?.role === 'tool' || Array.isArray(o?.tool_calls)) continue;
-      scan(String(o?.content ?? o?.text ?? o?.message ?? o?.summary ?? ''));
+      const [nr] = extractHostTranscriptRecords([o]);
+      if (nr?.isModel) continue;
+      scan(nr?.text || String(o?.content ?? o?.text ?? o?.message ?? o?.summary ?? ''));
     } catch { /* fail open: ignore non-json compaction fragment */ }
   }
   for (const k of ['contextSummary', 'context_summary', 'lastUserInput', 'last_user_input', 'prompt']) scan(payload?.[k]);
@@ -2899,6 +2908,8 @@ function capEphemeralMessages(messages, maxChars = MAX_EPHEMERAL_CHARS) {
 
 // ---------- handlers ----------
 export function sessionStart(payload) {
+  const host = detectHost(payload);
+  payload = normalizeLifecyclePayload(payload, host);
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const recordFile = runtimeFile(conv, 'routing');
@@ -2926,11 +2937,13 @@ export function sessionStart(payload) {
   }
   const capped = capEphemeralMessages(messages);
   if (candMap && capped.some((m) => m.startsWith('[oh-my-agy] Codebase map'))) mapInjected = true;
-  writeJson(recordFile, { ...record, wikiInjected, mapInjected, isSubagent, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
+  writeJson(recordFile, { ...record, host: record.host || host, wikiInjected, mapInjected, isSubagent, workspaces: roots, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
   return capped.length ? { injectSteps: capped.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
 export function preInvocation(payload) {
+  const host = detectHost(payload);
+  payload = normalizeLifecyclePayload(payload, host);
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const rawTx = payload.transcriptPath || payload.transcript_path || payload.logPath;
@@ -2989,7 +3002,8 @@ export function preInvocation(payload) {
   const capped = capEphemeralMessages(messages);
   if (candMap && capped.some((m) => m.startsWith('[oh-my-agy] Codebase map'))) mapInjected = true;
   writeJson(recordFile, {
-    lastUserKey: userKey, wikiInjected, mapInjected, isSubagent,
+    host: record.host || host,
+    lastUserKey: userKey, wikiInjected, mapInjected, isSubagent, workspaces: roots,
     compactionEpoch: detectedEpoch || record.compactionEpoch || '',
     ...(isSubagent ? {} : { skills }),
     seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString(),
@@ -3054,6 +3068,7 @@ export function isPathInsideAllowedOmagy(roots, rawTarget) {
   });
 }
 export function preToolUse(payload) {
+  payload = normalizeLifecyclePayload(payload, detectHost(payload));
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const call = payload.toolCall || payload.tool_call || {};
@@ -3260,7 +3275,7 @@ export function checkVerificationFreshness(transcriptPath, tailBytes = TRANSCRIP
     pos += Buffer.byteLength(raw, 'utf8') + 1;
     const line = raw.trim();
     if (!line) continue;
-    try { const o = JSON.parse(line); if (o && typeof o === 'object' && !Array.isArray(o)) recs.push({ o, recOffset }); } catch { /* fail open: bad jsonl */ }
+    try { const o = JSON.parse(line); for (const r of expandTranscriptRecordForFreshness(o)) recs.push({ o: r, recOffset }); } catch { /* fail open: bad jsonl */ }
   }
   if (!recs.length) return empty;
   let lastVerifyIdx = -1, lastOutcome = 'none', lastVerifyCmd = '', lastEditIdx = -1, lastEditedTarget = '';
@@ -3307,6 +3322,7 @@ export function isContextOverflowStop(payload, rawReason = '') {
 }
 
 export async function stop(payload) {
+  payload = normalizeLifecyclePayload(payload, detectHost(payload));
   const rawReasonInput = String(payload?.terminationReason ?? payload?.termination_reason ?? 'NO_TOOL_CALL').trim();
   const allow = { decision: 'stop' };
   if (isContextOverflowStop(payload, rawReasonInput)) return allow;
@@ -3503,7 +3519,10 @@ async function notify(payload, roots) {
 }
 
 // ---------- main ----------
-const LIFECYCLE_HOOK_EVENTS = new Set(['session-start', 'pre-invocation', 'pre-tool-use', 'stop']);
+const LIFECYCLE_HOOK_EVENTS = new Set([
+  'session-start', 'pre-invocation', 'user-prompt-submit', 'pre-tool-use', 'post-tool-use',
+  'subagent-start', 'subagent-stop', 'pre-compact', 'post-compact', 'stop',
+]);
 
 async function main() {
   const event = (process.argv[2] || '').toLowerCase();
@@ -3513,15 +3532,46 @@ async function main() {
     process.exitCode = await runNonLifecycleCli(event, rawArgs);
     return;
   }
-  const payload = parseJson(readStdin());
+  const rawPayload = parseJson(readStdin());
+  const host = detectHost(rawPayload, process.env, rawArgs);
+  const normEvent = normalizeLifecycleEvent(event);
+  const payload = normalizeLifecyclePayload(rawPayload, host);
   let result = {};
   try {
-    if (event === 'session-start') result = sessionStart(payload);
-    else if (event === 'pre-invocation') result = preInvocation(payload);
-    else if (event === 'pre-tool-use') result = preToolUse(payload);
-    else if (event === 'stop') result = await stop(payload);
+    if (normEvent === 'session-start') result = sessionStart(payload);
+    else if (normEvent === 'pre-invocation') result = preInvocation(payload);
+    else if (normEvent === 'pre-tool-use') result = preToolUse(payload);
+    else if (normEvent === 'stop') result = await stop(payload);
+    if (host !== 'antigravity') {
+      const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+      const bundleRoot = resolveBundleRoot(process.argv[1], pluginRoot);
+      const extra = [];
+      if (normEvent === 'session-start') {
+        const drift = checkHostBundleDrift(pluginRoot, { bundleRoot });
+        if (drift) extra.push(drift);
+        const roots = workspaceRoots(payload);
+        if (host === 'claude' && !hasClaudeRulesFile(roots)) extra.push(buildCompactClaudeContract());
+        if (isDesktopAppSession(host, rawPayload, process.env)) {
+          const hud = await ensureDesktopHudDaemon({ host, workspace: roots[0] || process.cwd(), pluginRoot, env: process.env, argv1: process.argv[1] });
+          if (hud?.message) extra.push(hud.message);
+        }
+      } else if (normEvent === 'pre-invocation' && isDesktopAppSession(host, rawPayload, process.env)) {
+        const ws = workspaceRoots(payload)[0] || process.cwd();
+        const txt = String(payload.prompt || rawPayload?.prompt || '');
+        const hudAsk = detectSkills(txt).includes('hud')
+          || (result.injectSteps || []).some((s) => String(s?.ephemeralMessage || '').includes('$hud'));
+        if (hudAsk || !fs.existsSync(desktopHudRegistryFile(ws))) {
+          const hud = await ensureDesktopHudDaemon({ host, workspace: ws, pluginRoot, env: process.env, argv1: process.argv[1] });
+          if (hud?.message) extra.push(hud.message);
+        }
+      }
+      result = serializeHookOutcome(event, result, host, {
+        extraMessages: extra,
+        codexVersion: host === 'codex' ? resolveCodexVersion(rawPayload, process.env, bundleRoot) : '',
+      });
+    }
   } catch (err) { /* fail open: log hook failure and emit safe fallback JSON */
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = redactSecrets(err instanceof Error ? err.message : String(err));
     process.stderr.write(`[oh-my-agy] hook ${event} failed open: ${msg}\n`);
     try {
       const roots = workspaceRoots(payload);
@@ -3530,7 +3580,7 @@ async function main() {
         appendJsonlRecord(path.join(logDir, 'hook-errors.jsonl'), { at: new Date().toISOString(), event, error: msg });
       }
     } catch { /* fail open: ignore hook error log write failure */ }
-    result = event === 'stop' ? { decision: 'stop' } : {};
+    result = normEvent === 'stop' ? (host === 'antigravity' ? { decision: 'stop' } : {}) : {};
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -3553,10 +3603,12 @@ const isMainModule = Boolean(process.argv[1] && sameModulePath(process.argv[1], 
 if (isMainModule) {
   main().catch((err) => {
     const ev = (process.argv[2] || '').toLowerCase();
-    const errMsg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[oh-my-agy] main error: ${err instanceof Error ? err.stack || errMsg : errMsg}\n`);
+    const errHost = detectHost({}, process.env, process.argv.slice(3));
+    const errMsg = redactSecrets(err instanceof Error ? err.message : String(err));
+    const errDetail = redactSecrets(err instanceof Error ? err.stack || errMsg : errMsg);
+    process.stderr.write(`[oh-my-agy] main error: ${errDetail}\n`);
     if (LIFECYCLE_HOOK_EVENTS.has(ev)) {
-      process.stdout.write(ev === 'stop' ? '{"decision":"stop"}\n' : '{}\n');
+      process.stdout.write(ev === 'stop' ? (errHost === 'antigravity' ? '{"decision":"stop"}\n' : '{}\n') : '{}\n');
     } else {
       process.stdout.write(`${JSON.stringify({ ok: false, error: errMsg })}\n`);
       process.exitCode = 2;

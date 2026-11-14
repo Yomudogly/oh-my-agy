@@ -6,7 +6,23 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  buildCompactClaudeContract,
+  checkHostBundleDrift,
+  detectHost,
+  extractHostTranscriptRecords,
+  hasClaudeRulesFile,
+  isDesktopAppSession,
+  normalizeLifecycleEvent,
+  normalizeLifecyclePayload,
+  resolveCodexVersion,
+  serializeHookOutcome,
+} from './omagy-host.mjs';
+import {
+  setupHostBundle,
+  validateHostBundle,
+} from './omagy-host-setup.mjs';
 import {
   COLD_CLI_EVENTS,
   CONFIRMATION_MTIME_TOLERANCE_MS,
@@ -1086,7 +1102,9 @@ export async function runSelftest() {
     const directSkillText = (pDirectSkill.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
     check('sessionStart and preInvocation persist transcriptPath/artifactDirectoryPath and route lastUserInput fallback',
       rtAfterStart.transcriptPath === '/tmp/selftest-t1.jsonl' && rtAfterStart.artifactDirectoryPath === '/tmp/selftest-artifacts'
+      && Array.isArray(rtAfterStart.workspaces) && rtAfterStart.workspaces.some((p) => p === ws || p === fs.realpathSync(ws))
       && rtAfterPlain.transcriptPath === '/tmp/selftest-t2.jsonl' && rtAfterSkill.transcriptPath === '/tmp/selftest-t2.jsonl'
+      && Array.isArray(rtAfterSkill.workspaces) && rtAfterSkill.workspaces.some((p) => p === ws || p === fs.realpathSync(ws))
       && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts' && directSkillText.includes('$ralplan'));
 
     // T5: plugin.json strict JSON, official 10-key Antigravity schema allowlist, <=160 char description, CHANGELOG version sync, and logo PNG dimensions
@@ -1492,10 +1510,10 @@ export async function runSelftest() {
       if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
       if (provenanceRe.test(content)) provenanceViolations.push(relPath);
     };
-    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
+    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
       checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
     }
-    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs']) {
+    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs']) {
       const coreTxt = rTxt(coreRel);
       if (retiredSubagentRe.test(coreTxt) || personaWordRe.test(coreTxt)) retiredViolations.push(coreRel);
     }
@@ -2962,6 +2980,510 @@ export async function runSelftest() {
     }
     check('sidecars/hud/{ui,client}.mjs modularity (<256KB, zero circularity/provenance/personal-paths) and HUD --selftest pass',
       t52Ok, t52Detail);
+
+    // T53: Polyglot HostCodec, Desktop gating, transcript canonicalization, Codex version tiers & wire codecs
+    let t53Ok = false;
+    let t53Detail = '';
+    const t53Dir = path.join(ws, 't53-hostcodec');
+    try {
+      fs.mkdirSync(path.join(t53Dir, '.omagy', 'state'), { recursive: true });
+      const hostMod = await import('./omagy-host.mjs');
+      const dPriority = detectHost({ session_id: 's' }, { OMAGY_HOST: 'codex', CLAUDE_PROJECT_DIR: t53Dir }, ['--host=claude']) === 'claude'
+        && detectHost({}, { OMAGY_HOST: 'codex' }, []) === 'codex'
+        && detectHost({ hook_event_name: 'SessionStart', cwd: t53Dir }, { CLAUDE_PROJECT_DIR: t53Dir }, []) === 'claude'
+        && detectHost({ hook_event_name: 'SessionStart', cwd: t53Dir }, { CODEX_HOME: t53Dir }, []) === 'codex'
+        && detectHost({}, { CODEX_APP_TOOLS_PIPE_PATH: '/tmp/codex.pipe' }, []) === 'codex'
+        && detectHost({}, { __CFBundleIdentifier: 'com.openai.codex.cli' }, []) === 'codex'
+        && detectHost({ tool_name: 'Bash' }, {}, []) === 'antigravity'
+        && detectHost({ tool_name: 'Read' }, { CODEX_THREAD_ID: 'thr-1' }, []) === 'codex'
+        && detectHost({ tool_name: 'shell_command' }, { CLAUDE_PROJECT_DIR: t53Dir }, []) === 'claude'
+        && detectHost({ workspacePaths: [t53Dir] }, {}, []) === 'antigravity';
+
+      const deskPos = isDesktopAppSession('claude', {}, { __CFBundleIdentifier: 'com.anthropic.claudefordesktop' }) === true
+        && isDesktopAppSession('codex', {}, { CODEX_DESKTOP: '1' }) === true
+        && isDesktopAppSession('codex', {}, { CODEX_APP_TOOLS_PIPE_PATH: '/tmp/codex.pipe' }) === true
+        && isDesktopAppSession('codex', {}, { __CFBundleIdentifier: 'com.openai.codex.cli' }) === true
+        && isDesktopAppSession('codex', {}, { OMAGY_DESKTOP_HUD: '1' }) === true;
+      const deskNeg = isDesktopAppSession('antigravity', {}, { OMAGY_DESKTOP_HUD: '1' }) === false
+        && isDesktopAppSession('claude', {}, {}) === false
+        && isDesktopAppSession('claude', {}, { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', CLAUDE_CODE_ENTRYPOINT: 'cli' }) === false
+        && isDesktopAppSession('claude', {}, { CLAUDE_CODE_ENTRYPOINT: 'cli', OMAGY_DESKTOP_HUD: '1' }) === false
+        && isDesktopAppSession('codex', {}, { CODEX_DESKTOP: '1', VSCODE_PID: '42' }) === false
+        && isDesktopAppSession('codex', {}, { CODEX_APP_TOOLS_PIPE_PATH: '/tmp/codex.pipe', VSCODE_PID: '42' }) === false
+        && isDesktopAppSession('codex', {}, { VSCODE_PID: '42', OMAGY_DESKTOP_HUD: '1' }) === false
+        && isDesktopAppSession('codex', {}, { CODEX_DESKTOP: '1', CURSOR_TRACE_ID: 'cur' }) === false
+        && isDesktopAppSession('codex', {}, { CODEX_DESKTOP: '1', JETBRAINS_IDE: 'idea' }) === false
+        && isDesktopAppSession('codex', {}, { CODEX_DESKTOP: '1', CI: 'true' }) === false
+        && isDesktopAppSession('codex', {}, { CI: '1', OMAGY_DESKTOP_HUD: '1' }) === false
+        && isDesktopAppSession('codex', {}, { CODEX_CI: '1', OMAGY_DESKTOP_HUD: '1' }) === false
+        && isDesktopAppSession('claude', {}, { __CFBundleIdentifier: 'com.anthropic.claudefordesktop', OMAGY_DESKTOP_HUD: '0' }) === false;
+      const hookRegPath = hostMod.desktopHudRegistryFile(t53Dir, '');
+      const launchRegPath = hostMod.desktopHudRegistryFile(t53Dir, '', { channel: 'launch' });
+
+      const prevClaudeCfgDir = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = path.join(t53Dir, 'isolated-claude-cfg');
+      let claudeContract = '';
+      let claudeSessNoRules = {};
+      let claudeSessWithRules = {};
+      let rulesAbsentBefore = false;
+      let rulesPresentAfter = false;
+      try {
+        claudeContract = buildCompactClaudeContract();
+        rulesAbsentBefore = !hasClaudeRulesFile([t53Dir]);
+        claudeSessNoRules = serializeHookOutcome('session-start', sessionStart({ workspacePaths: [t53Dir], conversationId: `${conv}-t53-norules` }), 'claude', {
+          extraMessages: hasClaudeRulesFile([t53Dir]) ? [] : [claudeContract],
+        });
+        const rulesTarget = path.join(t53Dir, '.claude', 'rules', 'oh-my-agy.md');
+        fs.mkdirSync(path.dirname(rulesTarget), { recursive: true });
+        fs.writeFileSync(rulesTarget, '# rules\n', 'utf8');
+        rulesPresentAfter = hasClaudeRulesFile([t53Dir]);
+        claudeSessWithRules = serializeHookOutcome('session-start', sessionStart({ workspacePaths: [t53Dir], conversationId: `${conv}-t53-rules` }), 'claude', {
+          extraMessages: hasClaudeRulesFile([t53Dir]) ? [] : [claudeContract],
+        });
+      } finally {
+        if (prevClaudeCfgDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = prevClaudeCfgDir;
+      }
+      const agSess = sessionStart({ workspacePaths: [pluginRoot], conversationId: `${conv}-t53-agy` });
+      const agMsgLen = (agSess.injectSteps?.[0]?.ephemeralMessage || '').length;
+
+      const upPrompt = normalizeLifecyclePayload({ prompt: '$ralplan check auth', cwd: t53Dir, session_id: `${conv}-t53-up` }, 'claude');
+      const upOut = serializeHookOutcome('user-prompt-submit', preInvocation(upPrompt), 'claude');
+
+      fs.writeFileSync(path.join(t53Dir, 'target.js'), 'export const x = 1;\n', 'utf8');
+      const ptuUnread = normalizeLifecyclePayload({ tool_name: 'Write', tool_input: { file_path: path.join(t53Dir, 'target.js'), content: 'export const x = 2;\n' }, cwd: t53Dir, session_id: `${conv}-t53-ptu` }, 'claude');
+      const ptuDeny = serializeHookOutcome('pre-tool-use', preToolUse(ptuUnread), 'claude');
+      preToolUse(normalizeLifecyclePayload({ tool_name: 'Read', tool_input: { file_path: path.join(t53Dir, 'target.js') }, cwd: t53Dir, session_id: `${conv}-t53-ptu` }, 'claude'));
+      const ptuReadAfter = serializeHookOutcome('pre-tool-use', preToolUse(ptuUnread), 'claude');
+
+      const subStop = serializeHookOutcome('subagent-stop', { decision: 'continue', reason: 'ignored' }, 'claude');
+      const codexStop = serializeHookOutcome('stop', { decision: 'continue', reason: 'continue task' }, 'codex');
+
+      const claudeTx = path.join(t53Dir, 'claude-tx.jsonl');
+      fs.writeFileSync(claudeTx, [
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Write', input: { file_path: 'src/a.js', content: 'a' } }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c2', name: 'Edit', input: { file_path: 'src/a.js', old_string: 'a', new_string: 'b' } }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c3', name: 'MultiEdit', input: { file_path: 'src/a.js', edits: [] } }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c4', name: 'NotebookEdit', input: { notebook_path: 'nb.ipynb' } }] } }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c5', name: 'Bash', input: { command: 'sh hooks/run.sh selftest' } }] } }),
+        JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c5', content: 'Exit code: 0\nPASS' }] } }),
+      ].join('\n') + '\n', 'utf8');
+      const codexTx = path.join(t53Dir, 'codex-tx.jsonl');
+      fs.writeFileSync(codexTx, [
+        JSON.stringify({ type: 'response_item', payload: { type: 'function_call', name: 'shell_command', call_id: 'x1', arguments: JSON.stringify({ command: 'npm test' }) } }),
+        JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'x1', output: 'Process exited with code 0' } }),
+      ].join('\n') + '\n', 'utf8');
+      const codexTxFail = path.join(t53Dir, 'codex-tx-fail.jsonl');
+      fs.writeFileSync(codexTxFail, [
+        JSON.stringify({ type: 'response_item', payload: { type: 'function_call', name: 'shell_command', call_id: 'x2', arguments: JSON.stringify({ command: 'npm test' }) } }),
+        JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'x2', output: 'Process exited with code 2' } }),
+      ].join('\n') + '\n', 'utf8');
+      const codexTxJsonFail = path.join(t53Dir, 'codex-tx-json-fail.jsonl');
+      fs.writeFileSync(codexTxJsonFail, [
+        JSON.stringify({ type: 'response_item', payload: { type: 'function_call', name: 'shell_command', call_id: 'x2j', arguments: JSON.stringify({ command: 'npm test' }) } }),
+        JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'x2j', output: JSON.stringify({ error: 'command failed', status: 'FAILED' }) } }),
+      ].join('\n') + '\n', 'utf8');
+      const claudeVf = checkVerificationFreshness(claudeTx);
+      const codexVf = checkVerificationFreshness(codexTx);
+      const codexVfFail = checkVerificationFreshness(codexTxFail);
+      const codexVfJsonFail = checkVerificationFreshness(codexTxJsonFail);
+
+      const codexNoExitRec = extractHostTranscriptRecords([{ type: 'response_item', payload: { type: 'function_call_output', call_id: 'x3', output: 'plain ok' } }])[0]?.toolResults?.[0];
+      const codexErrFlagRec = extractHostTranscriptRecords([{ type: 'response_item', payload: { type: 'function_call_output', call_id: 'x4', is_error: true, output: 'boom' } }])[0]?.toolResults?.[0];
+      const claudeNoExitRec = extractHostTranscriptRecords([{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c6', is_error: false, content: 'ok' }] } }])[0]?.toolResults?.[0];
+      const claudeErrRec = extractHostTranscriptRecords([{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c7', is_error: true, content: 'boom' }] } }])[0]?.toolResults?.[0];
+      const cappedCtxOut = serializeHookOutcome('session-start', {}, 'claude', { extraMessages: ['x'.repeat(15_000)] });
+
+      const subSymWs = path.join(t53Dir, 'subdir-sym-ws');
+      const subSymPkg = path.join(subSymWs, 'packages', 'app');
+      const subSymWiki = path.join(subSymPkg, 'omagy_wiki');
+      fs.mkdirSync(subSymWiki, { recursive: true });
+      const outsideSecretFile = path.join(t53Dir, 'outside-secret.txt');
+      fs.writeFileSync(outsideSecretFile, '-----BEGIN PRIVATE KEY-----\nLEAKED_SYMLINK_SECRET\n', 'utf8');
+      let subdirSymlinkBlocked = true;
+      try {
+        fs.symlinkSync(outsideSecretFile, path.join(subSymPkg, 'AGENTS.md'));
+        fs.symlinkSync(outsideSecretFile, path.join(subSymWiki, 'agreements.md'));
+        fs.symlinkSync(outsideSecretFile, path.join(subSymWiki, 'index.md'));
+        const subSymRes = discoverSubdirAgents([subSymWs], 'edit packages/app/main.ts', []);
+        subdirSymlinkBlocked = !subSymRes.messages.some((m) => m.includes('LEAKED_SYMLINK_SECRET'));
+      } catch { /* fail open: platform without symlink permission skips symlink containment check */ }
+
+      const stubTimeoutRoot = path.join(t53Dir, 'stub-timeout');
+      fs.mkdirSync(path.join(stubTimeoutRoot, 'sidecars', 'hud'), { recursive: true });
+      fs.writeFileSync(path.join(stubTimeoutRoot, 'sidecars', 'hud', 'main.mjs'), 'process.exit(0);\n', 'utf8');
+      const daemonTimeoutRes = await hostMod.ensureDesktopHudDaemon({
+        host: 'codex',
+        workspace: stubTimeoutRoot,
+        pluginRoot: stubTimeoutRoot,
+        argv1: path.join(stubTimeoutRoot, 'hooks', 'omagy-hook.mjs'),
+        env: { ...process.env, OMAGY_RUNTIME_DIR: path.join(t53Dir, 'timeout-rt') },
+      });
+
+      const codexBundle = path.join(t53Dir, 'bundle');
+      fs.mkdirSync(codexBundle, { recursive: true });
+      fs.writeFileSync(path.join(codexBundle, 'host-bundle.json'), JSON.stringify({ codexVersion: '0.164.0' }), 'utf8');
+      const verEnv = resolveCodexVersion({}, { OMAGY_CODEX_VERSION: '0.168.0' }, codexBundle);
+      const verBundle = resolveCodexVersion({}, {}, codexBundle);
+      const verDefault = resolveCodexVersion({}, {}, path.join(t53Dir, 'missing'));
+      const cxAsk = serializeHookOutcome('pre-tool-use', { decision: 'force_ask', reason: 'confirm' }, 'codex', { codexVersion: '0.167.0' });
+      const cxDeny = serializeHookOutcome('pre-tool-use', { decision: 'force_ask', reason: 'confirm' }, 'codex', { codexVersion: '0.164.0' });
+      const cxSys = serializeHookOutcome('pre-tool-use', { decision: 'force_ask', reason: 'confirm' }, 'codex', { codexVersion: '0.162.9' });
+      const detectMdPluginSkill = JSON.stringify(detectSkills('[$hud](/opt/codex/skills/hud/SKILL.md) and [$oh-my-agy:autopilot](/p/SKILL.md)')) === JSON.stringify(['hud', 'autopilot']);
+
+      t53Ok = dPriority && deskPos && deskNeg && detectMdPluginSkill
+        && claudeContract.length <= 3200
+        && rulesAbsentBefore && rulesPresentAfter
+        && String(claudeSessNoRules.hookSpecificOutput?.additionalContext || '').includes(claudeContract.slice(0, 32))
+        && !String(claudeSessWithRules.hookSpecificOutput?.additionalContext || '').includes(claudeContract.slice(0, 32))
+        && agMsgLen > 0 && agMsgLen <= MAX_EPHEMERAL_CHARS
+        && normalizeLifecycleEvent('UserPromptSubmit') === 'pre-invocation'
+        && normalizeLifecycleEvent('SessionStart') === 'session-start'
+        && String(upOut.hookSpecificOutput?.additionalContext || '').includes('$ralplan')
+        && ptuDeny.hookSpecificOutput?.permissionDecision === 'ask'
+        && Object.keys(ptuReadAfter).length === 0
+        && subStop.continue === true && subStop.suppressOutput === true && !Object.prototype.hasOwnProperty.call(subStop, 'additionalContext')
+        && codexStop.decision === 'block' && codexStop.reason === 'continue task' && Object.keys(codexStop).length === 2
+        && extractHostTranscriptRecords([{ type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: 'e1', arguments: '{"cmd":"ls"}' } }])[0]?.toolCalls?.[0]?.name === 'bash'
+        && extractHostTranscriptRecords([{ type: 'response_item', payload: { type: 'function_call', name: 'shell', call_id: 's1', arguments: '{"command":["echo","ok"]}' } }])[0]?.toolCalls?.[0]?.args?.CommandLine === 'echo ok'
+        && claudeVf.status === 'pass'
+        && codexVf.status === 'pass'
+        && codexVfFail.status === 'fail'
+        && codexVfJsonFail.status === 'fail'
+        && codexErrFlagRec?.status === 'ERROR'
+        && subdirSymlinkBlocked
+        && codexNoExitRec?.exitCode === undefined && codexNoExitRec?.status === 'DONE'
+        && claudeNoExitRec?.exitCode === undefined && claudeNoExitRec?.status === 'DONE'
+        && claudeErrRec?.exitCode === 1 && claudeErrRec?.status === 'ERROR'
+        && String(cappedCtxOut.hookSpecificOutput?.additionalContext || '').length <= 12_000
+        && hookRegPath !== launchRegPath && path.basename(launchRegPath).startsWith('hud-desktop-launch-')
+        && daemonTimeoutRes.started === false && daemonTimeoutRes.error === 'hud_daemon_startup_timeout'
+        && verEnv === '0.168.0' && verBundle === '0.164.0' && verDefault === '0.167.0'
+        && cxAsk.hookSpecificOutput?.permissionDecision === 'ask'
+        && cxDeny.hookSpecificOutput?.permissionDecision === 'deny'
+        && cxSys.systemMessage === 'confirm' && !cxSys.hookSpecificOutput
+        && JSON.parse(readFixture(path.join(process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy'), `${conv}-t53-agy.routing.json`))).host === 'antigravity';
+      t53Detail = `prio=${dPriority} desk=${deskPos && deskNeg} ag=${agMsgLen} cv=${claudeVf.status}/${codexVf.status}`;
+    } catch (e) { /* fail open: capture T53 error detail */
+      t53Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('Polyglot HostCodec, Desktop gating, transcript normalization, Codex version tiers & wire codecs pass', t53Ok, t53Detail);
+
+    // T54: Hermetic host-setup, host-validate, symlinks/--copy, 3-tier Claude agents, Codex TOML/openai.yaml & bundle drift
+    let t54Ok = false;
+    let t54Detail = '';
+    const t54Root = path.join(ws, 't54-setup');
+    const prevRunShCodex = process.env.OMAGY_CODEX_VERSION;
+    try {
+      const repoHooksBefore = readFixture(path.join(pluginRoot, 'hooks.json'));
+      const repoAgentsBefore = readFixture(path.join(pluginRoot, 'rules', 'AGENTS.md'));
+      const claudeProj = path.join(t54Root, 'claude-proj');
+      const claudeBundle = path.join(t54Root, 'claude-bundle');
+      const claudeCopyBundle = path.join(t54Root, 'claude-copy-bundle');
+      const codexProj = path.join(t54Root, 'codex-proj');
+      const codexHome = path.join(t54Root, 'codex-home');
+      const codexBundle = path.join(t54Root, 'codex-bundle');
+      fs.mkdirSync(path.join(claudeProj, '.claude'), { recursive: true });
+      fs.mkdirSync(path.join(codexHome, 'skills', '.system'), { recursive: true });
+      fs.writeFileSync(path.join(codexHome, 'skills', '.system', 'keep.md'), '# system skill\n', 'utf8');
+      fs.mkdirSync(codexProj, { recursive: true });
+      fs.writeFileSync(path.join(claudeProj, '.claude', 'launch.json'), JSON.stringify({
+        version: '0.0.1',
+        configurations: [{ name: 'existing-app', runtimeExecutable: 'node', runtimeArgs: ['app.js'], port: 3000 }],
+      }, null, 2), 'utf8');
+      fs.writeFileSync(path.join(codexHome, 'config.toml'), '[[profiles.dev]]\nmodel = "gpt-5"\n\n[mcp_servers.custom]\ncommand = "node"\n\n[agents]\nmax_concurrent_threads_per_session = 6\n\n[features]\ngoals = true\nmulti_agent = true\n\n[hooks.state]\ntrusted = true\n', 'utf8');
+
+      const cRes = setupHostBundle({ host: 'claude', dir: claudeBundle, workspace: claudeProj, pluginRoot, symlink: true });
+      const cCopyRes = setupHostBundle({ host: 'claude', dir: claudeCopyBundle, workspace: claudeProj, pluginRoot });
+      const cVal = validateHostBundle({ host: 'claude', dir: claudeBundle, workspace: claudeProj, pluginRoot, strict: true });
+
+      const hooksDirStat = fs.lstatSync(path.join(claudeBundle, 'hooks'));
+      const hookMjsStat = fs.lstatSync(path.join(claudeBundle, 'hooks', 'omagy-hook.mjs'));
+      const copyHookStat = fs.lstatSync(path.join(claudeCopyBundle, 'hooks', 'omagy-hook.mjs'));
+      const launchDoc = JSON.parse(readFixture(path.join(claudeProj, '.claude', 'launch.json')));
+      const hudCfg = launchDoc.configurations.find((c) => c.name === 'oh-my-agy-hud');
+      const claudeHooksDoc = JSON.parse(readFixture(path.join(claudeBundle, 'hooks', 'hooks.json')));
+      const claudeAgents = fs.readdirSync(path.join(claudeBundle, 'agents')).filter((f) => f.endsWith('.md'));
+      const claudeAgentsValid = claudeAgents.length === 14 && claudeAgents.every((f) => {
+        const txt = readFixture(path.join(claudeBundle, 'agents', f));
+        const hasBanned = /^(?:subagent|mainAgent):/m.test(txt);
+        const hasAgentDenied = /disallowedTools:[^\n]*\bAgent\b/m.test(txt) || /-\s*Agent\b/.test(txt);
+        const writeRole = /^(?:debugger|designer|executor|test-engineer)\.md$/.test(f);
+        const hasIsolation = /isolation:\s*worktree/.test(txt);
+        return !hasBanned && hasAgentDenied && (!writeRole || hasIsolation);
+      });
+
+      fs.mkdirSync(path.join(codexHome, 'skills', 'custom-user-skill'), { recursive: true });
+      fs.writeFileSync(path.join(codexHome, 'skills', 'custom-user-skill', 'SKILL.md'), '# custom skill\n', 'utf8');
+      fs.mkdirSync(path.join(codexHome, 'skills', 'autopilot'), { recursive: true });
+      fs.writeFileSync(path.join(codexHome, 'skills', 'autopilot', 'SKILL.md'), '# legacy duplicate\n', 'utf8');
+      fs.writeFileSync(path.join(codexHome, 'hooks.json'), JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'sh /old/oh-my-agy/hooks/run.sh session-start --host=codex' }] }] },
+      }, null, 2), 'utf8');
+
+      const xRes = setupHostBundle({ host: 'codex', dir: codexBundle, workspace: codexProj, codexHome, scope: 'user', pluginRoot, symlink: true });
+      const codexCopyHome = path.join(t54Root, 'codex-home-copy');
+      const codexCopyBundle = path.join(t54Root, 'codex-copy-bundle');
+      const xCopyRes = setupHostBundle({ host: 'codex', dir: codexCopyBundle, workspace: codexProj, codexHome: codexCopyHome, scope: 'user', pluginRoot });
+      const xCopyVal = validateHostBundle({ host: 'codex', dir: codexCopyBundle, workspace: codexProj, codexHome: codexCopyHome, scope: 'user', pluginRoot, strict: true });
+      const codexCopyMdCount = fs.readdirSync(path.join(codexCopyBundle, 'agents')).filter((f) => f.endsWith('.md')).length;
+
+      // In-place symlink-to-copy upgrade must clear legacy symlinks (rules/AGENTS.md, assets/sidecar-hud.gif) without mutating pluginRoot
+      const symUpgradeHome = path.join(t54Root, 'codex-sym-upgrade-home');
+      const symUpgradeBundle = path.join(t54Root, 'codex-sym-upgrade-bundle');
+      setupHostBundle({ host: 'codex', dir: symUpgradeBundle, workspace: codexProj, codexHome: symUpgradeHome, scope: 'user', pluginRoot, symlink: true });
+      try {
+        const upgRulesFile = path.join(symUpgradeBundle, 'rules', 'AGENTS.md');
+        fs.rmSync(upgRulesFile, { force: true });
+        fs.symlinkSync(path.join(pluginRoot, 'rules', 'AGENTS.md'), upgRulesFile);
+        fs.symlinkSync(path.join(pluginRoot, 'README.md'), path.join(symUpgradeBundle, 'assets', 'sidecar-hud.gif'));
+      } catch { /* fail open: skip symlink plant when OS disallows symlinks */ }
+      const xUpgradeRes = setupHostBundle({ host: 'codex', dir: symUpgradeBundle, workspace: codexProj, codexHome: symUpgradeHome, scope: 'user', pluginRoot });
+      const xUpgradeVal = validateHostBundle({ host: 'codex', dir: symUpgradeBundle, workspace: codexProj, codexHome: symUpgradeHome, scope: 'user', pluginRoot, strict: true });
+      const xUpgradeOk = xUpgradeRes.ok === true
+        && xUpgradeRes.mode === 'copy'
+        && xUpgradeVal.ok === true
+        && !fs.lstatSync(path.join(symUpgradeBundle, 'rules', 'AGENTS.md')).isSymbolicLink()
+        && !fs.existsSync(path.join(symUpgradeBundle, 'assets', 'sidecar-hud.gif'))
+        && readFixture(path.join(pluginRoot, 'rules', 'AGENTS.md')) === repoAgentsBefore;
+      const xVal = validateHostBundle({ host: 'codex', dir: codexBundle, workspace: codexProj, codexHome, scope: 'user', pluginRoot, strict: true });
+      const codexCliValOut = JSON.parse(execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
+        'host-validate', 'codex', codexBundle, '--codex-home', codexHome, '--strict', '--json',
+      ], { encoding: 'utf8' }));
+      const codexSystemSkillPreserved = fs.existsSync(path.join(codexHome, 'skills', '.system', 'keep.md'))
+        && fs.existsSync(path.join(codexHome, 'skills', 'custom-user-skill', 'SKILL.md'))
+        && !fs.existsSync(path.join(codexHome, 'skills', 'autopilot'))
+        && !fs.existsSync(path.join(codexHome, 'hooks.json'));
+      const codexCacheSkillsDir = path.join(xRes.cachePluginDir || '', 'skills');
+      const codexTargetSkills = fs.existsSync(codexCacheSkillsDir)
+        ? fs.readdirSync(codexCacheSkillsDir)
+          .filter((d) => !d.startsWith('.'))
+          .filter((d) => !fs.lstatSync(path.join(codexCacheSkillsDir, d)).isSymbolicLink()
+            && fs.existsSync(path.join(codexCacheSkillsDir, d, 'SKILL.md'))
+            && fs.existsSync(path.join(codexCacheSkillsDir, d, 'agents', 'openai.yaml')))
+        : [];
+      const codexProjectWs = path.join(t54Root, 'codex-proj-scope');
+      fs.mkdirSync(codexProjectWs, { recursive: true });
+      const xProjRes = setupHostBundle({ host: 'codex', workspace: codexProjectWs, scope: 'project', pluginRoot });
+      const xProjVal = validateHostBundle({ host: 'codex', workspace: codexProjectWs, scope: 'project', pluginRoot, strict: true });
+
+      const codexDefaultHome = path.join(t54Root, 'codex-default-home');
+      fs.mkdirSync(path.join(codexDefaultHome, 'skills', '.system'), { recursive: true });
+      fs.writeFileSync(path.join(codexDefaultHome, 'skills', '.system', 'keep.md'), '# keep system skill\n', 'utf8');
+      fs.writeFileSync(path.join(codexDefaultHome, 'hooks.json'), JSON.stringify({
+        description: 'custom hooks',
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'echo custom-user-hook' }] },
+            { hooks: [{ type: 'command', command: 'sh /legacy/oh-my-agy/hooks/run.sh session-start' }] },
+          ],
+          PostToolUse: [{ hooks: [{ type: 'command', command: 'echo custom-post-hook' }] }],
+        },
+      }, null, 2), 'utf8');
+      const codexZeroSetupOut = JSON.parse(execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
+        'host-setup', 'codex', '--codex-home', codexDefaultHome, '--json',
+      ], { encoding: 'utf8' }));
+      // Re-run setup once to ensure idempotent native plugin install and foreign hook preservation
+      execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
+        'host-setup', 'codex', '--codex-home', codexDefaultHome, '--json',
+      ], { encoding: 'utf8' });
+      const codexZeroValOut = JSON.parse(execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
+        'host-validate', 'codex', '--codex-home', codexDefaultHome, '--strict', '--json',
+      ], { encoding: 'utf8' }));
+      const codexDefaultHooksDoc = JSON.parse(readFixture(path.join(codexDefaultHome, 'hooks.json')));
+      const codexDefaultHooksOk = codexZeroSetupOut.ok === true && codexZeroSetupOut.mode === 'copy' && codexZeroValOut.ok === true
+        && fs.existsSync(path.join(codexDefaultHome, 'skills', '.system', 'keep.md'))
+        && !fs.existsSync(path.join(codexDefaultHome, 'skills', 'autopilot'))
+        && fs.existsSync(path.join(codexDefaultHome, 'plugins', 'cache', 'oh-my-agy-local', 'oh-my-agy', codexZeroSetupOut.cachePluginDir ? path.basename(codexZeroSetupOut.cachePluginDir) : '0.6.0', 'skills', 'autopilot', 'SKILL.md'))
+        && Array.isArray(codexDefaultHooksDoc.hooks?.SessionStart) && codexDefaultHooksDoc.hooks.SessionStart.length === 1
+        && JSON.stringify(codexDefaultHooksDoc).includes('echo custom-user-hook')
+        && !JSON.stringify(codexDefaultHooksDoc).includes('oh-my-agy')
+        && JSON.stringify(codexDefaultHooksDoc).includes('echo custom-post-hook');
+      const codexCfg = readFixture(path.join(codexHome, 'config.toml'));
+      const codexHooksJson = readFixture(path.join(xRes.cachePluginDir, 'hooks', 'hooks.json'));
+      const codexHooksDoc = JSON.parse(codexHooksJson);
+      const codexAgentsMdRaw = readFixture(path.join(codexHome, 'AGENTS.md'));
+      const codexAgentsMdSize = Buffer.byteLength(codexAgentsMdRaw, 'utf8');
+      const codexHudSkillMd = readFixture(path.join(codexBundle, 'skills', 'hud', 'SKILL.md'));
+      const codexTeamYaml = readFixture(path.join(codexBundle, 'skills', 'team', 'agents', 'openai.yaml'));
+      const codexProseClean = !/\bantigravity\b|sidecar:\/\/|customization:\/\/|\bmanage_task\b/i.test(codexAgentsMdRaw + codexHudSkillMd + codexTeamYaml)
+        && codexHudSkillMd.includes('desktop-ensure')
+        && !fs.existsSync(path.join(codexBundle, 'assets', 'sidecar-hud.gif'));
+      const codexTomlCount = fs.readdirSync(path.join(codexHome, 'agents')).filter((f) => f.endsWith('.toml')).length;
+      const openaiYamlCount = fs.readdirSync(path.join(codexBundle, 'skills')).filter((d) => fs.existsSync(path.join(codexBundle, 'skills', d, 'agents', 'openai.yaml'))).length;
+      const bundleMeta = JSON.parse(readFixture(path.join(codexBundle, 'host-bundle.json')));
+
+      // Drift check via symlinked + --copy <bundleDir>/hooks/omagy-hook.mjs argv[1] resolution + strict tamper fail
+      const staleMeta = { ...bundleMeta, sourceVersion: '0.0.1' };
+      fs.writeFileSync(path.join(codexBundle, 'host-bundle.json'), `${JSON.stringify(staleMeta, null, 2)}\n`, 'utf8');
+      const driftViaArgv1 = checkHostBundleDrift(pluginRoot, { argv1: path.join(codexBundle, 'hooks', 'omagy-hook.mjs') });
+      const copyMeta = JSON.parse(readFixture(path.join(codexCopyBundle, 'host-bundle.json')));
+      fs.writeFileSync(path.join(codexCopyBundle, 'host-bundle.json'), `${JSON.stringify({ ...copyMeta, sourceVersion: '0.0.1' }, null, 2)}\n`, 'utf8');
+      const driftFromCopySelf = checkHostBundleDrift(codexCopyBundle, { argv1: path.join(codexCopyBundle, 'hooks', 'omagy-hook.mjs') });
+
+      // Negative validations: unsafe --dir, conflicting flags, unknown CLI flag, unwired hook event, symlink in copy mode, tampered pluginRoot
+      const unsafeDirRes = setupHostBundle({ host: 'claude', dir: os.tmpdir(), workspace: claudeProj, pluginRoot });
+      const unsafeSubDirRes = setupHostBundle({ host: 'claude', dir: path.join(pluginRoot, 'tmp-unsafe-bundle'), workspace: claudeProj, pluginRoot });
+      const badFlagCli = spawnSync(path.join(pluginRoot, 'hooks', 'run.sh'), ['host-validate', 'codex', codexBundle, '--bogus-flag'], { encoding: 'utf8', timeout: 5000 });
+      const conflictFlagCli = spawnSync(path.join(pluginRoot, 'hooks', 'run.sh'), ['host-setup', 'codex', '--copy', '--symlink'], { encoding: 'utf8', timeout: 5000 });
+      const symProj = path.join(t54Root, 'sym-proj');
+      fs.mkdirSync(path.join(symProj, '.claude'), { recursive: true });
+      const outsideLaunchTarget = path.join(t54Root, 'outside-launch.json');
+      fs.writeFileSync(outsideLaunchTarget, '{}', 'utf8');
+      let symTargetBlocked = true;
+      let symClaudeRootBlocked = true;
+      try {
+        fs.symlinkSync(outsideLaunchTarget, path.join(symProj, '.claude', 'launch.json'));
+        const symSetup = setupHostBundle({ host: 'claude', dir: path.join(t54Root, 'sym-bundle'), workspace: symProj, pluginRoot });
+        symTargetBlocked = symSetup.ok === false && String(symSetup.error || '').includes('symlink_target');
+        const symClaudeRootProj = path.join(t54Root, 'sym-claude-root-proj');
+        const symClaudeOutside = path.join(t54Root, 'sym-claude-outside');
+        fs.mkdirSync(symClaudeRootProj, { recursive: true });
+        fs.mkdirSync(symClaudeOutside, { recursive: true });
+        fs.symlinkSync(symClaudeOutside, path.join(symClaudeRootProj, '.claude'));
+        const symClaudeRes = setupHostBundle({ host: 'claude', dir: path.join(t54Root, 'sym-claude-bundle'), workspace: symClaudeRootProj, pluginRoot });
+        symClaudeRootBlocked = symClaudeRes.ok === false && String(symClaudeRes.error || '').includes('claude_target_dir_symlink_target');
+      } catch { /* fail open: platform without symlink permission skips symlink merge negative probe */ }
+      let copySymlinkRejected = true;
+      try {
+        fs.symlinkSync(path.join(pluginRoot, 'hooks', 'run.sh'), path.join(claudeCopyBundle, 'hooks', 'extra-link.sh'));
+        const cCopyTamper = validateHostBundle({ host: 'claude', dir: claudeCopyBundle, workspace: claudeProj, pluginRoot, strict: true });
+        copySymlinkRejected = cCopyTamper.ok === false && cCopyTamper.errors.some((e) => e.startsWith('symlink_disallowed_in_copy_mode'));
+      } catch { /* fail open: platform without symlink permission skips copy-mode symlink probe */ }
+      const wiredEvents = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'];
+      const claudeEventsOk = JSON.stringify(Object.keys(claudeHooksDoc.hooks || {})) === JSON.stringify(wiredEvents);
+      const codexEventsOk = JSON.stringify(Object.keys(codexHooksDoc.hooks || {})) === JSON.stringify(wiredEvents)
+        && String(codexHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '').includes('apply_patch')
+        && String(claudeHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '') === 'Write|Edit|MultiEdit|NotebookEdit|Read';
+
+      fs.appendFileSync(path.join(codexHome, 'agents', 'explore.toml'), '\nsandbox_mode = "danger-full-access"\n', 'utf8');
+      const xTamperVal = validateHostBundle({ host: 'codex', dir: codexBundle, workspace: codexProj, codexHome, scope: 'user', pluginRoot, strict: true });
+      const depCfgPath = path.join(codexCopyHome, 'config.toml');
+      fs.writeFileSync(depCfgPath, readFixture(depCfgPath).replace(/\[features\]\r?\n/, '[features]\nmulti_agent = true\n'), 'utf8');
+      const xDepFlagVal = validateHostBundle({ host: 'codex', dir: codexCopyBundle, workspace: codexProj, codexHome: codexCopyHome, scope: 'user', pluginRoot, strict: true });
+      fs.writeFileSync(path.join(claudeBundle, 'hooks', 'hooks.json'), JSON.stringify({
+        hooks: { ...claudeHooksDoc.hooks, PostToolUse: [{ hooks: [{ type: 'command', command: 'OMAGY_HOST=claude hooks/run.sh post-tool-use --host=claude' }] }] },
+      }, null, 2), 'utf8');
+      const unwiredVal = validateHostBundle({ host: 'claude', dir: claudeBundle, workspace: claudeProj, pluginRoot, strict: true });
+      const metaTamperPath = path.join(claudeBundle, 'host-bundle.json');
+      const prevClaudeMeta = JSON.parse(readFixture(metaTamperPath));
+      fs.writeFileSync(metaTamperPath, `${JSON.stringify({ ...prevClaudeMeta, pluginRoot: t54Root }, null, 2)}\n`, 'utf8');
+      const rootTamperVal = validateHostBundle({ host: 'claude', dir: claudeBundle, workspace: claudeProj, pluginRoot, strict: true });
+
+      const repoHooksAfter = readFixture(path.join(pluginRoot, 'hooks.json'));
+      t54Ok = cRes.ok === true && cRes.mode === 'symlink' && cCopyRes.ok === true && cCopyRes.mode === 'copy' && cVal.ok === true
+        && !hooksDirStat.isSymbolicLink() && hooksDirStat.isDirectory()
+        && (process.platform === 'win32' ? (hookMjsStat.isSymbolicLink() || hookMjsStat.isFile()) : hookMjsStat.isSymbolicLink())
+        && !copyHookStat.isSymbolicLink() && copyHookStat.isFile()
+        && launchDoc.configurations.some((c) => c.name === 'existing-app' && c.port === 3000)
+        && Boolean(hudCfg && hudCfg.runtimeExecutable === 'sh' && Array.isArray(hudCfg.runtimeArgs) && hudCfg.runtimeArgs.includes('desktop-serve') && hudCfg.runtimeArgs.includes('--registry') && hudCfg.port >= 48800 && hudCfg.port <= 49799)
+        && claudeAgentsValid
+        && xRes.ok === true && xRes.mode === 'symlink' && xCopyRes.ok === true && xCopyRes.mode === 'copy' && xCopyVal.ok === true && xUpgradeOk && codexCopyMdCount === 14
+        && xVal.ok === true && codexCliValOut.ok === true
+        && xProjRes.ok === true && xProjVal.ok === true && fs.existsSync(path.join(codexProjectWs, '.codex', 'hooks.json')) && fs.readdirSync(path.join(codexProjectWs, '.codex', 'skills')).length === 20
+        && codexSystemSkillPreserved && codexTargetSkills.length === 20 && codexDefaultHooksOk && codexProseClean
+        && claudeEventsOk && codexEventsOk
+        && codexCfg.includes('[[profiles.dev]]') && codexCfg.includes('[mcp_servers.custom]') && codexCfg.includes('trusted = true') && codexCfg.includes('hooks = true')
+        && codexCfg.includes('max_concurrent_threads_per_session = 6')
+        && codexCfg.includes('goals = true')
+        && /\[agents\][\s\S]*?enabled\s*=\s*true/.test(codexCfg)
+        && !/^\s*multi_agent\s*=/m.test(codexCfg)
+        && xDepFlagVal.ok === false && xDepFlagVal.errors.includes('config_deprecated_features_multi_agent')
+        && codexCfg.includes('[marketplaces.oh-my-agy-local]') && codexCfg.includes('[plugins."oh-my-agy@oh-my-agy-local"]')
+        && codexHooksJson.includes(path.join(xRes.cachePluginDir, 'hooks', 'run.sh'))
+        && codexAgentsMdSize > 0 && codexAgentsMdSize <= 32768
+        && codexTomlCount === 14 && openaiYamlCount === 20
+        && typeof bundleMeta.codexVersion === 'string' && bundleMeta.codexVersion.length > 0
+        && Boolean(driftViaArgv1 && driftViaArgv1.includes('0.0.1'))
+        && Boolean(driftFromCopySelf && driftFromCopySelf.includes('0.0.1'))
+        && unsafeDirRes.ok === false && unsafeSubDirRes.ok === false && String(unsafeSubDirRes.error || '').includes('unsafe_bundle_dir_plugin_overlap')
+        && badFlagCli.status === 2
+        && conflictFlagCli.status === 2 && String(conflictFlagCli.stdout || '').includes('conflicting_flags:--copy,--symlink')
+        && symTargetBlocked && symClaudeRootBlocked && copySymlinkRejected
+        && xTamperVal.ok === false
+        && rootTamperVal.ok === false && rootTamperVal.errors.some((e) => e.startsWith('plugin_root_mismatch:'))
+        && unwiredVal.ok === false && unwiredVal.errors.some((e) => e.startsWith('unwired_hook_event:PostToolUse'))
+        && !fs.existsSync(path.join(pluginRoot, 'hooks', 'hooks.json'))
+        && repoHooksBefore === repoHooksAfter;
+      t54Detail = `c=${cVal.ok} x=${xVal.ok} agents=${claudeAgents.length}/${codexTomlCount} yaml=${openaiYamlCount} drift=${Boolean(driftViaArgv1)} tamper=${!xTamperVal.ok}`;
+    } catch (e) { /* fail open: capture T54 error detail */
+      t54Detail = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (prevRunShCodex === undefined) delete process.env.OMAGY_CODEX_VERSION;
+      else process.env.OMAGY_CODEX_VERSION = prevRunShCodex;
+    }
+    check('Hermetic host-setup and host-validate enforce symlinks/--copy, 3-tier Claude agents, Codex TOML/openai.yaml & drift checks', t54Ok, t54Detail);
+
+    // T55: Subprocess stdin/stdout wire E2E via node omagy-hook.mjs and sh hooks/run.sh (10 events + fail-open)
+    let t55Ok = false;
+    let t55Detail = '';
+    const t55Ws = path.join(ws, 't55-subproc');
+    try {
+      fs.mkdirSync(path.join(t55Ws, '.omagy', 'state'), { recursive: true });
+      fs.writeFileSync(path.join(t55Ws, 'locked.js'), 'const a = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(t55Ws, '.omagy', 'state', 'ralplan-state.json'), JSON.stringify({
+        mode: 'ralplan', active: true, current_phase: 'planning', owner_conversation_id: `${conv}-t55-c`, updated_at: new Date().toISOString(),
+      }), 'utf8');
+      fs.writeFileSync(path.join(t55Ws, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({
+        mode: 'autopilot', active: true, current_phase: 'ralplan', iteration: 1, owner_conversation_id: `${conv}-t55-c`, updated_at: new Date().toISOString(),
+      }), 'utf8');
+      const shBin = process.platform === 'win32' ? 'sh' : '/bin/sh';
+      const runShPath = path.join(pluginRoot, 'hooks', 'run.sh');
+      const shDir = process.platform === 'win32'
+        ? ((process.env.PATH || '').split(path.delimiter).find((d) => d && (fs.existsSync(path.join(d, 'sh.exe')) || fs.existsSync(path.join(d, 'sh')))) || '')
+        : '/bin';
+      const baseEnv = {
+        ...process.env,
+        PATH: [path.dirname(process.execPath), shDir].filter(Boolean).join(path.delimiter),
+        OMAGY_RUNTIME_DIR: path.join(ws, 'runtime'),
+      };
+      const invokeWire = (useShell, hostName, evName, inputText) => {
+        const bin = useShell ? shBin : process.execPath;
+        const cmdArgs = useShell ? [runShPath, evName, `--host=${hostName}`] : [hookSelfPath, evName, `--host=${hostName}`];
+        const env = { ...baseEnv, OMAGY_HOST: hostName, OMAGY_DESKTOP_HUD: '0' };
+        return spawnSync(bin, cmdArgs, { input: inputText, env, encoding: 'utf8', timeout: 10_000 });
+      };
+
+      const cStart = invokeWire(false, 'claude', 'session-start', JSON.stringify({ cwd: t55Ws, session_id: `${conv}-t55-c`, source: 'startup' }));
+      const cPrompt = invokeWire(true, 'claude', 'user-prompt-submit', JSON.stringify({ cwd: t55Ws, session_id: `${conv}-t55-c`, prompt: '$analyze check' }));
+      const cPtu = invokeWire(false, 'claude', 'pre-tool-use', JSON.stringify({ cwd: t55Ws, session_id: `${conv}-t55-c`, tool_name: 'Write', tool_input: { file_path: path.join(t55Ws, 'locked.js'), content: 'b' } }));
+      const cSub = invokeWire(true, 'claude', 'subagent-stop', JSON.stringify({ cwd: t55Ws, session_id: `${conv}-t55-c` }));
+      const xStop = invokeWire(true, 'codex', 'stop', JSON.stringify({ cwd: t55Ws, session_id: `${conv}-t55-c`, last_assistant_message: 'partial' }));
+      const badJsonClaudeStop = invokeWire(false, 'claude', 'stop', '{bad-json');
+      const badJsonCodexStop = invokeWire(true, 'codex', 'stop', '{bad-json');
+
+      const noNodeEnv = { ...baseEnv, PATH: shDir, OMAGY_NODE: path.join(ws, 'missing-node-binary'), OMAGY_DESKTOP_HUD: '0' };
+      const noNodeClaudeStop = spawnSync(shBin, [runShPath, 'stop', '--host=claude'], { input: '{}', env: noNodeEnv, encoding: 'utf8', timeout: 10_000 });
+      const noNodeCodexStop = spawnSync(shBin, [runShPath, 'stop', '--host=codex'], { input: '{}', env: noNodeEnv, encoding: 'utf8', timeout: 10_000 });
+
+      const allEventsOk = ['session-start', 'pre-invocation', 'user-prompt-submit', 'pre-tool-use', 'post-tool-use', 'subagent-start', 'subagent-stop', 'pre-compact', 'post-compact', 'stop']
+        .every((ev) => invokeWire(true, 'codex', ev, JSON.stringify({ cwd: t55Ws, session_id: `${conv}-t55-ev`, prompt: 'ping' })).status === 0);
+
+      const cStartJson = JSON.parse(cStart.stdout.trim());
+      const cPromptJson = JSON.parse(cPrompt.stdout.trim());
+      const cPtuJson = JSON.parse(cPtu.stdout.trim());
+      const cSubJson = JSON.parse(cSub.stdout.trim());
+      const xStopJson = JSON.parse(xStop.stdout.trim());
+      const cRoutingJson = JSON.parse(readFixture(path.join(ws, 'runtime', `${conv}-t55-c.routing.json`)));
+      const xRoutingJson = JSON.parse(readFixture(path.join(ws, 'runtime', `${conv}-t55-ev.routing.json`)));
+
+      t55Ok = cStart.status === 0 && Boolean(cStartJson.hookSpecificOutput?.additionalContext)
+        && cPrompt.status === 0 && String(cPromptJson.hookSpecificOutput?.additionalContext || '').includes('$analyze')
+        && cPtu.status === 0 && cPtuJson.hookSpecificOutput?.permissionDecision === 'ask'
+        && cSub.status === 0 && cSubJson.continue === true && cSubJson.suppressOutput === true
+        && xStop.status === 0 && xStopJson.decision === 'block' && Object.keys(xStopJson).length === 2
+        && badJsonClaudeStop.status === 0 && badJsonClaudeStop.stdout.trim() === '{}'
+        && badJsonCodexStop.status === 0 && badJsonCodexStop.stdout.trim() === '{}'
+        && noNodeClaudeStop.status === 0 && noNodeClaudeStop.stdout.trim() === '{}'
+        && noNodeCodexStop.status === 0 && noNodeCodexStop.stdout.trim() === '{}'
+        && allEventsOk
+        && cRoutingJson.host === 'claude'
+        && xRoutingJson.host === 'codex';
+      t55Detail = `start=${cStart.status} prompt=${cPrompt.status} ptu=${cPtu.status} sub=${cSub.status} stop=${xStop.status} noNode=${noNodeClaudeStop.status}/${noNodeCodexStop.status} all10=${allEventsOk} routing=${cRoutingJson.host}/${xRoutingJson.host}`;
+    } catch (e) { /* fail open: capture T55 error detail */
+      t55Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('Subprocess stdin/stdout wire E2E passes for Claude & Codex across all 10 lifecycle events with fail-open JSON', t55Ok, t55Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

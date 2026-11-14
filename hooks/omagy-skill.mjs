@@ -1509,6 +1509,13 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     process.exitCode = res.exitCode;
     return res.exitCode;
   }
+  if (event === 'host-setup' || event === 'host-validate') {
+    const { runHostSetupCli } = await import('./omagy-host-setup.mjs');
+    const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const code = await runHostSetupCli(event, rawArgs, pluginRoot);
+    process.exitCode = code;
+    return code;
+  }
   if (COLD_CLI_EVENTS.has(event)) {
     const { handleColdCliCommand } = await import('./omagy-cli.mjs');
     const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
