@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, live HUD sidecar tab, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.5.2`)** for Google Antigravity.
+This guide covers every workflow skill, role subagent, live HUD sidecar tab, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.6.0`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
 
 ---
 
@@ -18,7 +18,7 @@ This guide covers every workflow skill, role subagent, live HUD sidecar tab, hoo
 5. [Durable State (`.omagy/`), Ledgers & Resuming Work](#5-durable-state-omagy-ledgers--resuming-work)
 6. [Project Wiki (`omagy_wiki/`) & Subdirectory `AGENTS.md`](#6-project-wiki-omagy_wiki--subdirectory-agentsmd)
 7. [Live Auxiliary Pane HUD (`sidecars/hud/`)](#7-live-auxiliary-pane-hud-sidecarshud)
-8. [Lifecycle Hooks & CLI Utilities (32 Total)](#8-lifecycle-hooks--cli-utilities-32-total)
+8. [Lifecycle Hooks & CLI Utilities (34 Total)](#8-lifecycle-hooks--cli-utilities-34-total)
 9. [End-to-End Recipes](#9-end-to-end-recipes)
 
 ---
@@ -319,7 +319,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
 
 #### `/doctor` — Diagnostics, Setup, Notifications, Deep Init & Session Forensics
 All-in-one operational health, setup, notification, and transcript forensics toolkit:
-- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`87/87`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`20` skills), `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest` (`H1`–`H24`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93,734 B`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 14-agent `tools:` YAML frontmatter, `plugin.json` `v0.5.2` parity, and stale/waiting `.omagy/state/` files.
+- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`90/90`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`20` skills), `hooks/run.sh floor-guard`, `sidecars/hud/run.sh selftest` (`H1`–`H27`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93,734 B`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 14-agent `tools:` YAML frontmatter, `plugin.json` `v0.6.0` parity, cross-host bundle drift (`host-validate`, experimental), and stale/waiting `.omagy/state/` files.
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density and git churn and generates non-duplicative child `AGENTS.md` files where warranted.
@@ -460,19 +460,22 @@ The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.
 | `ArrowLeft` / `ArrowRight` / `Home` / `End` | Roving focus navigation across `[role="tablist"]` tabs |
 | `Escape` | Close the open Command Palette or `#artifact-drawer` and restore focus |
 
-### 7.4 Security Boundaries & Sidecar Selftest
+### 7.4 Security Boundaries, Desktop-Only Preview & Sidecar Selftest
+- **Desktop-Exclusive Preview (Experimental on Claude/Codex Desktop)**: In addition to Antigravity's Aux Pane (`sidecar://oh-my-agy/hud/`), `SessionStart` auto-manages `sidecars/hud/main.mjs desktop-serve` **only inside Desktop apps**: Claude Desktop via `.claude/launch.json` (`oh-my-agy-hud` on loopback `48800..49799`) or daemon `47800..48799`, and Codex Desktop Web Preview (`47800..48799`). Plain CLI, VS Code, Cursor, JetBrains, and CI never spawn the daemon (`OMAGY_DESKTOP_HUD=1|0` overrides; `OMAGY_HUD_IDLE_TIMEOUT_MS` configures idle reaper).
+- **Host Isolation & Dispatch (`sidecars/hud/dispatch.mjs`)**: Interactive prompt buttons on Antigravity read `window.sidecar?.conversationId`, isolate `.routing.json` records by host and workspace, verify targets synchronously via `agentapi get-conversation-metadata` (unwrapping `metadata.rootConversationId` and falling back cleanly to `agentapi new-conversation`), and support loopback RFC 6455 Codex `app-server` JSON-RPC (`OMAGY_CODEX_APP_SERVER_URL`, rejecting non-loopback `ws://` URLs with `403`), `claude -p --agent` / `codex exec`, or `clipboard-handoff`. In Codex Desktop (`data.host === 'codex'`), the HUD switches to Codex `#212121` surface colors and Copy-only prompt buttons (with ready-to-paste `spawn_agent` prompts on `Subagents`).
+- `desktop-serve` validates loopback HTTP `Host` headers (`403` otherwise) before injecting `<meta name="omagy-hud-token">` on `GET /`, keeps the registry `0o600` under `runtimeDir()`, omits `?token=` from `SessionStart`, and hides `customization://oh-my-agy` when `data.host !== 'antigravity'`.
 - All read/write endpoints validate `X-Sidecar-Token` / `X-Omagy-Token` with constant-time comparison; `GET /api/status` and `GET /api/events` perform zero disk writes.
 - `GET /api/artifact` (`resolveSafeArtifactFile`) and `GET /api/skill-doc` (`resolveSafeSkillDoc`) reject symlinks, traversal, and disallowed files, enforce `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox`, and apply `redactSecrets()` to Markdown, plain-text, and JSON payloads.
-- Run the 24-suite HUD unit & HTTP/SSE/DOM selftest anytime:
+- Run the 27-suite HUD unit & HTTP/SSE/DOM selftest anytime:
   ```bash
   sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest
   ```
 
 ---
 
-## 8. Lifecycle Hooks & CLI Utilities (32 Total)
+## 8. Lifecycle Hooks & CLI Utilities (34 Total)
 
-`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93,734 B`) for the 13 `COLD_CLI_EVENTS` evaluators, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
+`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-host-setup.mjs`](hooks/omagy-host-setup.mjs) for `host-setup`/`host-validate`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93,734 B`) for the 13 `COLD_CLI_EVENTS` evaluators, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
 
 - **`SessionStart` & `PreInvocation` (Enabled by default)**:
   - Strips UTF-8 BOMs (`stripUtf8Bom`) and sanitizes relayed `[Message ...]` / `<SYSTEM_MESSAGE>` / `<CONTEXT_SUMMARY>` blocks (`sanitizeRelayedText`), fenced/inline code, comments, blockquotes, URLs, quotes, negations, and help queries before `/skill` / `$skill` detection.
@@ -483,10 +486,10 @@ The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.
 - **`PreToolUse` (Opt-in in `hooks.json`)**:
   - Enforces `append-only-guard` (blocking `Overwrite: true` on non-empty `.omagy/ultragoal/ledger.jsonl` and `omagy_wiki/log.md` before planning exemptions), the planning-phase write boundary, `protected-block-guard`, `agreements-guard`, `notifications-guard`, and `write-existing-file-guard`.
 
-### Built-In Hook CLI Commands (32 Total)
+### Built-In Hook CLI Commands (34 Total)
 
 ```bash
-# 1. Run the 87-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
+# 1. Run the 90-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Evaluate TF-IDF skill routing accuracy, owner-negative survival, and cosine collisions across all 20 skills (>=95% default)
@@ -581,6 +584,14 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-validate ~/.gemini/conf
 
 # 32. Scaffold an SDO-compliant skill across project (.agents/skills), shared (.agents/skills.json), or user scope (/skill init)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-init api-contract-audit --scope project --resources references,scripts --json
+
+# 33. Install or update an experimental standalone (copy-by-default; optional --symlink) host-native bundle globally (~/.codex native plugin or ~/.claude) or per-project with --workspace . (re-run after `git pull` to update)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup codex
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup claude --workspace .
+
+# 34. Validate the default (or --workspace / custom dir) experimental Claude Code / OpenAI Codex bundle strictly against host schemas and 3-tier T41 contracts
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate codex --strict --json
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate claude --workspace . --strict --json
 ```
 
 ---

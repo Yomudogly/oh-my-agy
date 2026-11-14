@@ -39,7 +39,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 oh-my-agy/
 ├── .gitattributes            # LF line-ending normalization across POSIX & Windows checkouts
 ├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 20)
-├── plugin.json               # Antigravity manifest (v0.5.2, strict JSON)
+├── plugin.json               # Antigravity manifest (v0.6.0, strict JSON)
 ├── assets/
 │   ├── logo.png              # Plugin icon
 │   └── sidecar-hud.gif       # Live Aux Pane HUD showcase animation
@@ -47,13 +47,15 @@ oh-my-agy/
 ├── rules/AGENTS.md           # always-on operating contract (<24 KB)
 ├── hooks.json                # SessionStart + PreInvocation routing/wiki, Stop continuation, opt-in PreToolUse guard
 ├── hooks/
-│   ├── run.sh                # POSIX-portable Node locator (homebrew/volta/fnm/nvm/Windows), fails open on lifecycle hooks
+│   ├── run.sh                # POSIX-portable Node locator, dual OMAGY_HOST/--host= routing, fail-open on lifecycle hooks
 │   ├── omagy-hook.mjs        # hot-path hook runtime (<170 KB: SessionStart, PreInvocation, PreToolUse, Stop & state primitives)
-│   ├── omagy-skill.mjs       # lazy-loaded non-lifecycle CLI dispatcher + zero-dep `skill-validate` & `skill-init` (`32` total CLI subcommands)
-│   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<93,734 B; 13 subcommands: `floor-guard`, `skill-eval`, `quality-gate`, `validate-design-md`, `goal-done`, `checkpoint`, `handoff`, `lookout`, `plan-hash`, `init-deep-scan`, `wiki-query`, `wiki-lint`, `session-scan` & static validators)
-│   ├── omagy-selftest.mjs    # lazy-loaded 87-check offline selftest suite (`T1`–`T10`, `T20`–`T52`)
+│   ├── omagy-host.mjs        # polyglot Claude/Codex wire codecs, Desktop session gating, bundle drift & transcript normalization
+│   ├── omagy-host-setup.mjs  # lazy-loaded `host-setup` & `host-validate` generator for Claude Code & OpenAI Codex
+│   ├── omagy-skill.mjs       # lazy-loaded non-lifecycle CLI dispatcher + zero-dep `skill-validate` & `skill-init` (`34` total CLI subcommands)
+│   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<93,734 B; 13 subcommands)
+│   ├── omagy-selftest.mjs    # lazy-loaded 90-check offline selftest suite (`T1`–`T10`, `T20`–`T55`)
 │   └── skill-eval-cases.json # 20-skill positive + owner-paired negative routing benchmark corpus (>=95% rank-1)
-├── sidecars/hud/             # Modular Aux Pane UI (`main.mjs` + `ui.mjs` + `client.mjs`: SSE `/api/events`, `Cmd/Ctrl+K` palette, `#artifact-drawer`, `/api/skill-doc`, `/api/wiki-search`, 5 tabs)
+├── sidecars/hud/             # Modular Desktop-only HUD (`main.mjs` + `dispatch.mjs` + `ui.mjs` + `client.mjs`: SSE, `desktop-serve`, Codex WS, 5 tabs)
 ├── agents/                   # 14 role subagents with verified `subagent`/`mainAgent`/`tools` frontmatter
 └── skills/                   # 20 workflow skills + progressive-disclosure `references/`
 ```
@@ -87,11 +89,102 @@ Then restart Antigravity. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 Run the offline hook, routing, and HUD selftests at any time:
 
 ```bash
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":87,"failed":0}
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest     # -> {"selftest":"PASS","passed":90,"failed":0}
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-eval --min-rank1 95 # -> SKILL-EVAL: PASS (skills=20, ...)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-validate ~/.gemini/config/plugins/oh-my-agy/skills --strict
 sh ~/.gemini/config/plugins/oh-my-agy/sidecars/hud/run.sh selftest # -> {"selftest":"PASS",...}
 ```
+
+### Claude Code & OpenAI Codex Compatibility (Experimental)
+
+> [!WARNING]
+> **Experimental Support**: `oh-my-agy` is built and battle-tested primarily for **Google Antigravity**. The **OpenAI Codex** and **Claude Code** adapters below are **experimental** — they pass strict schema, hook-protocol, and selftest suites, but have not yet been exhaustively field-tested and confirmed across every Codex and Claude CLI/Desktop workflow. Please report edge cases on GitHub Issues.
+
+The canonical repository stays pure Antigravity while generating and validating host-native, **self-contained copy installs by default** (zero symlinks to Antigravity; pass `--symlink` only if contributing from a live checkout).
+
+#### 1. Global Install — Standalone (No Antigravity Required)
+
+**OpenAI Codex / Codex Desktop** (installs into `~/.codex`, or `$CODEX_HOME` if set):
+
+```bash
+git clone https://github.com/Yomudogly/oh-my-agy.git /tmp/oh-my-agy
+sh /tmp/oh-my-agy/hooks/run.sh host-setup codex
+sh /tmp/oh-my-agy/hooks/run.sh host-validate codex --strict --json
+rm -rf /tmp/oh-my-agy
+```
+
+**Claude Code / Claude Desktop** (installs into `~/.claude`, or `$CLAUDE_CONFIG_DIR` if set):
+
+```bash
+git clone https://github.com/Yomudogly/oh-my-agy.git /tmp/oh-my-agy
+sh /tmp/oh-my-agy/hooks/run.sh host-setup claude
+sh /tmp/oh-my-agy/hooks/run.sh host-validate claude --strict --json
+rm -rf /tmp/oh-my-agy
+```
+
+*(Add `--codex-home /custom/path` only if installing into a non-default Codex folder; `/tmp/oh-my-agy` is safe to delete after validation because all bundle files are copied standalone.)*
+
+#### 2. Global Install — From an Existing Antigravity Checkout
+
+If you already cloned `oh-my-agy` at `~/.gemini/config/plugins/oh-my-agy`:
+
+```bash
+# OpenAI Codex / Codex Desktop
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup codex
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate codex --strict --json
+
+# Claude Code / Claude Desktop
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup claude
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate claude --strict --json
+```
+
+#### 3. First-Run Activation (Codex & Claude Code)
+
+- **OpenAI Codex / Codex Desktop**:
+  - Registers a native local Codex UI plugin (`oh-my-agy@oh-my-agy-local`) across `~/.codex/marketplaces/oh-my-agy`, `~/.codex/plugins/cache/oh-my-agy-local/oh-my-agy/<version>`, `~/.codex/plugins/oh-my-agy`, `~/.codex/agents/*.toml`, adapted `~/.codex/AGENTS.md` (zero `Antigravity`/`sidecar://` mentions), and `~/.codex/config.toml` (`[agents].enabled = true` and `[features].hooks = true`, stripping deprecated `[features].multi_agent` while preserving `[mcp_servers]`, `[projects]`, and `[hooks.state]`). Legacy duplicate `oh-my-agy` entries in `~/.codex/hooks.json` and `~/.codex/skills/` are automatically cleaned without touching `.system/` or custom user files.
+  - Reload Codex Desktop so **Oh My Agy** appears under **Installed Plugins** (note: Codex's plugin detail UI currently lists **Skills** and **Hooks**, while custom role agents load from `~/.codex/agents/*.toml` and `[agents.<role>]` in `config.toml`), approve hooks once via `/hooks`, and run `/hud` (or `$hud`) inside Codex Desktop to launch/reuse the localhost HUD (`#212121` theme, Copy-only prompt buttons) and print a clickable `[oh-my-agy HUD](http://127.0.0.1:<port>/)` link.
+- **Claude Code / Claude Desktop**:
+  - Installs a standalone `~/.claude/plugins/oh-my-agy` bundle and adapted global rules at `~/.claude/rules/oh-my-agy.md`. Load the plugin in Claude Code sessions with `claude --plugin-dir ~/.claude/plugins/oh-my-agy`.
+
+#### 4. Updating Codex & Claude Code Setups
+
+Updating an existing installation uses the exact same `host-setup` command — it idempotently refreshes standalone copied files, updates the versioned Codex plugin cache (`~/.codex/plugins/cache/oh-my-agy-local/oh-my-agy/<version>`), refreshes adapted rules, and migrates `config.toml` flags without overwriting your MCP servers, `[projects]`, `[hooks.state]`, or custom skills:
+
+```bash
+# Option A: If you keep the clone at ~/.gemini/config/plugins/oh-my-agy
+git -C ~/.gemini/config/plugins/oh-my-agy pull
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup codex
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate codex --strict --json
+# (Replace `codex` with `claude` to update Claude Code)
+```
+
+```bash
+# Option B: Standalone update without keeping a local clone
+git clone https://github.com/Yomudogly/oh-my-agy.git /tmp/oh-my-agy
+sh /tmp/oh-my-agy/hooks/run.sh host-setup codex
+sh /tmp/oh-my-agy/hooks/run.sh host-validate codex --strict --json
+rm -rf /tmp/oh-my-agy
+```
+
+After updating, reload Codex Desktop (or start a fresh Claude Code session). If a Desktop HUD daemon from the prior version is already running, restart it before running `/hud` again:
+
+```bash
+pkill -f "sidecars/hud/main.mjs desktop-serve" || true
+```
+
+#### 5. Single-Project Install (Optional — Run Inside a Repo)
+
+```bash
+# OpenAI Codex (writes <repo>/.codex/ + repo AGENTS.md)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup codex --workspace .
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate codex --workspace . --strict --json
+
+# Claude Code / Claude Desktop (writes <repo>/.claude/ + .claude/launch.json HUD Preview)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-setup claude --workspace .
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate claude --workspace . --strict --json
+```
+
+- **Desktop-Only HUD Preview**: Auto-started loopback `desktop-serve` previews run **only on Desktop apps** (Claude Desktop `.claude/launch.json` `oh-my-agy-hud` on `48800..49799` or daemon `47800..48799`, and Codex Desktop Web Preview on `47800..48799`, plus `sidecars/hud/run.sh desktop-ensure` on demand). Plain CLI, IDE extensions, and CI never spawn the HUD daemon unless `OMAGY_DESKTOP_HUD=1` is set on a Desktop session (`OMAGY_DESKTOP_HUD=0` forces off).
 
 Antigravity's sandboxed terminal may deny reading plugin files directly. If the selftest prints `Operation not permitted`, run it with sandbox bypass. The hooks themselves are unaffected: they write `$TMPDIR/oh-my-agy/<conversationId>.routing.json` on every user message, which is the quickest live health check.
 
@@ -101,7 +194,7 @@ Delete the plugin directory and restart Antigravity. Workspace `.omagy/` and `om
 
 ## Usage
 
-> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 20 skills (with flags and examples), all 14 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, all 32 CLI utilities, and end-to-end recipes.
+> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 20 skills (with flags and examples), all 14 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, all 34 CLI utilities, and end-to-end recipes.
 
 In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot build X`, `/deep-research --technical "topic"`, `/visual-ralph --design`, `/code-review --security`, `/hud --handoff`, `/cancel`). `$<skill>` is also supported by the `PreInvocation` hook as an alias.
 
