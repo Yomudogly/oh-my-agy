@@ -11,7 +11,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   CODE_EXTENSIONS, TEST_FILE_NAME_RE, appendJsonlRecord, isRealVerificationCommand, loadModeStates,
   loadUltragoalNotepad, normalizeFailureSignature, parseUnifiedDiff, readJson, readJsonlRecords,
-  redactSecrets, scanRepoCodeHygiene, stateRoot, stripCodeStrings, stripUtf8Bom,
+  redactSecrets, renameSyncAtomic, scanRepoCodeHygiene, stateRoot, stripCodeStrings, stripUtf8Bom,
   transformOutsideCodeSpans, validateCompletionEvidence,
 } from './omagy-hook.mjs';
 import { lintWikiPages, scanInitDeepCandidates, walkWikiMd } from './omagy-audit.mjs';
@@ -48,7 +48,19 @@ const isDir = (p) => { try { return Boolean(p) && fs.statSync(p).isDirectory(); 
 const isFile = (p) => { try { return Boolean(p) && fs.statSync(p).isFile(); } catch { /* fail open: missing file */ return false; } };
 const listEntries = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => !e.isSymbolicLink()); } catch { /* fail open: unreadable dir */ return []; } };
 const readUtf8 = (p) => stripUtf8Bom(fs.readFileSync(p, 'utf8'));
-const writeJsonStrict = (p, o) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, `${JSON.stringify(o, null, 2)}\n`, 'utf8'); };
+let _cliTmpSeq = 0;
+const writeJsonStrict = (p, o) => {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  _cliTmpSeq = (_cliTmpSeq + 1) % 1000000;
+  const tmp = `${p}.${process.pid}.${_cliTmpSeq}.tmp`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(o, null, 2)}\n`, 'utf8');
+    renameSyncAtomic(tmp, p);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* fail open: best-effort tmp cleanup */ }
+    throw err;
+  }
+};
 const gitOut = (cwd, args, extra = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, maxBuffer: 16 * 1024 * 1024, ...extra });
 const gitHead = (d) => { try { const s = gitOut(d, ['rev-parse', '--verify', 'HEAD^{commit}']).trim(); return /^[0-9a-fA-F]{7,64}$/.test(s) ? s : ''; } catch { /* fail open: non-git or unborn HEAD */ return ''; } };
 const scrubHome = (s) => redactSecrets(String(s || '')).replace(/\/(?:Users|home)\/[A-Za-z0-9._-]+/g, '<HOME>').replace(/[A-Za-z]:\\Users\\[A-Za-z0-9._-]+/gi, '<HOME>');
@@ -370,8 +382,9 @@ export function evaluateQualityGate(reportPaths = []) {
 }
 
 export function githubSlugger(rawHeading, seenCounts = null) {
-  const base = String(rawHeading || '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/<[!\/a-z][^>]*>/gi, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim().toLowerCase().replace(/[`*~]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
+  const unwrapped = String(rawHeading || '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  const noHtml = unwrapped.replace(/`([^`]*)`|<[!\/a-zA-Z][^>]*>/g, (_, code) => (code !== undefined ? code : ''));
+  const base = noHtml.trim().toLowerCase().replace(/[*~`]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
   if (!(seenCounts instanceof Map)) return base;
   const prev = seenCounts.get(base);
   if (prev === undefined) { seenCounts.set(base, 0); return base; }
@@ -771,9 +784,13 @@ export function runGoalDone(cwd, goalId, commandArgs = []) {
     const sr = stateRoot(absCwd); const alt = path.join(sr, '.omagy', 'ultragoal', 'goals.json');
     if (isFile(alt)) { workDir = sr; goalsPath = alt; } else return fail(2, 'missing_goals_json');
   }
+const TERMINAL_GOAL_STATUSES = new Set(['cancelled', 'canceled', 'blocked', 'superseded']);
+
   const goalsObj = readJson(goalsPath);
   const goal = Array.isArray(goalsObj?.goals) ? goalsObj.goals.find((g) => g && String(g.id) === id) : null;
   if (!goal) return fail(2, goalsObj?.goals ? `goal_not_found:${id}` : 'invalid_goals_json');
+  const initialStatus = String(goal.status || '').trim().toLowerCase();
+  if (TERMINAL_GOAL_STATUSES.has(initialStatus)) return fail(1, `terminal_goal_state:${initialStatus}`);
   if (!isExecutableRealCommand(cmdList)) return fail(1, 'noop_or_invalid_verification_command', -1, gitHead(absCwd));
 
   const cmdStr = cmdList.join(' ').trim();
@@ -785,6 +802,14 @@ export function runGoalDone(cwd, goalId, commandArgs = []) {
   const code = typeof proc.status === 'number' ? proc.status : (proc.error ? 127 : 1);
   if (proc.error || code !== 0) return fail(1, 'verification_command_failed', code, headSha);
 
+  const latestGoals = readJson(goalsPath);
+  const latestGoal = Array.isArray(latestGoals?.goals) ? latestGoals.goals.find((g) => g && String(g.id) === id) : null;
+  if (!latestGoal) return fail(2, latestGoals?.goals ? `goal_not_found:${id}` : 'invalid_goals_json', code, headSha);
+  const latestStatus = String(latestGoal.status || '').trim().toLowerCase();
+  if (TERMINAL_GOAL_STATUSES.has(latestStatus)) {
+    return fail(1, `concurrent_terminal_goal_state:${latestStatus}`, code, headSha);
+  }
+
   const out = redactSecrets(`${proc.stdout || ''}${proc.stderr ? `\n${proc.stderr}` : ''}`.trim()).slice(0, 8000) || '(exit 0; 0 bytes output)';
   const relEv = `.omagy/evidence/goal-${id}.json`; const absEv = path.join(workDir, relEv); const at = new Date().toISOString();
   try {
@@ -794,8 +819,8 @@ export function runGoalDone(cwd, goalId, commandArgs = []) {
     try { fs.rmSync(absEv, { force: true }); } catch { /* fail open: cleanup rejected evidence */ }
     return fail(1, `evidence_validation_failed:${errMsg(err)}`, 0, headSha);
   }
-  goal.status = 'complete'; goal.evidence = relEv; goalsObj.updated_at = at;
-  writeJsonStrict(goalsPath, goalsObj);
+  latestGoal.status = 'complete'; latestGoal.evidence = relEv; latestGoals.updated_at = at;
+  writeJsonStrict(goalsPath, latestGoals);
   appendJsonlRecord(path.join(workDir, '.omagy', 'ultragoal', 'ledger.jsonl'), { at, goal_id: id, event: 'checkpoint', status: 'complete', criteria_revision: goalsObj.criteria_revision ?? 1, verdict: 'unit-test-verified', ...(headSha ? { verified_head: headSha } : {}), evidence: relEv, evidence_path: relEv });
   return { ok: true, exitCode: 0, goalId: id, commandExitCode: 0, evidencePath: relEv, headSha };
 }

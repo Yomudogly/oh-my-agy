@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   COLD_CLI_EVENTS,
+  MAX_EVIDENCE_BYTES,
   appendJsonlRecord,
   auditResearchReport,
   buildCodebaseMap,
@@ -18,16 +19,18 @@ import {
   compareSessions,
   decideWatchVerdict,
   extractGoalBrief,
+  hasSymlinkSegment,
   intOr,
+  nonPlaceholderText,
   normalizeFailureSignature,
   readJsonlRecords,
   readStdin,
   repairWikiLinks,
   scanShortcutDebt,
+  stateRoot,
   stripUtf8Bom,
   validateCompletionEvidence,
   validateQualityGates,
-  validateTeamTasks,
 } from './omagy-hook.mjs';
 
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -1022,14 +1025,9 @@ export async function initSkillScaffold(skillName, options = {}) {
   }
 
   const force = Boolean(options?.force);
-  if (fs.existsSync(skillDir)) {
-    let st = null;
-    try {
-      st = fs.lstatSync(skillDir);
-    } catch { /* fail open: treat unreadable path as conflict */
-      st = null;
-    }
-    if (!st || !st.isDirectory() || st.isSymbolicLink()) {
+  const existingStat = fs.lstatSync(skillDir, { throwIfNoEntry: false });
+  if (existingStat) {
+    if (!existingStat.isDirectory() || existingStat.isSymbolicLink()) {
       return {
         ok: false,
         exitCode: 1,
@@ -1210,6 +1208,169 @@ export async function initSkillScaffold(skillName, options = {}) {
     manifestUpdated,
     validation,
   };
+}
+
+const TEAM_TASK_STATUSES = new Set(['pending', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled']);
+
+export function validateTeamTasks(cwd, teamName) {
+  const cleanTeam = String(teamName || '').trim();
+  if (!cwd || !cleanTeam || /[/\\]|\.\./.test(cleanTeam)) {
+    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam || '<empty>'}`] };
+  }
+  const sRoot = stateRoot(path.resolve(cwd));
+  const teamDir = path.join(sRoot, '.omagy', 'state', 'team', cleanTeam);
+  if (!fs.existsSync(teamDir)) {
+    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam}/<missing_dir>`] };
+  }
+  if (hasSymlinkSegment(sRoot, teamDir)) {
+    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam}/<symlink_dir>`] };
+  }
+  const errors = [];
+  const checkDirs = [teamDir];
+  const subTasksDir = path.join(teamDir, 'tasks');
+  try {
+    if (fs.existsSync(subTasksDir)) {
+      if (fs.lstatSync(subTasksDir).isSymbolicLink()) {
+        errors.push(`team_task_read_failed:${cleanTeam}/tasks`);
+      } else if (fs.statSync(subTasksDir).isDirectory()) {
+        checkDirs.push(subTasksDir);
+      }
+    }
+  } catch { /* fail open: record unreadable tasks dir */
+    errors.push(`team_task_read_failed:${cleanTeam}/tasks`);
+  }
+
+  let manifestIds = null;
+  const manifestTasks = new Map();
+  const standaloneTasks = new Map();
+  const seenManifestIds = new Set();
+  const seenStandaloneIds = new Set();
+  const taskFilesSeen = [];
+
+  for (const dir of checkDirs) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir); } catch { /* fail open: unreadable team task dir */
+      errors.push(`team_task_read_failed:${cleanTeam}/${path.basename(dir)}`);
+      continue;
+    }
+    const isSubDir = dir === subTasksDir;
+    for (const name of entries) {
+      if (name !== 'tasks.json' && !/^task-.+\.json$/i.test(name)) continue;
+      const full = path.join(dir, name);
+      let st;
+      try { st = fs.lstatSync(full); } catch { /* fail open: unreadable task file */
+        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+        continue;
+      }
+      if (st.isSymbolicLink() || !st.isFile() || st.size === 0 || st.size > MAX_EVIDENCE_BYTES) {
+        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+        continue;
+      }
+      let parsed;
+      try { parsed = JSON.parse(stripUtf8Bom(fs.readFileSync(full, 'utf8'))); } catch { /* fail open: malformed task json */
+        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+        continue;
+      }
+      if (name === 'tasks.json' && !isSubDir) {
+        const list = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks) ? parsed.tasks : null);
+        if (!list) {
+          errors.push(`team_task_read_failed:${cleanTeam}/tasks.json`);
+          continue;
+        }
+        manifestIds = new Set();
+        for (const item of list) {
+          if (!item || typeof item !== 'object' || !nonPlaceholderText(item.id) || typeof item.status !== 'string' || !item.status.trim()) {
+            errors.push(`team_task_read_failed:${cleanTeam}/tasks.json`);
+            break;
+          }
+          const id = String(item.id).trim();
+          const status = item.status.trim();
+          if (seenManifestIds.has(id)) {
+            errors.push(`team_task_read_failed:${cleanTeam}/tasks.json:duplicate_task_id:${id}`);
+          } else {
+            seenManifestIds.add(id);
+            manifestIds.add(id);
+            if (!TEAM_TASK_STATUSES.has(status)) {
+              errors.push(`team_task_read_failed:${cleanTeam}/tasks.json:invalid_status:${id}:${status}`);
+            }
+            manifestTasks.set(id, item);
+          }
+        }
+      } else if (name !== 'tasks.json') {
+        const expectedId = name.replace(/^task-/i, '').replace(/\.json$/i, '');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !nonPlaceholderText(parsed.id) || typeof parsed.status !== 'string' || !parsed.status.trim()) {
+          errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
+          continue;
+        }
+        const id = String(parsed.id).trim();
+        const status = parsed.status.trim();
+        if (id !== expectedId) {
+          errors.push(`team_task_read_failed:${cleanTeam}/${name}:task_id_mismatch`);
+          continue;
+        }
+        taskFilesSeen.push({ id, status, parsed, name, isSubDir });
+      }
+    }
+  }
+
+  for (const tf of taskFilesSeen) {
+    if (seenStandaloneIds.has(tf.id)) {
+      errors.push(`team_task_read_failed:${cleanTeam}/${tf.name}:duplicate_task_id:${tf.id}`);
+      continue;
+    }
+    seenStandaloneIds.add(tf.id);
+    if (manifestIds && tf.isSubDir && !manifestIds.has(tf.id)) {
+      errors.push(`team_task_read_failed:${cleanTeam}/tasks/${tf.name}:orphan_task_file:${tf.id}`);
+      continue;
+    }
+    if (!TEAM_TASK_STATUSES.has(tf.status)) {
+      errors.push(`team_task_read_failed:${cleanTeam}/${tf.name}:invalid_status:${tf.id}:${tf.status}`);
+    }
+    if (!manifestTasks.has(tf.id)) standaloneTasks.set(tf.id, tf.parsed);
+  }
+
+  const allTasks = new Map([...standaloneTasks, ...manifestTasks]);
+  const taskCount = allTasks.size;
+  const depsOf = (t) => {
+    const raw = Array.isArray(t?.depends_on) ? t.depends_on : (Array.isArray(t?.dependsOn) ? t.dependsOn : (Array.isArray(t?.blocked_by) ? t.blocked_by : []));
+    return raw.map((d) => String(d || '').trim()).filter(Boolean);
+  };
+  const validIds = new Set(allTasks.keys());
+  for (const [id, task] of allTasks) {
+    for (const dep of depsOf(task)) {
+      if (!validIds.has(dep)) {
+        errors.push(`team_task_read_failed:${cleanTeam}/${id}:missing_dependency:${dep}`);
+      }
+    }
+  }
+  const color = new Map();
+  const reportedCycles = new Set();
+  const visit = (id) => {
+    color.set(id, 1);
+    const task = allTasks.get(id);
+    for (const dep of depsOf(task)) {
+      if (!validIds.has(dep)) continue;
+      if (dep === id || color.get(dep) === 1) {
+        const key = `${id}->${dep}`;
+        if (!reportedCycles.has(key)) {
+          reportedCycles.add(key);
+          errors.push(`team_task_read_failed:${cleanTeam}/${id}:dependency_cycle:${dep}`);
+        }
+      } else if (!color.get(dep)) {
+        visit(dep);
+      }
+    }
+    color.set(id, 2);
+  };
+  for (const id of allTasks.keys()) {
+    if (!color.get(id)) visit(id);
+  }
+
+  const ok = errors.length === 0 && taskCount > 0;
+  if (taskCount === 0 && errors.length === 0) {
+    errors.push(`team_task_read_failed:${cleanTeam}/<no_tasks>`);
+  }
+  return { ok, exitCode: ok ? 0 : 1, team: cleanTeam, taskCount, errors };
 }
 
 // ---------- selftest & CLI dispatch ----------

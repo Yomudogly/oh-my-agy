@@ -85,7 +85,6 @@ import {
   stripUtf8Bom,
   validateCompletionEvidence,
   validateQualityGates,
-  validateTeamTasks,
   workspaceRoots,
   writeJson,
 } from './omagy-hook.mjs';
@@ -116,6 +115,7 @@ import {
   runNonLifecycleCli,
   validateSkillDirectory,
   validateSkillsManifest,
+  validateTeamTasks,
 } from './omagy-skill.mjs';
 import {
   runCoverageMap,

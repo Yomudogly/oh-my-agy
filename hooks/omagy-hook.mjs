@@ -88,7 +88,7 @@ export const MAX_EPHEMERAL_CHARS = 6000;
 const MAX_NOTEPAD_CHARS = 2000;
 export const IDLE_GAP_MS = 30 * 60 * 1000;
 const MAX_WIKI_CONTEXT_LINES = 60;
-const MAX_EVIDENCE_BYTES = 1024 * 1024;
+export const MAX_EVIDENCE_BYTES = 1024 * 1024;
 const MAX_WORKSPACE_WALK_DEPTH = 8;
 export const CODE_EXTENSIONS = new Set([
   '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.mts', '.cts', '.py', '.sh', '.bash', '.zsh',
@@ -119,13 +119,28 @@ export function parseJson(text) {
 export function readJson(p) {
   try { return JSON.parse(stripUtf8Bom(fs.readFileSync(p, 'utf8'))); } catch { return null; }
 }
+let _tmpSeq = 0;
+export function renameSyncAtomic(tmpPath, destPath) {
+  for (let i = 0; ; i += 1) {
+    try { fs.renameSync(tmpPath, destPath); return; } catch (err) {
+      if (process.platform === 'win32' && i < 4 && /^(EPERM|EBUSY|EACCES)$/.test(err?.code || '')) {
+        const until = Date.now() + (i + 1) * 15;
+        while (Date.now() < until) { /* win32 AV lock retry */ }
+        continue;
+      }
+      try { fs.unlinkSync(tmpPath); } catch { /* fail open: tmp cleanup */ }
+      throw err;
+    }
+  }
+}
+
 export function writeJson(p, obj) {
+  const tmp = `${p}.${process.pid}.${_tmpSeq = (_tmpSeq + 1) % 1e6}.tmp`;
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    const tmp = `${p}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, `${JSON.stringify(obj, null, 2)}\n`, { mode: 0o600 });
-    fs.renameSync(tmp, p);
-  } catch { /* fail open */ }
+    renameSyncAtomic(tmp, p);
+  } catch { try { fs.unlinkSync(tmp); } catch { /* fail open: tmp cleanup */ } }
 }
 function safeId(v) {
   return String(v || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128);
@@ -148,7 +163,7 @@ function ago(ms) {
   if (s < 5400) return `${Math.round(s / 60)}m ago`;
   return `${Math.round(s / 3600)}h ago`;
 }
-function nonPlaceholderText(value) {
+export function nonPlaceholderText(value) {
   return typeof value === 'string' && value.trim().length > 0
     && !/^(?:todo|tbd|placeholder|pending|not run)[.!]?$/i.test(value.trim());
 }
@@ -173,7 +188,7 @@ export function canonicalizePath(p, depth = 0) {
   }
   return abs;
 }
-function hasSymlinkSegment(rootPath, targetPath) {
+export function hasSymlinkSegment(rootPath, targetPath) {
   const rootReal = canonicalizePath(rootPath);
   const rootAbs = path.resolve(String(rootPath || ''));
   const targetAbs = path.resolve(String(targetPath || ''));
@@ -326,29 +341,25 @@ function readStateDir(dir, root, convId, scope = '.') {
 export function loadModeStates(root, convId = '') {
   const sRoot = stateRoot(root);
   const byMode = new Map();
-  const consider = (s) => {
+  const ranks = new Map();
+  const cid = convId ? String(convId) : '';
+  const consider = (s, fromSess) => {
+    const r = s.foreignOwner ? 0 : ((cid && (fromSess || s.owner === cid) ? 2 : 0) + (isActive(s) ? 2 : 1));
     const prev = byMode.get(s.mode);
-    if (!prev || (!isActive(prev) && isActive(s))) {
+    const pr = ranks.get(s.mode) ?? -1;
+    if (!prev || r > pr || (r === pr && updatedMs(s) > updatedMs(prev))) {
       byMode.set(s.mode, s);
+      ranks.set(s.mode, r);
     }
   };
-  if (convId) {
-    const sessDir = path.join(sRoot, '.omagy', 'state', 'sessions', safeId(convId));
-    for (const s of readStateDir(sessDir, sRoot, convId, '.')) consider(s);
-  }
-  const sharedDir = path.join(sRoot, '.omagy', 'state');
-  for (const s of readStateDir(sharedDir, sRoot, convId, '.')) consider(s);
-
-  // If the parent project folder has no .omagy (or no active state in parent .omagy), also check inner-folder .omagy scopes (e.g. Travels/Summer trip/.omagy)
+  const scanRoot = (rDir, scope) => {
+    if (cid) for (const s of readStateDir(path.join(rDir, '.omagy', 'state', 'sessions', safeId(cid)), rDir, cid, scope)) consider(s, true);
+    for (const s of readStateDir(path.join(rDir, '.omagy', 'state'), rDir, cid, scope)) consider(s, false);
+  };
+  scanRoot(sRoot, '.');
   if (byMode.size === 0 || ![...byMode.values()].some((s) => isActive(s))) {
     for (const sc of discoverOmagyScopes(sRoot)) {
-      if (sc.root === sRoot) continue;
-      if (convId) {
-        const sessDir = path.join(sc.root, '.omagy', 'state', 'sessions', safeId(convId));
-        for (const s of readStateDir(sessDir, sc.root, convId, sc.scope)) consider(s);
-      }
-      const innerShared = path.join(sc.root, '.omagy', 'state');
-      for (const s of readStateDir(innerShared, sc.root, convId, sc.scope)) consider(s);
+      if (sc.root !== sRoot) scanRoot(sc.root, sc.scope);
     }
   }
   return [...byMode.values()];
@@ -653,92 +664,6 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
   };
 }
 
-export function validateTeamTasks(cwd, teamName) {
-  const cleanTeam = String(teamName || '').trim();
-  if (!cwd || !cleanTeam || /[/\\]|\.\./.test(cleanTeam)) {
-    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam || '<empty>'}`] };
-  }
-  const sRoot = stateRoot(path.resolve(cwd));
-  const teamDir = path.join(sRoot, '.omagy', 'state', 'team', cleanTeam);
-  if (!fs.existsSync(teamDir)) {
-    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam}/<missing_dir>`] };
-  }
-  if (hasSymlinkSegment(sRoot, teamDir)) {
-    return { ok: false, exitCode: 1, team: cleanTeam, taskCount: 0, errors: [`team_task_read_failed:${cleanTeam}/<symlink_dir>`] };
-  }
-  const errors = [];
-  let taskCount = 0;
-  const checkDirs = [teamDir];
-  const subTasksDir = path.join(teamDir, 'tasks');
-  try {
-    if (fs.existsSync(subTasksDir)) {
-      if (fs.lstatSync(subTasksDir).isSymbolicLink()) {
-        errors.push(`team_task_read_failed:${cleanTeam}/tasks`);
-      } else if (fs.statSync(subTasksDir).isDirectory()) {
-        checkDirs.push(subTasksDir);
-      }
-    }
-  } catch {
-    errors.push(`team_task_read_failed:${cleanTeam}/tasks`);
-  }
-
-  for (const dir of checkDirs) {
-    let entries = [];
-    try { entries = fs.readdirSync(dir); } catch {
-      errors.push(`team_task_read_failed:${cleanTeam}/${path.basename(dir)}`);
-      continue;
-    }
-    for (const name of entries) {
-      if (name !== 'tasks.json' && !/^task-.+\.json$/i.test(name)) continue;
-      const full = path.join(dir, name);
-      let st;
-      try { st = fs.lstatSync(full); } catch {
-        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
-        continue;
-      }
-      if (st.isSymbolicLink() || !st.isFile() || st.size === 0 || st.size > MAX_EVIDENCE_BYTES) {
-        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
-        continue;
-      }
-      let parsed;
-      try { parsed = JSON.parse(stripUtf8Bom(fs.readFileSync(full, 'utf8'))); } catch {
-        errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
-        continue;
-      }
-      if (name === 'tasks.json') {
-        const list = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks) ? parsed.tasks : null);
-        if (!list) {
-          errors.push(`team_task_read_failed:${cleanTeam}/tasks.json`);
-          continue;
-        }
-        for (const item of list) {
-          if (!item || typeof item !== 'object' || !nonPlaceholderText(item.id) || typeof item.status !== 'string' || !item.status.trim()) {
-            errors.push(`team_task_read_failed:${cleanTeam}/tasks.json`);
-            break;
-          }
-          taskCount += 1;
-        }
-      } else {
-        const expectedId = name.replace(/^task-/i, '').replace(/\.json$/i, '');
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !nonPlaceholderText(parsed.id) || typeof parsed.status !== 'string' || !parsed.status.trim()) {
-          errors.push(`team_task_read_failed:${cleanTeam}/${name}`);
-          continue;
-        }
-        if (String(parsed.id).trim() !== expectedId) {
-          errors.push(`team_task_read_failed:${cleanTeam}/${name}:task_id_mismatch`);
-          continue;
-        }
-        taskCount += 1;
-      }
-    }
-  }
-  const ok = errors.length === 0 && taskCount > 0;
-  if (taskCount === 0 && errors.length === 0) {
-    errors.push(`team_task_read_failed:${cleanTeam}/<no_tasks>`);
-  }
-  return { ok, exitCode: ok ? 0 : 1, team: cleanTeam, taskCount, errors };
-}
-
 // ---------- configurable custom quality gates ----------
 const QUALITY_GATE_STAGES = new Set(['deep-interview', 'ralplan', 'code-review']);
 export const RESERVED_GATE_SKILLS = new Set([
@@ -904,7 +829,7 @@ const MAP_MAX_FILES = 4000;
 const MAP_SRC_RE = /\.(py|js|jsx|mjs|cjs|ts|tsx|mts|cts|go|rs|rb|java|kt|kts|php|swift|cs)$/i;
 const MAP_SKIP_DIR_RE = /(^|\/)(node_modules|\.git|\.omagy|omagy_wiki|dist|build|out|vendor|venv|\.venv|__pycache__|coverage|\.next|target|migrations|versions|fixtures|tests?|__tests__|spec)(\/|$)/i;
 const MAP_SKIP_FILE_RE = /(^|\/)(test_[^/]*|[^/]*(_test|\.test|\.spec|\.gen|\.min|\.d)\.[a-z]+)$/i;
-const MAP_EXPORT_NAME_RE = /^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+[A-Za-z_$][\w$]*)?$/;
+const MAP_EXPORT_NAME_RE = /^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/;
 const MAP_SAFE_PATH_RE = /^[\w.@+$()[\]\/-]+$/;
 const MAP_SHARED_RE = /(util|helper|lib|common|shared|service|component|hook|core|model|schema|api)/i;
 const MAP_PATTERNS = {
@@ -950,7 +875,7 @@ function isMapSourceFile(relFile) {
 function listRepoSourceFiles(root) {
   try {
     const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
-      cwd: root, encoding: 'utf8', timeout: 1500, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
+      cwd: root, encoding: 'utf8', timeout: 2500, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     if (out) {
       return out.split('\n').slice(0, MAP_MAX_FILES * 5).filter((f) => MAP_SAFE_PATH_RE.test(f) && isMapSourceFile(f)).slice(0, MAP_MAX_FILES);
@@ -986,7 +911,7 @@ function extractExportedNames(text, ext) {
     while ((m = re.exec(text)) !== null) {
       for (const rawPart of m[1].split(',')) {
         const hit = MAP_EXPORT_NAME_RE.exec(rawPart.trim());
-        const id = hit && hit[1];
+        const id = hit && (hit[2] || hit[1]);
         if (id && id[0] !== '_' && !names.includes(id)) names.push(id);
       }
     }
@@ -1791,7 +1716,8 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
         if (nextH) {
           const nextLevel = nextH[1].length;
           const isChildSubtask = Boolean(tMatch && candId && isSubtaskOf(candId, reqNorm));
-          if (nextLevel <= captureLevel && !isChildSubtask) {
+          const isSiblingTask = Boolean(tMatch && candId && !isChildSubtask && normalizeTaskId(candId) !== reqNorm);
+          if ((nextLevel <= captureLevel && !isChildSubtask) || isSiblingTask) {
             break;
           }
         }
