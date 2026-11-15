@@ -29,10 +29,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import {
-  buildCompactClaudeContract, checkHostBundleDrift, desktopHudRegistryFile, detectHost, ensureDesktopHudDaemon,
-  expandTranscriptRecordForFreshness, extractHostTranscriptRecords, hasClaudeRulesFile,
-  isDesktopAppSession, normalizeLifecycleEvent, normalizeLifecyclePayload, resolveBundleRoot,
-  resolveCodexVersion, serializeHookOutcome,
+  buildCompactClaudeContract, checkHostBundleDrift, defaultRuntimeDir, desktopHudRegistryFile,
+  detectHost, ensureDesktopHudDaemon, ensureSecureRuntimeDir, expandTranscriptRecordForFreshness,
+  extractHostTranscriptRecords, hasClaudeRulesFile, isDesktopAppSession, normalizeLifecycleEvent,
+  normalizeLifecyclePayload, resolveBundleRoot, resolveCodexVersion, serializeHookOutcome,
 } from './omagy-host.mjs';
 
 export function hardenWindowsExeSearch() {
@@ -96,16 +96,27 @@ export const CODE_EXTENSIONS = new Set([
 ]);
 const COMPLETION_CLAIM_RE = /\b(?:done|complete[sd]?|finished|implemented|fixed|resolved|all set|ready\s+(?:for\s+(?:review|merge|release|qa|testing)|to\s+(?:merge|ship|release|submit)))\b/i;
 export const BLOCKER_PATTERNS = [
-  { kind: 'skipped test', pattern: /^\s*(?:it|test|describe)\.skip\s*\(\s*(?:["'`)]|$)/i },
+  { kind: 'skipped test', pattern: /^\s*(?:(?:it|test|describe)\.skip|xit|xtest|xdescribe)\s*\(|^\s*#\[\s*(?:ignore(?:\s*=\s*["'][^"']*["'])?|cfg_attr\([^\]]*\bignore\b[^\]]*\))\s*\]|^\s*@pytest\.mark\.skip\b(?!if)|\bt\.(?:Skip|Skipf|SkipNow)\s*\(/i },
   { kind: 'focused test', pattern: /^\s*(?:it|test|describe)\.only\s*\(/i },
   { kind: 'placeholder TODO', pattern: /\/\/\s*TODO\b(?:\([^)]*\))?\s*:?\s*(?:implement|fix|replace|stub|placeholder|later|follow[- ]?up|wire|add\b|fill)/i },
+  { kind: 'unimplemented macro', pattern: /\b(?:todo|unimplemented)!\s*\(/ },
   { kind: 'unimplemented throw', pattern: /^\s*throw\s+new\s+Error\s*\(\s*["'`](?:TODO|Not implemented|unimplemented|stub)/i },
   { kind: 'placeholder return', pattern: /^\s*return\s+(?:null|undefined)\s*;?\s*\/\/\s*(?:TODO|stub|placeholder|not implemented)/i },
 ];
 
 // ---------- utilities ----------
 function runtimeDir() {
-  return process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
+  const target = defaultRuntimeDir();
+  try {
+    return ensureSecureRuntimeDir(target);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '';
+    if (msg.startsWith('runtime_dir_symlink:') || msg.startsWith('runtime_dir_foreign_uid:') || msg.startsWith('runtime_dir_not_directory:')) {
+      throw err;
+    }
+    /* fail open: fallback to target path if sandbox blocks mkdir/chmod */
+    return target;
+  }
 }
 export function readStdin() {
   try { return fs.readFileSync(0, 'utf8'); } catch { /* fail open: missing stdin returns empty string */ return ''; }
@@ -217,7 +228,7 @@ function isSubagentPayload(payload, userText = '') {
 }
 
 // ---------- mode state & multi-repo root ----------
-const IGNORED_SCAN_DIRS = new Set([
+export const IGNORED_SCAN_DIRS = new Set([
   '.git', '.hg', '.svn', '.omagy', 'omagy_wiki', 'node_modules',
   'dist', 'build', 'out', '.next', '.nuxt', '.svelte-kit', 'target', 'vendor',
   'coverage', '.venv', 'venv', '__pycache__', '.tox', '.cache', '.turbo', 'sidecars',
@@ -415,12 +426,14 @@ export function activeStates(roots, modes, convId = '') {
 // ---------- wiki & working agreements summary (expiry filtering & secret redaction) ----------
 export function redactSecrets(text) {
   return String(text || '')
-    .replace(/\b(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_live_[0-9A-Za-z]{20,}|AIza[0-9A-Za-z_-]{35}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})\b/g, '[REDACTED_KEY]')
-    .replace(/\b(?:(?:gh[pousr]|github_pat|pypi)_[A-Za-z0-9_-]{16,}|(?:glpat|xox[baprs]|pypi)-[A-Za-z0-9_-]{16,}|npm_[0-9A-Za-z]{36})\b/g, '[REDACTED_TOKEN]')
+    .replace(/\b(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}|AIza[0-9A-Za-z_-]{35}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})\b/g, '[REDACTED_KEY]')
+    .replace(/\b(?:(?:gh[pousr]|github_pat|pypi)_[A-Za-z0-9_-]{16,}|(?:glpat|xox[baprs]|pypi)-[A-Za-z0-9_-]{16,}|hf_[A-Za-z0-9]{20,}|npm_[0-9A-Za-z]{36})\b/g, '[REDACTED_TOKEN]')
     .replace(/\bA(?:KIA|SIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
     .replace(/-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----|-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g, '[REDACTED_PEM_KEY]')
     .replace(/\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss):\/\/[^/\s:@]{0,64}:)(?!\$|\{\{|\[REDACTED|<)[^/\s@]{3,}(@)/gi, '$1[REDACTED_SECRET]$2')
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]')
+    .replace(/(\b(?:set-cookie|cookie)\s*:\s*)(?!\[REDACTED)([^\r\n]+)/gi, '$1[REDACTED_COOKIE]')
+    .replace(/(\bcurl\b[^\r\n]*?(?:\s--user=|\s--user\s+|\s-u\s*)(["']?)(?!\$)([^"'\s:]+):)(?!\$|\{\{|\[REDACTED)([^"'\s]+)(\2)/gi, '$1[REDACTED_SECRET]$5')
     .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|client[-_]?secret|secret|password)=['"]?)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}(['"]?)/gi, '$1[REDACTED_SECRET]$2')
     .replace(/(\bAuthorization\s*:\s*Bearer\s+)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED_TOKEN]')
     .replace(/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|password|secret|token)\b\s*[:=]\s*['"])(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[^'"\r\n]{12,}(['"])/gi, '$1[REDACTED_SECRET]$2');
@@ -770,23 +783,34 @@ export function validateQualityGates(cwd, requestedStage = '') {
 }
 
 // ---------- crash-resilient JSONL helpers ----------
-export function appendJsonlRecord(filePath, rawRecord) {
+const DEFAULT_HOOK_ERRORS_ROTATE_BYTES = 512 * 1024;
+export function appendJsonlRecord(filePath, rawRecord, opts = {}) {
   const resolved = path.resolve(String(filePath || ''));
   let parsed;
   try {
     parsed = typeof rawRecord === 'string' ? JSON.parse(stripUtf8Bom(rawRecord)) : rawRecord;
-  } catch {
+  } catch { /* fail open: explicit validation error thrown below */
     throw new Error('Invalid JSON record for JSONL append.');
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('JSONL record must be a JSON object.');
   }
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  const rotateAt = Number(opts?.rotateAtBytes) > 0
+    ? Number(opts.rotateAtBytes)
+    : (opts?.rotateAtBytes === undefined && path.basename(resolved) === 'hook-errors.jsonl' ? DEFAULT_HOOK_ERRORS_ROTATE_BYTES : 0);
+  let rotated = false;
   let prefix = '';
   try {
     const st = fs.lstatSync(resolved);
     if (st.isSymbolicLink()) throw new Error('Refusing to append to symlinked JSONL file.');
-    if (st.size > 0) {
+    if (rotateAt > 0 && st.size >= rotateAt) {
+      const backup = `${resolved}.1`;
+      const bSt = fs.lstatSync(backup, { throwIfNoEntry: false });
+      if (bSt?.isSymbolicLink()) throw new Error('Refusing to rotate over symlinked JSONL backup.');
+      renameSyncAtomic(resolved, backup);
+      rotated = true;
+    } else if (st.size > 0) {
       const fd = fs.openSync(resolved, 'r');
       try {
         const b = Buffer.alloc(1);
@@ -796,17 +820,46 @@ export function appendJsonlRecord(filePath, rawRecord) {
     }
   } catch (err) {
     if (err instanceof Error && err.message.includes('symlink')) throw err;
+    /* fail open: missing JSONL file starts fresh without rotation */
   }
   const line = `${prefix}${JSON.stringify(parsed)}\n`;
   fs.appendFileSync(resolved, line, { encoding: 'utf8', mode: 0o600 });
-  return { ok: true, file: resolved, isolatedNewline: prefix === '\n' };
+  return { ok: true, file: resolved, isolatedNewline: prefix === '\n', rotated };
 }
 
-export function readJsonlRecords(filePath) {
+export function readJsonlRecords(filePath, opts = {}) {
   const resolved = path.resolve(String(filePath || ''));
-  const st = fs.lstatSync(resolved);
+  const maxTailBytes = Number(opts?.maxTailBytes) > 0 ? Math.floor(Number(opts.maxTailBytes)) : 0;
+  let st;
+  try {
+    st = fs.lstatSync(resolved);
+  } catch (err) {
+    if (maxTailBytes > 0 && err?.code === 'ENOENT') {
+      /* fail open: bounded tail read on absent log file returns empty records */
+      return { ok: true, file: resolved, records: [], skipped: 0 };
+    }
+    throw err;
+  }
   if (st.isSymbolicLink()) throw new Error('Refusing to read symlinked JSONL file.');
-  const raw = stripUtf8Bom(fs.readFileSync(resolved, 'utf8'));
+  let raw = '';
+  if (maxTailBytes > 0 && st.size > maxTailBytes) {
+    const offset = st.size - maxTailBytes;
+    const buf = Buffer.alloc(maxTailBytes);
+    const fd = fs.openSync(resolved, 'r');
+    let bytesRead = 0;
+    try {
+      bytesRead = fs.readSync(fd, buf, 0, maxTailBytes, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+    raw = stripUtf8Bom(buf.subarray(0, bytesRead).toString('utf8'));
+    if (offset > 0) {
+      const firstNl = raw.indexOf('\n');
+      raw = firstNl >= 0 ? raw.slice(firstNl + 1) : '';
+    }
+  } else {
+    raw = stripUtf8Bom(fs.readFileSync(resolved, 'utf8'));
+  }
   const records = [];
   let skipped = 0;
   for (const rawLine of raw.split('\n')) {
@@ -1759,112 +1812,7 @@ export function extractGoalBrief(sourcePath, targetId, outPath = '') {
   return { ok: true, exitCode: 0, path: target, id: resolvedId, title };
 }
 
-// ---------- junk-test scanner ----------
 export const TEST_FILE_NAME_RE = /(?:^|[/\\])(?:__tests__|tests)[/\\].+\.(?:[cm]?[jt]sx?|py|rs|go)$|\.(?:test|spec)\.(?:[cm]?[jt]sx?)$|_test\.(?:py|go|rs)$|(?:^|[/\\])test_[^/\\]+\.py$/i;
-const TEST_JUNK_RULES = [
-  {
-    rule: 'source-grep',
-    message: 'Reads source file inside a test to grep implementation text (class 10 source-grep). Test runtime behavior instead.',
-    test: (line) => /\b(?:readFileSync|fs\.readFile|fsPromises\.readFile|os\.ReadFile|ioutil\.ReadFile|std::fs::read_to_string)\s*\(/.test(line),
-  },
-  {
-    rule: 'prose-pin',
-    message: 'Pins exact long prose (>80 chars) in an equality assertion (class 5 exact-error-prose). Match error code/type or key phrase.',
-    test: (line) => /\b(?:toBe|toEqual|toStrictEqual|assert_eq!|assertEqual)\s*\(\s*["'`][^"'`\n]{80,}["'`]\s*\)/.test(line),
-  },
-  {
-    rule: 'fixed-sleep',
-    message: 'Uses arbitrary fixed sleep in test (class 12 fixed-sleep). Await deterministic condition or fake timers.',
-    test: (line) => /\b(?:setTimeout\s*\(\s*resolve\s*,\s*\d+|sleep\s*\(\s*\d+|time\.sleep\s*\(\s*\d+|thread::sleep|time\.Sleep)\b/.test(line),
-  },
-  {
-    rule: 'focused',
-    message: 'Focused test (.only / #[test_only]) silently skips the rest of the suite.',
-    test: (line) => /\b(?:it|test|describe)\.only\s*\(|#\[\s*test_only\s*\]/.test(line),
-  },
-  {
-    rule: 'skipped',
-    message: 'Skipped test (.skip / #[ignore]) left in suite without suppression.',
-    test: (line) => /\b(?:it|test|describe|pytest\.mark)\.skip\s*\(|^\s*#\[\s*ignore(?:\s*\)|\s*\])/.test(line),
-  },
-  {
-    rule: 'self-compare',
-    message: 'Tautological self-comparison (expect(x).toBe(x) or assert(x == x)) (class 1 tautology).',
-    test: (line) => {
-      const m1 = /\bexpect\s*\(\s*([A-Za-z_$][A-Za-z0-9_$.]*)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*([A-Za-z_$][A-Za-z0-9_$.]*)\s*\)/.exec(line);
-      if (m1 && m1[1] === m1[2]) return true;
-      const m2 = /\b(?:assert|assert_eq!)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(?:===?|==|,)\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)/.exec(line);
-      return Boolean(m2 && m2[1] === m2[2]);
-    },
-  },
-  {
-    rule: 'lower-bound',
-    message: 'Weak lower-bound assertion (>= 0 or >= 1 on length/size/count) instead of exact expected shape.',
-    test: (line) => /\bexpect\s*\([^)]*\.(?:length|size|count)\s*\)\s*\.\s*toBeGreaterThanOrEqual\s*\(\s*[01]\s*\)|\b(?:len|count)\s*\([^)]+\)\s*>=\s*0\b/.test(line),
-  },
-];
-
-export function checkTestJunk(targets = []) {
-  const rawList = Array.isArray(targets) ? targets : [targets];
-  const files = [];
-  const seen = new Set();
-  const collect = (p, explicit) => {
-    const abs = path.resolve(String(p || ''));
-    if (!abs || seen.has(abs)) return;
-    let st;
-    try { st = fs.lstatSync(abs); } catch { return; }
-    if (st.isSymbolicLink()) return;
-    if (st.isFile()) {
-      if (explicit || TEST_FILE_NAME_RE.test(abs)) {
-        seen.add(abs);
-        files.push(abs);
-      }
-      return;
-    }
-    if (st.isDirectory()) {
-      let entries = [];
-      try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-      for (const e of entries) {
-        if (e.name.startsWith('.') || IGNORED_SCAN_DIRS.has(e.name)) continue;
-        collect(path.join(abs, e.name), false);
-      }
-    }
-  };
-  for (const t of rawList) {
-    if (t && String(t).trim()) collect(String(t).trim(), true);
-  }
-  const violations = [];
-  for (const file of files) {
-    let raw = '';
-    try { raw = fs.readFileSync(file, 'utf8'); } catch { continue; }
-    const lines = raw.split(/\r?\n/);
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      const trimmed = line.trim();
-      if (!trimmed || /^(?:\/\/|#|\/\*|\*)/.test(trimmed)) continue;
-      const prevLine = i > 0 ? lines[i - 1] : '';
-      if (/check-test-junk:\s*ignore/i.test(line) || /check-test-junk:\s*ignore/i.test(prevLine)) continue;
-      for (const ruleObj of TEST_JUNK_RULES) {
-        if (ruleObj.test(line)) {
-          violations.push({
-            file,
-            line: i + 1,
-            rule: ruleObj.rule,
-            message: ruleObj.message,
-            snippet: trimmed.slice(0, 140),
-          });
-        }
-      }
-    }
-  }
-  return {
-    ok: violations.length === 0,
-    exitCode: violations.length === 0 ? 0 : 1,
-    filesScanned: files.length,
-    violations,
-  };
-}
 
 // ---------- deep-research helpers (research-matrix & audit-research) ----------
 const RESEARCH_LENS_FACETS = {
@@ -2202,178 +2150,6 @@ export function normalizeFailureSignature(text) {
     kept.push(line.trimEnd());
   }
   return kept.join('\n');
-}
-
-function summarizeTranscriptMetrics(records) {
-  let turnsStarted = 0;
-  let turnsCompleted = 0;
-  let toolCalls = 0;
-  let failedTools = 0;
-  let incomplete = 0;
-  let compactions = 0;
-  const timestamps = [];
-  const byTool = {};
-  const fileReads = {};
-
-  for (const rec of records) {
-    if (!rec || typeof rec !== 'object') continue;
-    const ts = Date.parse(rec.created_at || rec.at || rec.timestamp || '');
-    if (Number.isFinite(ts)) timestamps.push(ts);
-    const type = String(rec.type || '').toUpperCase();
-    const status = String(rec.status || '').toUpperCase();
-    if (type === 'USER_INPUT' || rec.role === 'user') turnsStarted += 1;
-    if (type === 'PLANNER_RESPONSE' || rec.role === 'assistant') {
-      if (!status || status === 'DONE' || status === 'COMPLETED') turnsCompleted += 1;
-    }
-    if (type.includes('COMPACT') || (typeof rec.content === 'string' && /(?:^|\s)\/compact\b/i.test(rec.content))) {
-      compactions += 1;
-    }
-    if (status === 'ERROR' || status === 'FAILED' || rec.error) {
-      failedTools += 1;
-    } else if (status && status !== 'DONE' && status !== 'COMPLETED') {
-      incomplete += 1;
-    }
-    const calls = Array.isArray(rec.tool_calls) ? rec.tool_calls : [];
-    for (const tc of calls) {
-      if (!tc || typeof tc !== 'object') continue;
-      toolCalls += 1;
-      const rawName = String(tc.name || tc.toolName || tc.function?.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '');
-      const name = rawName || 'unknown';
-      if (!byTool[name]) byTool[name] = { calls: 0, failed: 0 };
-      byTool[name].calls += 1;
-      if (tc.status === 'ERROR' || tc.error) {
-        byTool[name].failed += 1;
-        failedTools += 1;
-      }
-      if (/^(?:read_file|view_file|read)$/i.test(name)) {
-        let argsObj = tc.arguments || tc.args || tc.input || tc.function?.arguments || null;
-        if (typeof argsObj === 'string') {
-          try { argsObj = JSON.parse(argsObj); } catch { argsObj = null; }
-        }
-        const readPath = argsObj && typeof argsObj === 'object'
-          ? String(argsObj.Path || argsObj.filePath || argsObj.TargetFile || argsObj.path || '').trim()
-          : '';
-        if (readPath) {
-          fileReads[readPath] = (fileReads[readPath] || 0) + 1;
-        }
-      }
-    }
-  }
-  const repeatedWork = Object.values(fileReads).filter((c) => c >= 3).length;
-  const stumbles = failedTools + incomplete;
-  timestamps.sort((a, b) => a - b);
-  let rawDurationMs = (records.length === 1 && timestamps.length === 1) ? 0 : null;
-  let durationMs = rawDurationMs;
-  if (timestamps.length >= 2 && timestamps.at(-1) > timestamps[0]) {
-    rawDurationMs = timestamps.at(-1) - timestamps[0];
-    let idleMs = 0;
-    for (let i = 1; i < timestamps.length; i += 1) {
-      if (timestamps[i] - timestamps[i - 1] > IDLE_GAP_MS) idleMs += timestamps[i] - timestamps[i - 1];
-    }
-    durationMs = Math.max(0, rawDurationMs - idleMs);
-  }
-  return {
-    records: records.length,
-    duration_ms: durationMs,
-    raw_duration_ms: rawDurationMs,
-    turns: turnsStarted,
-    turns_started: turnsStarted,
-    turns_completed: turnsCompleted,
-    tool_calls: toolCalls,
-    failed_tools: failedTools,
-    incomplete,
-    stumbles,
-    repeated_work: repeatedWork,
-    compactions,
-    byTool,
-  };
-}
-
-export function compareSessions(baselinePath, candidatePath, opts = {}) {
-  const safeRead = (p) => {
-    try {
-      const r = readJsonlRecords(String(p || ''));
-      return Array.isArray(r) ? r : (Array.isArray(r?.records) ? r.records : []);
-    } catch {
-      return [];
-    }
-  };
-  const baseRecs = safeRead(baselinePath);
-  const candRecs = safeRead(candidatePath);
-  const base = summarizeTranscriptMetrics(baseRecs);
-  const cand = summarizeTranscriptMetrics(candRecs);
-  const reasons = [];
-  let status = 'no_regression';
-
-  if (base.records === 0 || cand.records === 0) {
-    status = 'inconclusive';
-    reasons.push('missing_transcript_records');
-  } else if ((base.tool_calls > 0 && base.duration_ms === null) || (cand.tool_calls > 0 && cand.duration_ms === null)) {
-    status = 'inconclusive';
-    reasons.push('missing_measured_duration');
-  } else {
-    if (cand.failed_tools > base.failed_tools) reasons.push('failed_tools_increased');
-    if (cand.incomplete > base.incomplete) reasons.push('incomplete_steps_increased');
-    if (cand.stumbles > base.stumbles && !reasons.includes('failed_tools_increased') && !reasons.includes('incomplete_steps_increased')) {
-      reasons.push('stumbles_increased');
-    }
-    if (cand.repeated_work > base.repeated_work) reasons.push('repeated_work_increased');
-    const maxPct = opts.maxDurationIncreasePct !== undefined ? Number(opts.maxDurationIncreasePct) : 50;
-    if (Number.isFinite(maxPct) && base.duration_ms !== null && base.duration_ms > 0 && cand.duration_ms !== null) {
-      const pctIncrease = ((cand.duration_ms - base.duration_ms) / base.duration_ms) * 100;
-      if (pctIncrease > maxPct) reasons.push('duration_regression');
-    }
-    if (reasons.length > 0) status = 'regression';
-  }
-
-  const allTools = new Set([...Object.keys(base.byTool), ...Object.keys(cand.byTool)]);
-  const byTool = {};
-  for (const t of [...allTools].sort()) {
-    const b = base.byTool[t] || { calls: 0, failed: 0 };
-    const c = cand.byTool[t] || { calls: 0, failed: 0 };
-    byTool[t] = {
-      baseline_calls: b.calls,
-      candidate_calls: c.calls,
-      delta_calls: c.calls - b.calls,
-      baseline_failed: b.failed,
-      candidate_failed: c.failed,
-      delta_failed: c.failed - b.failed,
-    };
-  }
-  const pickSummary = (m) => ({
-    duration_ms: m.duration_ms,
-    raw_duration_ms: m.raw_duration_ms,
-    turns: m.turns,
-    turns_started: m.turns_started,
-    turns_completed: m.turns_completed,
-    tool_calls: m.tool_calls,
-    failed_tools: m.failed_tools,
-    incomplete: m.incomplete,
-    stumbles: m.stumbles,
-    repeated_work: m.repeated_work,
-    compactions: m.compactions,
-  });
-  const failOnReg = Boolean(opts.failOnRegression);
-  const exitCode = !failOnReg ? 0 : (status === 'regression' ? 2 : (status === 'inconclusive' ? 3 : 0));
-  return {
-    ok: exitCode === 0,
-    exitCode,
-    baseline: pickSummary(base),
-    candidate: pickSummary(cand),
-    deltas: {
-      duration_ms: (base.duration_ms !== null && cand.duration_ms !== null) ? (cand.duration_ms - base.duration_ms) : null,
-      raw_duration_ms: (base.raw_duration_ms !== null && cand.raw_duration_ms !== null) ? (cand.raw_duration_ms - base.raw_duration_ms) : null,
-      turns: cand.turns - base.turns,
-      tool_calls: cand.tool_calls - base.tool_calls,
-      failed_tools: cand.failed_tools - base.failed_tools,
-      incomplete: cand.incomplete - base.incomplete,
-      stumbles: cand.stumbles - base.stumbles,
-      repeated_work: cand.repeated_work - base.repeated_work,
-      compactions: cand.compactions - base.compactions,
-    },
-    byTool,
-    assessment: { status, reasons },
-  };
 }
 
 export function transformOutsideCodeSpans(markdown, replacer) {

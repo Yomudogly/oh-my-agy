@@ -3,9 +3,22 @@
 // Zero external npm dependencies (Node.js >= 18 built-in modules only).
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { CODE_EXTENSIONS, redactSecrets, stripUtf8Bom } from './omagy-hook.mjs';
+import { defaultRuntimeDir } from './omagy-host.mjs';
+
+export function githubSlugger(rawHeading, seenCounts = null) {
+  const unwrapped = String(rawHeading || '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
+  const noHtml = unwrapped.replace(/`([^`]*)`|<[!\/a-zA-Z][^>]*>/g, (_, code) => (code !== undefined ? code : ''));
+  const base = noHtml.trim().toLowerCase().replace(/[*~`]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
+  if (!(seenCounts instanceof Map)) return base;
+  const prev = seenCounts.get(base);
+  if (prev === undefined) { seenCounts.set(base, 0); return base; }
+  seenCounts.set(base, prev + 1);
+  return `${base}-${prev + 1}`;
+}
 
 const SKIP_SCAN_DIRS = new Set([
   '.git', '.hg', '.svn', '.omagy', 'omagy_wiki', 'node_modules', 'dist', 'build', 'out',
@@ -62,43 +75,48 @@ function collectFiles(absRoot, filterFn, limit = 3000) {
 
 function parseAuditArgs(rawArgs = []) {
   let dir = '';
+  let rootArgExplicit = false;
   let baseRef = '';
   let json = false;
+  let help = false;
   let endOfFlags = false;
   const positional = [];
   for (let i = 0; i < rawArgs.length; i += 1) {
     const a = String(rawArgs[i] ?? '');
     if (!endOfFlags && a === '--') { endOfFlags = true; continue; }
+    if (!endOfFlags && (a === '--help' || a === '-h')) { help = true; continue; }
     if (!endOfFlags && a === '--json') { json = true; continue; }
     if (!endOfFlags && (a === '-C' || a === '--dir' || a === '--root')) {
-      if (i + 1 >= rawArgs.length || String(rawArgs[i + 1] ?? '').startsWith('-')) return { ok: false, error: `missing_flag_value:${a}` };
+      if (i + 1 >= rawArgs.length || String(rawArgs[i + 1] ?? '').startsWith('-')) return { ok: false, help, error: `missing_flag_value:${a}` };
       dir = rawArgs[++i];
+      rootArgExplicit = true;
       continue;
     }
     if (!endOfFlags && (a.startsWith('--dir=') || a.startsWith('--root='))) {
       const val = a.slice(a.indexOf('=') + 1);
-      if (!val) return { ok: false, error: `missing_flag_value:${a.split('=')[0]}` };
+      if (!val) return { ok: false, help, error: `missing_flag_value:${a.split('=')[0]}` };
       dir = val;
+      rootArgExplicit = true;
       continue;
     }
     if (!endOfFlags && (a === '--base' || a === '--base-ref')) {
-      if (i + 1 >= rawArgs.length || String(rawArgs[i + 1] ?? '').startsWith('-')) return { ok: false, error: `missing_flag_value:${a}` };
+      if (i + 1 >= rawArgs.length || String(rawArgs[i + 1] ?? '').startsWith('-')) return { ok: false, help, error: `missing_flag_value:${a}` };
       baseRef = rawArgs[++i];
       continue;
     }
     if (!endOfFlags && (a.startsWith('--base=') || a.startsWith('--base-ref='))) {
       const val = a.slice(a.indexOf('=') + 1);
-      if (!val || val.startsWith('-')) return { ok: false, error: val ? `invalid_base_ref:${val}` : `missing_flag_value:${a.split('=')[0]}` };
+      if (!val || val.startsWith('-')) return { ok: false, help, error: val ? `invalid_base_ref:${val}` : `missing_flag_value:${a.split('=')[0]}` };
       baseRef = val;
       continue;
     }
-    if (!endOfFlags && a.startsWith('-')) return { ok: false, error: `unknown_flag:${a}` };
+    if (!endOfFlags && a.startsWith('-')) return { ok: false, help, error: `unknown_flag:${a}` };
     positional.push(a);
   }
-  if (!dir && positional[0]) dir = positional[0];
+  if (!dir && positional[0]) { dir = positional[0]; rootArgExplicit = true; }
   if (!baseRef && positional[1]) baseRef = positional[1];
-  if (baseRef && baseRef.startsWith('-')) return { ok: false, error: `invalid_base_ref:${baseRef}` };
-  return { ok: true, rootDir: dir || process.cwd(), baseRef, json };
+  if (baseRef && baseRef.startsWith('-')) return { ok: false, help, error: `invalid_base_ref:${baseRef}` };
+  return { ok: true, help, rootArgExplicit, rootDir: dir || process.cwd(), baseRef, json };
 }
 
 export function walkWikiMd(absWiki, skipIndex = false) {
@@ -346,6 +364,28 @@ export function runDocsDrift(rootDir = process.cwd()) {
   const brokenLinks = [];
   const missingScripts = [];
   const missingMakeTargets = [];
+  const mdAnchorCache = new Map();
+  const anchorsForMd = (absMd) => {
+    const key = path.resolve(absMd);
+    if (mdAnchorCache.has(key)) return mdAnchorCache.get(key);
+    const set = new Set();
+    try {
+      const ufLines = blankFencedLines(readUtf8(key));
+      const seen = new Map();
+      for (const l of ufLines) {
+        const hm = /^\s{0,3}#{1,6}\s+(.+?)\s*$/.exec(l);
+        if (hm) {
+          const slug = githubSlugger(l, seen);
+          if (slug) set.add(slug);
+        }
+        const idRe = /\b(?:id|name)\s*=\s*["']([^"']+)["']/gi;
+        let am;
+        while ((am = idRe.exec(l)) !== null) set.add(am[1].trim().toLowerCase());
+      }
+    } catch { /* fail open: unreadable markdown anchors */ }
+    mdAnchorCache.set(key, set);
+    return set;
+  };
 
   for (const doc of docFiles) {
     const relDoc = toPosix(path.relative(absRoot, doc));
@@ -384,14 +424,36 @@ export function runDocsDrift(rootDir = process.cwd()) {
       let lm;
       while ((lm = linkRe.exec(noInlineCode)) !== null) {
         const href = lm[1].replace(/^<|>$/g, '');
-        if (!href || href.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) continue;
-        const rawPathPart = href.split('#')[0].split('?')[0];
-        if (!rawPathPart || /[*<>{}$]/.test(rawPathPart)) continue;
-        let decoded = rawPathPart;
-        try { decoded = decodeURIComponent(rawPathPart); } catch { /* fail open: literal href */ }
-        const cand = path.resolve(path.dirname(doc), decoded);
-        if (!fs.existsSync(cand)) {
-          brokenLinks.push({ file: relDoc, line: i + 1, href, resolved: toPosix(path.relative(absRoot, cand)) });
+        if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) continue;
+        const hashIdx = href.indexOf('#');
+        const rawFrag = hashIdx >= 0 ? href.slice(hashIdx + 1) : '';
+        const rawBeforeHash = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+        const rawPathPart = rawBeforeHash.split('?')[0];
+        if (!rawPathPart && !rawFrag) continue;
+        if (rawPathPart && /[*<>{}$]/.test(rawPathPart)) continue;
+        let cand = doc;
+        if (rawPathPart) {
+          let decoded = rawPathPart;
+          try { decoded = decodeURIComponent(rawPathPart); } catch { /* fail open: literal href */ }
+          cand = path.resolve(path.dirname(doc), decoded);
+          if (!fs.existsSync(cand)) {
+            brokenLinks.push({ file: relDoc, line: i + 1, href, resolved: toPosix(path.relative(absRoot, cand)) });
+            continue;
+          }
+        }
+        if (rawFrag && !/[*<>{}$]/.test(rawFrag) && !/^L\d+(?:-L?\d+)?$/.test(rawFrag) && isFile(cand) && /\.(?:md|markdown)$/i.test(cand)) {
+          let frag = rawFrag;
+          try { frag = decodeURIComponent(rawFrag); } catch { /* fail open: literal fragment */ }
+          const targetSlug = frag.trim().toLowerCase();
+          if (targetSlug && !anchorsForMd(cand).has(targetSlug)) {
+            brokenLinks.push({
+              file: relDoc,
+              line: i + 1,
+              href,
+              resolved: `${toPosix(path.relative(absRoot, cand))}#${targetSlug}`,
+              reason: 'missing_anchor',
+            });
+          }
         }
       }
       scanCommandsInSnippet(noInlineCode, i + 1, /^\s*(?:\$\s+)?make\s+/i.test(noInlineCode));
@@ -862,14 +924,84 @@ export function runMcpAudit(targetPath = process.cwd()) {
   return { ok, exitCode: ok ? 0 : 1, root: abs, filesScanned: files.length, serversScanned, findings };
 }
 
+/** Verify runtime directory and ancestor chain are free of symlinks, foreign UIDs, and non-sticky world-writable dirs. */
+export function auditTmpdirTrust(targetDir = '') {
+  const resolved = path.resolve(strArg(targetDir) || defaultRuntimeDir());
+  const findings = [];
+  const leafSt = fs.lstatSync(resolved, { throwIfNoEntry: false });
+  if (leafSt?.isSymbolicLink()) {
+    const isSystemDarwinRootSym = process.platform === 'darwin' && (resolved === '/tmp' || resolved === '/var');
+    if (!isSystemDarwinRootSym) {
+      findings.push({ path: resolved, reason: 'symlink_segment' });
+    }
+  }
+  let walkTarget = resolved;
+  if (process.platform === 'darwin') {
+    for (const [sysAlias, realAlias] of [['/tmp', '/private/tmp'], ['/var', '/private/var']]) {
+      if ((walkTarget === sysAlias || walkTarget.startsWith(`${sysAlias}/`)) && fs.lstatSync(sysAlias, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        walkTarget = `${realAlias}${walkTarget.slice(sysAlias.length)}`;
+        break;
+      }
+    }
+  }
+  const parsed = path.parse(walkTarget);
+  const tailParts = walkTarget.slice(parsed.root.length).split(path.sep).filter(Boolean);
+  let cur = parsed.root;
+  const checkSeg = (segPath) => {
+    const st = fs.lstatSync(segPath, { throwIfNoEntry: false });
+    if (!st) return true;
+    if (st.isSymbolicLink()) {
+      findings.push({ path: segPath, reason: 'symlink_segment' });
+      return false;
+    }
+    if (typeof process.getuid === 'function' && st.uid !== 0 && st.uid !== process.getuid()) {
+      findings.push({ path: segPath, reason: 'foreign_owner', uid: st.uid });
+    }
+    if (process.platform !== 'win32' && (st.mode & 0o002) !== 0 && (st.mode & 0o1000) === 0) {
+      findings.push({ path: segPath, reason: 'world_writable_without_sticky', mode: (st.mode & 0o7777).toString(8) });
+    }
+    return true;
+  };
+  if (checkSeg(cur)) {
+    for (const part of tailParts) {
+      cur = path.join(cur, part);
+      if (!checkSeg(cur)) break;
+    }
+  }
+  const unique = [];
+  const seen = new Set();
+  for (const f of findings) {
+    const k = `${f.path}::${f.reason}`;
+    if (!seen.has(k)) { seen.add(k); unique.push(f); }
+  }
+  const ok = unique.length === 0;
+  return { ok, exitCode: ok ? 0 : 1, targetDir: resolved, findings: unique };
+}
+
+function auditUsageText(event) {
+  const usage = {
+    'docs-drift': 'Usage: sh hooks/run.sh docs-drift [rootDir] [-C <dir>] [--json]',
+    'coverage-map': 'Usage: sh hooks/run.sh coverage-map [rootDir] [-C <dir>] [--json]',
+    'dep-license-diff': 'Usage: sh hooks/run.sh dep-license-diff [rootDir] [--base <ref>] [--json]',
+    'mcp-audit': 'Usage: sh hooks/run.sh mcp-audit [rootDir] [-C <dir>] [--json]',
+    'tmpdir-audit': 'Usage: sh hooks/run.sh tmpdir-audit [targetDir] [-C <dir>] [--json]',
+  };
+  return usage[event] || `Usage: sh hooks/run.sh ${event} [rootDir] [--json]`;
+}
+
 export async function runAuditCli(event, rawArgs = []) {
   const parsed = parseAuditArgs(rawArgs);
+  if (parsed.help) {
+    process.stdout.write(`${auditUsageText(event)}\n`);
+    return 0;
+  }
   let res;
   if (!parsed.ok) res = { ok: false, exitCode: 2, error: parsed.error };
   else if (event === 'docs-drift') res = runDocsDrift(parsed.rootDir);
   else if (event === 'coverage-map') res = runCoverageMap(parsed.rootDir);
   else if (event === 'dep-license-diff') res = runDepLicenseDiff(parsed.rootDir, { baseRef: parsed.baseRef });
   else if (event === 'mcp-audit') res = runMcpAudit(parsed.rootDir);
+  else if (event === 'tmpdir-audit') res = auditTmpdirTrust(parsed.rootArgExplicit ? parsed.rootDir : '');
   else res = { ok: false, exitCode: 2, error: `unknown_audit_event:${event}` };
 
   process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);

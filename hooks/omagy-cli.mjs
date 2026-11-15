@@ -14,8 +14,8 @@ import {
   redactSecrets, renameSyncAtomic, scanRepoCodeHygiene, stateRoot, stripCodeStrings, stripUtf8Bom,
   transformOutsideCodeSpans, validateCompletionEvidence,
 } from './omagy-hook.mjs';
-import { lintWikiPages, scanInitDeepCandidates, walkWikiMd } from './omagy-audit.mjs';
-export { lintWikiPages, scanInitDeepCandidates };
+import { githubSlugger, lintWikiPages, scanInitDeepCandidates, walkWikiMd } from './omagy-audit.mjs';
+export { githubSlugger, lintWikiPages, scanInitDeepCandidates };
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const UNTRACKED_MAX_FILES = 200;
@@ -379,17 +379,6 @@ export function evaluateQualityGate(reportPaths = []) {
   }
   const exitCode = invalidReasons.length ? 2 : (blockingFindings.length ? 1 : 0);
   return { ok: exitCode === 0, exitCode, reportsChecked, blockingFindings, invalidReasons };
-}
-
-export function githubSlugger(rawHeading, seenCounts = null) {
-  const unwrapped = String(rawHeading || '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
-  const noHtml = unwrapped.replace(/`([^`]*)`|<[!\/a-zA-Z][^>]*>/g, (_, code) => (code !== undefined ? code : ''));
-  const base = noHtml.trim().toLowerCase().replace(/[*~`]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
-  if (!(seenCounts instanceof Map)) return base;
-  const prev = seenCounts.get(base);
-  if (prev === undefined) { seenCounts.set(base, 0); return base; }
-  seenCounts.set(base, prev + 1);
-  return `${base}-${prev + 1}`;
 }
 
 function blankFencedLines(markdown) {
@@ -983,32 +972,39 @@ export function scanLookoutHazards(inputs = [], baseDir = process.cwd()) {
 
 export function verifyPlanHash(mode, planPath, receiptPath = '', meta = {}) {
   const mMode = String(mode || '').trim().toLowerCase();
-  const empty = (exitCode, error = '') => ({ ok: false, exitCode, planHash: '', specHash: '', combinedHash: '', timelineViolations: [], matches: false, ...(error ? { error } : {}) });
+  const empty = (exitCode, error = '') => ({ ok: false, exitCode, planHash: '', specHash: '', sourceSpecHash: '', combinedHash: '', timelineViolations: [], matches: false, ...(error ? { error } : {}) });
   if (mMode !== 'compute' && mMode !== 'verify') return empty(2, 'invalid_plan_hash_mode');
   if (!strArg(planPath) || !isFile(path.resolve(planPath))) return empty(2, 'missing_prd_file');
   const absPlan = path.resolve(planPath);
   let absSpec = meta?.specPath ? path.resolve(String(meta.specPath)) : '';
   if (absSpec && !isFile(absSpec)) return empty(2, 'missing_spec_file');
+  let absSourceSpec = meta?.sourceSpecPath ? path.resolve(String(meta.sourceSpecPath)) : '';
+  if (absSourceSpec && !isFile(absSourceSpec)) return empty(2, 'missing_source_spec_file');
   const absReceipt = strArg(receiptPath) ? path.resolve(String(receiptPath)) : '';
   if (mMode === 'verify' && !isFile(absReceipt)) return empty(2, 'missing_receipt_file');
 
   const sha = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
   const prdNorm = readUtf8(absPlan);
   const planHash = sha(prdNorm.replace(/\r\n/g, '\n').trim());
+  const resolveRelRec = (relPath) => {
+    for (const b of [meta?.baseDir ? path.resolve(meta.baseDir) : process.cwd(), path.dirname(absPlan), path.resolve(path.dirname(absPlan), '..', '..')]) {
+      const c = path.resolve(b, String(relPath || '').trim()); if (isFile(c)) return c;
+    }
+    return '';
+  };
 
   let rec = null;
   if (mMode === 'verify') {
     try { rec = JSON.parse(readUtf8(absReceipt)); } catch { /* fail open: corrupt receipt JSON */
-      return { ok: false, exitCode: 1, planHash, specHash: '', combinedHash: planHash, timelineViolations: [], matches: false, error: 'invalid_receipt_json' };
+      return { ok: false, exitCode: 1, planHash, specHash: '', sourceSpecHash: '', combinedHash: planHash, timelineViolations: [], matches: false, error: 'invalid_receipt_json' };
     }
-    if (!absSpec && strArg(rec?.test_spec_file)) {
-      for (const b of [meta?.baseDir ? path.resolve(meta.baseDir) : process.cwd(), path.dirname(absPlan), path.resolve(path.dirname(absPlan), '..', '..')]) {
-        const c = path.resolve(b, rec.test_spec_file.trim()); if (isFile(c)) { absSpec = c; break; }
-      }
-    }
+    if (!absSpec && strArg(rec?.test_spec_file)) absSpec = resolveRelRec(rec.test_spec_file);
+    if (!absSourceSpec && strArg(rec?.source_spec_file)) absSourceSpec = resolveRelRec(rec.source_spec_file);
   }
   const specHash = absSpec ? sha(readUtf8(absSpec).replace(/\r\n/g, '\n').trim()) : '';
-  const combinedHash = specHash ? sha(`${planHash}:${specHash}`) : planHash;
+  const sourceSpecHash = absSourceSpec ? sha(readUtf8(absSourceSpec).replace(/\r\n/g, '\n').trim()) : '';
+  const baseCombined = specHash ? sha(`${planHash}:${specHash}`) : planHash;
+  const combinedHash = sourceSpecHash ? sha(`${baseCombined}|${sourceSpecHash}`) : baseCombined;
   const timelineViolations = [];
   if (!meta?.allowTimelines) {
     const lines = blankFencedLines(prdNorm);
@@ -1028,13 +1024,28 @@ export function verifyPlanHash(mode, planPath, receiptPath = '', meta = {}) {
       outRec = absReceipt || path.join(path.dirname(absPlan), `ralplan-review-${slug}.json`);
       const relBase = meta?.baseDir ? path.resolve(meta.baseDir) : process.cwd();
       const relOf = (p) => { const r = toPosix(path.relative(relBase, p)); return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : path.basename(p); };
-      writeJsonStrict(outRec, { slug, prd_file: relOf(absPlan), test_spec_file: absSpec ? relOf(absSpec) : null, prd_hash: planHash, spec_hash: specHash || null, plan_hash: combinedHash, critic_verdict: strArg(meta?.verdict) || 'APPROVE', verified_at: new Date().toISOString() });
+      writeJsonStrict(outRec, {
+        slug,
+        prd_file: relOf(absPlan),
+        test_spec_file: absSpec ? relOf(absSpec) : null,
+        ...(absSourceSpec ? { source_spec_file: relOf(absSourceSpec), source_spec_hash: sourceSpecHash } : {}),
+        prd_hash: planHash,
+        spec_hash: specHash || null,
+        plan_hash: combinedHash,
+        critic_verdict: strArg(meta?.verdict) || 'APPROVE',
+        verified_at: new Date().toISOString(),
+      });
     }
     const ok = !timelineViolations.length;
-    return { ok, exitCode: ok ? 0 : 1, planHash, specHash, combinedHash, timelineViolations, matches: ok, ...(outRec ? { receiptPath: outRec } : {}) };
+    return { ok, exitCode: ok ? 0 : 1, planHash, specHash, sourceSpecHash, combinedHash, timelineViolations, matches: ok, ...(outRec ? { receiptPath: outRec } : {}) };
   }
-  const matches = !(rec?.test_spec_file && !absSpec) && strArg(rec?.critic_verdict).toUpperCase() === 'APPROVE' && String(rec?.plan_hash || '') === combinedHash && !timelineViolations.length;
-  return { ok: matches, exitCode: matches ? 0 : 1, planHash, specHash, combinedHash, timelineViolations, matches, receiptPath: absReceipt };
+  const matches = !(rec?.test_spec_file && !absSpec)
+    && !(rec?.source_spec_file && !absSourceSpec)
+    && !(rec?.source_spec_hash && sourceSpecHash !== rec.source_spec_hash)
+    && strArg(rec?.critic_verdict).toUpperCase() === 'APPROVE'
+    && String(rec?.plan_hash || '') === combinedHash
+    && !timelineViolations.length;
+  return { ok: matches, exitCode: matches ? 0 : 1, planHash, specHash, sourceSpecHash, combinedHash, timelineViolations, matches, receiptPath: absReceipt };
 }
 
 function tokenizeWikiText(text) {
@@ -1105,7 +1116,8 @@ export function queryWikiPages(wikiDir, query) {
 }
 
 export function scanSessionTranscripts(targetPath = process.cwd()) {
-  const empty = (exitCode, error = '') => ({ ok: exitCode === 0, exitCode, filesScanned: 0, totalSteps: 0, compactions: 0, orphanToolCalls: 0, failedToolCalls: 0, topFailureClusters: [], ...(error ? { error } : {}) });
+  const emptyUsage = () => ({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, total_tokens: 0 });
+  const empty = (exitCode, error = '') => ({ ok: exitCode === 0, exitCode, filesScanned: 0, totalSteps: 0, compactions: 0, orphanToolCalls: 0, failedToolCalls: 0, topFailureClusters: [], tokenUsage: emptyUsage(), ...(error ? { error } : {}) });
   if (!strArg(targetPath) || !fs.existsSync(path.resolve(targetPath))) return empty(2, 'missing_session_target');
   const absTarget = path.resolve(targetPath);
 
@@ -1127,6 +1139,16 @@ export function scanSessionTranscripts(targetPath = process.cwd()) {
   }
 
   let totalSteps = 0; let compactions = 0; let orphanToolCalls = 0; let failedToolCalls = 0;
+  const tokenUsage = emptyUsage();
+  const posNum = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+  const addTok = (u) => {
+    const inp = posNum(u.input_tokens ?? u.inputTokens); const out = posNum(u.output_tokens ?? u.outputTokens);
+    const cr = posNum(u.cache_read_input_tokens ?? u.cacheReadInputTokens ?? u.cached_input_tokens);
+    const cw = posNum(u.cache_creation_input_tokens ?? u.cacheCreationInputTokens ?? u.cache_write_input_tokens);
+    tokenUsage.input_tokens += inp; tokenUsage.output_tokens += out; tokenUsage.cache_read_input_tokens += cr;
+    tokenUsage.cache_creation_input_tokens += cw;
+    tokenUsage.total_tokens += (posNum(u.total_tokens ?? u.totalTokens) || (inp + out + cr + cw));
+  };
   const clusters = new Map();
   const bump = (tool, rawErr) => {
     const ct = String(tool || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '') || 'unknown';
@@ -1138,63 +1160,114 @@ export function scanSessionTranscripts(targetPath = process.cwd()) {
   const errText = (st, obj, txt, fb) => {
     const badCode = typeof obj.exitCode === 'number' && obj.exitCode !== 0;
     const badOut = typeof txt === 'string' && /Command exited with code [1-9]\d*/.test(txt);
-    return (st === 'ERROR' || st === 'FAILED' || obj.error || badCode || badOut) ? (obj.error || txt || (badCode ? `exit code ${obj.exitCode}` : fb)) : '';
+    return (st === 'ERROR' || st === 'FAILED' || obj.error || obj.is_error === true || obj.isError === true || badCode || badOut)
+      ? (obj.error || txt || (badCode ? `exit code ${obj.exitCode}` : fb))
+      : '';
   };
 
   for (const file of files) {
     let records = [];
     try { records = readJsonlRecords(file).records || []; } catch { /* fail open: skip unreadable jsonl */ continue; }
     totalSteps += records.length;
-    const pending = new Map(); const idToTool = new Map(); const unidQueue = [];
+    const pending = new Map(); const idToTool = new Map(); const unidQueue = []; const failedIds = new Set();
+    const hasLastTok = records.some((r) => r && typeof r === 'object' && r.payload?.info?.last_token_usage);
+    let lastCumTok = null;
     for (const rec of records) {
       if (!rec || typeof rec !== 'object') continue;
       const type = String(rec.type || '').toUpperCase(); const status = String(rec.status || '').toUpperCase();
       const isUser = type === 'USER_INPUT' || rec.role === 'user' || rec.source === 'USER_EXPLICIT';
       if (isUser && unidQueue.length) { orphanToolCalls += unidQueue.length; unidQueue.length = 0; }
       if (type.includes('COMPACT') || (!Array.isArray(rec.tool_calls) && rec.role !== 'assistant' && rec.source !== 'MODEL' && typeof rec.content === 'string' && (rec.content.includes('<CONTEXT_SUMMARY') || /(?:^|\s)\/compact\b/i.test(rec.content)))) compactions += 1;
+      const tu = rec.usage || rec.message?.usage || rec.token_usage || rec.payload?.info?.last_token_usage || null;
+      if (tu && typeof tu === 'object') addTok(tu);
+      else if (!hasLastTok && rec.payload?.info?.total_token_usage && typeof rec.payload.info.total_token_usage === 'object') lastCumTok = rec.payload.info.total_token_usage;
+
       const respId = String(rec.tool_call_id || rec.call_id || '').trim();
       if (respId) pending.delete(respId);
-      for (const tr of Array.isArray(rec.tool_results) ? rec.tool_results : []) pending.delete(String(tr?.tool_call_id || tr?.call_id || tr?.id || '').trim());
-
+      const blocks = Array.isArray(rec.message?.content) ? rec.message.content : (Array.isArray(rec.content) ? rec.content : []);
+      for (const blk of blocks) {
+        if (blk?.type === 'tool_use' && blk.id) {
+          const bId = String(blk.id).trim();
+          const bName = String(blk.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '') || 'unknown';
+          if (bId && !idToTool.has(bId)) { idToTool.set(bId, bName); pending.set(bId, bName); }
+        }
+      }
+      const resItems = [...(Array.isArray(rec.tool_results) ? rec.tool_results : []), ...blocks.filter((b) => b && b.type === 'tool_result')];
       let counted = false;
       for (const tc of Array.isArray(rec.tool_calls) ? rec.tool_calls : []) {
         if (!tc || typeof tc !== 'object') continue;
         const tName = String(tc.name || tc.toolName || tc.function?.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '') || 'unknown';
-        const tSt = String(tc.status || '').toUpperCase(); const tId = String(tc.id || tc.call_id || '').trim();
+        const tSt = String(tc.status || '').toUpperCase(); const tId = String(tc.id || tc.tool_use_id || tc.call_id || '').trim();
         if (tId) idToTool.set(tId, tName);
-        const done = tc.output !== undefined || tc.result !== undefined || tc.exitCode !== undefined || ['DONE', 'COMPLETED', 'ERROR', 'FAILED'].includes(tSt);
+        const done = tc.output !== undefined || tc.result !== undefined || tc.exitCode !== undefined || tc.isError === true || tc.is_error === true || ['DONE', 'COMPLETED', 'ERROR', 'FAILED'].includes(tSt);
         if (['PENDING', 'RUNNING', 'IN_PROGRESS', 'CANCELLED', 'ORPHANED'].includes(tSt)) orphanToolCalls += 1;
         else if (tId && !done) pending.set(tId, tName);
         else if (!tId && !done) { if (['PENDING', 'RUNNING', 'IN_PROGRESS', 'CANCELLED', 'INTERRUPTED'].includes(status)) orphanToolCalls += 1; else unidQueue.push(tName); }
         const e = errText(tSt, tc, tc.output, 'tool_error');
-        if (e) { failedToolCalls += 1; counted = true; bump(tName, e); }
+        if (e) { failedToolCalls += 1; counted = true; if (tId) failedIds.add(tId); bump(tName, e); }
+      }
+      for (const tr of resItems) {
+        if (!tr || typeof tr !== 'object') continue;
+        const tid = String(tr.tool_use_id || tr.tool_call_id || tr.call_id || tr.id || '').trim();
+        if (tid) pending.delete(tid);
+        const trTxt = typeof tr.content === 'string' ? tr.content : '';
+        const e = errText(String(tr.status || '').toUpperCase(), tr, trTxt, 'tool_result_error');
+        if (e && (!tid || !failedIds.has(tid))) {
+          failedToolCalls += 1; counted = true;
+          if (tid) failedIds.add(tid);
+          bump((tid && idToTool.get(tid)) || tr.name || 'tool', e);
+        }
       }
       if (type === 'TOOL_RESULT' || type === 'TOOL_RESPONSE' || type === 'GENERIC' || rec.role === 'tool') {
         const matchedUnid = !respId && unidQueue.length ? unidQueue.shift() : '';
         const e = errText(status, rec, rec.content, 'tool_result_error');
-        if (e) { failedToolCalls += 1; counted = true; bump((respId && idToTool.get(respId)) || matchedUnid || rec.name || 'tool', e); }
-      } else if (!isUser && !counted && (status === 'ERROR' || status === 'FAILED' || rec.error)) {
-        failedToolCalls += 1; bump(rec.toolName || 'step', rec.error || `step_${status.toLowerCase()}`);
+        if (e && (!respId || !failedIds.has(respId))) { failedToolCalls += 1; counted = true; if (respId) failedIds.add(respId); bump((respId && idToTool.get(respId)) || matchedUnid || rec.name || 'tool', e); }
+      } else if (!isUser && !counted && (status === 'ERROR' || status === 'FAILED' || rec.error || rec.is_error === true || rec.isError === true)) {
+        failedToolCalls += 1; bump(rec.toolName || 'step', rec.error || `step_${status ? status.toLowerCase() : 'error'}`);
       }
     }
+    if (lastCumTok) addTok(lastCumTok);
     orphanToolCalls += pending.size + unidQueue.length;
   }
   const topFailureClusters = [...clusters.values()].sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature)).slice(0, 10);
-  return { ok: true, exitCode: 0, filesScanned: files.length, totalSteps, compactions, orphanToolCalls, failedToolCalls, topFailureClusters };
+  return { ok: true, exitCode: 0, filesScanned: files.length, totalSteps, compactions, orphanToolCalls, failedToolCalls, topFailureClusters, tokenUsage };
+}
+
+function coldCliUsageText(event) {
+  const args = {
+    'floor-guard': '[rootDir] [baseRef] [-C <dir>] [--json]',
+    'skill-eval': '[skillsDir] [--min-rank1 <pct>] [--cases <file>] [--json]',
+    'quality-gate': '[-C <dir>] [--json] <report.json...>',
+    'validate-design-md': '[DESIGN.md] [--strict] [--json]',
+    'goal-done': '<goalId> [-C <dir>] [--json] -- <verify command...>',
+    checkpoint: '<create|restore|list|clear> [id] [-C <dir>] [--json]',
+    handoff: '[rootDir] [slug] [-C <dir>] [--json]',
+    lookout: '[-C <dir>] [--json] <files...>',
+    'plan-hash': '<compute|verify> <prdPath> [receiptPath] [--spec <path>] [--source-spec <path>] [--write-receipt [verdict]] [--allow-timelines] [--json]',
+    'init-deep-scan': '[rootDir] [-C <dir>] [--json]',
+    'wiki-query': '<query> [wikiDir] [-C <dir>] [--json]',
+    'wiki-lint': '[wikiDir] [repoRoot] [-C <dir>] [--json]',
+    'session-scan': '[path] [-C <dir>] [--json]',
+  }[event] || '[options]';
+  return `Usage: sh hooks/run.sh ${event} ${args}`;
 }
 
 export function handleColdCliCommand(event, rawArgs = [], defaultRoot = '') {
-  let dashC = ''; const filtered = []; let afterDD = false;
+  let dashC = ''; let helpMode = false; let jm = false; const filtered = []; const pos = []; let afterDD = false;
   for (let i = 0; i < rawArgs.length; i += 1) {
     const a = rawArgs[i];
-    if (afterDD) filtered.push(a);
-    else if (a === '--') { afterDD = true; filtered.push(a); }
-    else if (a === '-C' && i + 1 < rawArgs.length) dashC = rawArgs[++i];
-    else filtered.push(a);
+    if (!afterDD && a === '--') { afterDD = true; filtered.push(a); continue; }
+    if (!afterDD && (a === '--help' || a === '-h')) { helpMode = true; continue; }
+    if (!afterDD && a === '--json') { jm = true; filtered.push(a); continue; }
+    if (!afterDD && a === '-C' && i + 1 < rawArgs.length) { dashC = rawArgs[++i]; continue; }
+    filtered.push(a);
+    pos.push(a);
+  }
+  if (helpMode) {
+    process.stdout.write(`${coldCliUsageText(event)}\n`);
+    return 0;
   }
   const baseDir = dashC ? path.resolve(dashC) : (defaultRoot ? path.resolve(defaultRoot) : (event === 'skill-eval' ? PLUGIN_ROOT : process.cwd()));
-  const jm = filtered.includes('--json');
-  const pos = filtered.filter((a) => a !== '--json' && a !== '--');
   const rel = (p, fb = baseDir) => (p ? path.resolve(baseDir, p) : fb);
   const emit = (j, res, text) => { process.stdout.write(j ? `${JSON.stringify(res, null, 2)}\n` : `${text}\n`); return res.exitCode; };
 
@@ -1248,17 +1321,19 @@ export function handleColdCliCommand(event, rawArgs = [], defaultRoot = '') {
     return emit(jm, r, [`LOOKOUT: ${r.ok ? 'PASS' : 'FAIL'} (findings=${r.findings.length})`, ...r.findings.map((f) => `${f.source}:${f.line} [${f.rule}] ${f.snippet}`)].join('\n'));
   }
   if (event === 'plan-hash') {
-    let allowTimelines = false; let specPath = ''; let verdict = ''; const pp = [];
+    let allowTimelines = false; let specPath = ''; let sourceSpecPath = ''; let verdict = ''; const pp = [];
     for (let i = 0; i < pos.length; i += 1) {
       const a = pos[i];
       if (a === '--allow-timelines') allowTimelines = true;
       else if (a === '--spec' && i + 1 < pos.length) specPath = rel(pos[++i]);
       else if (a.startsWith('--spec=')) specPath = rel(a.slice(7));
+      else if (a === '--source-spec' && i + 1 < pos.length) sourceSpecPath = rel(pos[++i]);
+      else if (a.startsWith('--source-spec=')) sourceSpecPath = rel(a.slice(14));
       else if (a === '--write-receipt') verdict = (i + 1 < pos.length && !pos[i + 1].startsWith('--')) ? pos[++i] : 'APPROVE';
       else if (a.startsWith('--write-receipt=')) verdict = a.slice(16) || 'APPROVE';
       else pp.push(a);
     }
-    const r = verifyPlanHash(pp[0] || '', pp[1] ? rel(pp[1]) : '', pp[2] ? rel(pp[2]) : '', { specPath, verdict, allowTimelines, baseDir });
+    const r = verifyPlanHash(pp[0] || '', pp[1] ? rel(pp[1]) : '', pp[2] ? rel(pp[2]) : '', { specPath, sourceSpecPath, verdict, allowTimelines, baseDir });
     return emit(jm, r, [`PLAN-HASH: ${r.ok ? 'PASS' : 'FAIL'} (hash=${r.combinedHash.slice(0, 12) || 'n/a'}, timelines=${r.timelineViolations.length})`, ...r.timelineViolations].join('\n'));
   }
   if (event === 'init-deep-scan') {

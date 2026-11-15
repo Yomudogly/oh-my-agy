@@ -740,8 +740,9 @@ function mergeCodexAgentsMd(agentsMdPath, pluginRoot) {
 function resolveHostTargetContext(host, options = {}) {
   const workspace = options.workspace ? path.resolve(options.workspace) : '';
   const scope = options.scope ? String(options.scope).trim().toLowerCase() : (workspace ? 'project' : 'user');
-  const claudeConfigRoot = path.resolve(options.configRoot || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
-  const codexHome = path.resolve(options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+  const explicitHome = options.homeDir ? path.resolve(options.homeDir) : '';
+  const claudeConfigRoot = path.resolve(options.configRoot || (explicitHome ? path.join(explicitHome, '.claude') : (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'))));
+  const codexHome = path.resolve(options.codexHome || (explicitHome ? path.join(explicitHome, '.codex') : (process.env.CODEX_HOME || path.join(os.homedir(), '.codex'))));
   const claudeTargetRoot = scope === 'project' && workspace ? path.join(workspace, '.claude') : claudeConfigRoot;
   const codexTargetRoot = scope === 'project' && workspace ? path.join(workspace, '.codex') : codexHome;
   const targetRoot = host === 'claude' ? claudeTargetRoot : codexTargetRoot;
@@ -833,7 +834,7 @@ function stripOmagyCodexHooksJson(hooksPath) {
   return { removedAll: false, keptForeign: true };
 }
 
-function isOmagyOwnedCodexSkill(skillDir) {
+export function isOmagyOwnedCodexSkill(skillDir) {
   try {
     const st = fs.lstatSync(skillDir);
     if (st.isSymbolicLink()) {
@@ -849,14 +850,17 @@ function isOmagyOwnedCodexSkill(skillDir) {
   }
 }
 
-function cleanLegacyDuplicateCodexUserSkills(skillsDir, skillNames) {
+function cleanLegacyDuplicateCodexUserSkills(skillsDir, skillNames, warnings = []) {
   assertNotSymlinkTarget(skillsDir, 'codex_skills_dir_symlink_target');
   if (!fs.existsSync(skillsDir)) return;
   for (const sName of skillNames) {
     const legacy = path.join(skillsDir, sName);
     try {
+      const st = fs.lstatSync(legacy, { throwIfNoEntry: false });
+      if (!st) continue;
       if (isOmagyOwnedCodexSkill(legacy)) fs.rmSync(legacy, { recursive: true, force: true });
-    } catch { /* fail open: legacy skill absent */ }
+      else warnings.push(`preserved_foreign_codex_skill:${sName}`);
+    } catch { /* fail open: legacy skill inspect/remove failed */ }
   }
 }
 
@@ -1144,7 +1148,7 @@ export function setupHostBundle(options = {}) {
     mergeCodexConfigToml(path.join(codexTargetRoot, 'config.toml'), roleDescs, null);
     skillsDirOut = codexSkillsDst;
   } else {
-    cleanLegacyDuplicateCodexUserSkills(path.join(codexTargetRoot, 'skills'), skillNames);
+    cleanLegacyDuplicateCodexUserSkills(path.join(codexTargetRoot, 'skills'), skillNames, warnings);
     stripOmagyCodexHooksJson(path.join(codexTargetRoot, 'hooks.json'));
     pluginLoc = getCodexPluginLocations(codexTargetRoot, pluginJson);
     skillsDirOut = path.join(pluginLoc.cachePluginDir, 'skills');
@@ -1520,8 +1524,8 @@ export function validateHostBundle(options = {}) {
       if (WRITE_ROLES.has(role) && fm.fields.isolation !== 'worktree') errors.push(`write_agent_missing_worktree_isolation:${role}`);
       if (!WRITE_ROLES.has(role) && fm.fields.isolation) errors.push(`read_agent_unexpected_isolation:${role}`);
     }
-    const claudeTarget = effScope === 'user' && options.configRoot
-      ? path.resolve(options.configRoot)
+    const claudeTarget = effScope === 'user' && (options.configRoot || options.homeDir)
+      ? resolveHostTargetContext('claude', options).claudeTargetRoot
       : (effScope === 'project' && workspace ? path.join(workspace, '.claude') : (meta?.targetRoot || (options.configRoot ? path.resolve(options.configRoot) : (!explicitDir ? resolveHostTargetContext('claude', options).claudeTargetRoot : ''))));
     const claudeRulePath = claudeTarget ? path.join(claudeTarget, 'rules', 'oh-my-agy.md') : '';
     if (claudeTarget && !fs.existsSync(claudeRulePath)) {
@@ -1574,8 +1578,8 @@ export function validateHostBundle(options = {}) {
       if (!fs.existsSync(bMd)) errors.push(`missing:bundle/agents/${role}.md`);
       else checkHostProseClean(bMd, `bundle/agents/${role}.md`, errors);
     }
-    const codexTarget = effScope === 'user' && options.codexHome
-      ? path.resolve(options.codexHome)
+    const codexTarget = effScope === 'user' && (options.codexHome || options.homeDir)
+      ? resolveHostTargetContext('codex', options).codexTargetRoot
       : (effScope === 'project' && workspace ? path.join(workspace, '.codex') : (meta?.targetRoot || (!explicitDir ? resolveHostTargetContext('codex', options).codexTargetRoot : '')));
     if (codexTarget) {
       if (effScope === 'project') {
@@ -1667,7 +1671,7 @@ export function validateHostBundle(options = {}) {
 }
 
 function parseHostCliArgs(rawArgs = [], maxPositional = 2) {
-  const opts = { json: false, strict: false, copy: false, copyFlag: false, symlink: false, dryRun: false, pos: [], parseError: '' };
+  const opts = { json: false, strict: false, copy: false, copyFlag: false, symlink: false, dryRun: false, help: false, pos: [], parseError: '' };
   let afterDoubleDash = false;
   for (let i = 0; i < rawArgs.length; i += 1) {
     const a = String(rawArgs[i] || '');
@@ -1682,7 +1686,8 @@ function parseHostCliArgs(rawArgs = [], maxPositional = 2) {
       return v;
     };
     if (!afterDoubleDash && a.startsWith('-')) {
-      if (a === '--json') opts.json = true;
+      if (a === '--help' || a === '-h') opts.help = true;
+      else if (a === '--json') opts.json = true;
       else if (a === '--strict') opts.strict = true;
       else if (a === '--copy') { opts.copy = true; opts.copyFlag = true; }
       else if (a === '--symlink') opts.symlink = true;
@@ -1711,10 +1716,47 @@ function parseHostCliArgs(rawArgs = [], maxPositional = 2) {
   return opts;
 }
 
+function hostUsageText(event) {
+  if (event === 'host-validate') {
+    return [
+      'Usage: sh hooks/run.sh host-validate <claude|codex> [bundleDir] [options]',
+      '',
+      'Options:',
+      '  --dir <path>          Bundle directory to validate',
+      '  --scope <user|project> Bundle scope (codex/claude)',
+      '  --workspace <path>    Project workspace directory',
+      '  --codex-home <path>   Override Codex home root',
+      '  --config-root <path>  Override Claude config root',
+      '  --strict              Treat warnings as errors',
+      '  --json                Output structured JSON',
+      '  -h, --help            Show this help message',
+    ].join('\n');
+  }
+  return [
+    'Usage: sh hooks/run.sh host-setup <claude|codex> [options]',
+    '',
+    'Options:',
+    '  --dir <path>          Output bundle directory',
+    '  --scope <user|project> Installation scope',
+    '  --workspace <path>    Project workspace directory',
+    '  --codex-home <path>   Override Codex home root',
+    '  --config-root <path>  Override Claude config root',
+    '  --copy | --symlink    Copy or symlink skills into bundle',
+    '  --dry-run             Preview setup without writing files',
+    '  --strict              Strict validation mode',
+    '  --json                Output structured JSON',
+    '  -h, --help            Show this help message',
+  ].join('\n');
+}
+
 /** CLI dispatcher for `host-setup` and `host-validate`. */
 export async function runHostSetupCli(event, rawArgs, pluginRoot) {
   const maxPos = event === 'host-validate' ? 2 : 1;
   const opts = parseHostCliArgs(rawArgs, maxPos);
+  if (opts.help) {
+    process.stdout.write(`${hostUsageText(event)}\n`);
+    return 0;
+  }
   let res;
   if (opts.parseError) {
     res = { ok: false, exitCode: 2, error: opts.parseError };

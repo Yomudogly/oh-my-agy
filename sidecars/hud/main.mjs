@@ -64,7 +64,7 @@ import {
   routingMatchesWorkspaces,
   verifyAntigravityTargetConversation,
 } from './dispatch.mjs';
-import { computeDesktopHudPort, desktopHudRegistryFile } from '../../hooks/omagy-host.mjs';
+import { computeDesktopHudPort, defaultRuntimeDir, desktopHudRegistryFile } from '../../hooks/omagy-host.mjs';
 
 const ALLOWED_HUD_HOSTS = new Set(['antigravity', 'claude', 'codex']);
 const LOOPBACK_HOST_HEADER_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i;
@@ -104,6 +104,7 @@ const BIND_HOST = '127.0.0.1';
 const STALE_MS = 6 * 3600 * 1000;
 const TEAM_COMPLETED_WINDOW_MS = 20 * 60 * 1000;
 const CODE_HEALTH_TTL_MS = 5000;
+const WORKTREE_TTL_MS = 5000;
 const MAX_CODE_HEALTH_CACHE_ENTRIES = 32;
 const MAX_DISPATCH_BODY_BYTES = 16 * 1024;
 const TERMINAL = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
@@ -674,6 +675,7 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
 }
 
 const codeHealthCache = new Map();
+const worktreeCache = new Map();
 const checkpointCache = new Map();
 const designSystemCache = new Map();
 const forensicsCache = new Map();
@@ -710,6 +712,7 @@ function scrubWorktreePath(wtPath) {
 }
 
 function collectGitWorktrees(primaryRoot) {
+  const realpath = fs.realpathSync.native || fs.realpathSync;
   try {
     const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd: primaryRoot,
@@ -719,14 +722,14 @@ function collectGitWorktrees(primaryRoot) {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     let canonRoot = '';
-    try { canonRoot = fs.realpathSync(primaryRoot); } catch { /* fail open: unresolved root */ }
+    try { canonRoot = realpath(primaryRoot); } catch { /* fail open: unresolved root */ }
     const entries = [];
     let cur = null;
     const flush = () => {
       if (!cur || !cur.rawPath) return;
       let isCurrent = false;
       try {
-        isCurrent = Boolean(canonRoot && fs.realpathSync(cur.rawPath) === canonRoot);
+        isCurrent = Boolean(canonRoot && realpath(cur.rawPath) === canonRoot);
       } catch { /* fail open: removed worktree dir */ }
       entries.push({
         label: formatWorkspaceName(cur.rawPath) || 'worktree',
@@ -796,19 +799,41 @@ function readGitMetadataSignature(rootDir) {
   return `${indexSig}|${headSig}|${refSig}`;
 }
 
-function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy'), filterOpts = {}) {
+export function getCachedWorktrees(primaryRoot, nowMs = Date.now()) {
+  const rootKey = path.resolve(primaryRoot);
+  const gitSig = readGitMetadataSignature(rootKey);
+  if (gitSig === 'nogit') return [];
+  const cached = worktreeCache.get(rootKey);
+  if (
+    cached
+    && cached.gitSig === gitSig
+    && nowMs >= cached.computedAtMs
+    && (nowMs - cached.computedAtMs) < WORKTREE_TTL_MS
+  ) {
+    return cached.value;
+  }
+  const value = collectGitWorktrees(rootKey);
+  setBoundedCache(worktreeCache, rootKey, { gitSig, computedAtMs: nowMs, value });
+  return value;
+}
+
+function readLatestRoutingInDir(dirPath, filterOpts = {}) {
   try {
-    if (!fs.existsSync(runtimeDir) || fs.lstatSync(runtimeDir).isSymbolicLink()) return null;
+    if (!dirPath || !fs.existsSync(dirPath)) return null;
+    const dirSt = fs.lstatSync(dirPath);
+    if (dirSt.isSymbolicLink() || !dirSt.isDirectory()) return null;
+    if (typeof process.getuid === 'function' && dirSt.uid !== process.getuid()) return null;
     const expectedHost = String(filterOpts?.host || 'antigravity').trim().toLowerCase() || 'antigravity';
     const targetRoots = Array.isArray(filterOpts?.roots) ? filterOpts.roots : (filterOpts?.roots ? [filterOpts.roots] : []);
     const brainDir = expectedHost === 'antigravity' ? resolveAntigravityBrainDir(filterOpts?.brainDir) : '';
-    const routingFiles = fs.readdirSync(runtimeDir)
+    const routingFiles = fs.readdirSync(dirPath)
       .filter((f) => f.endsWith('.routing.json'))
       .map((f) => {
-        const p = path.join(runtimeDir, f);
+        const p = path.join(dirPath, f);
         try {
           const st = fs.lstatSync(p);
-          return st.isFile() && !st.isSymbolicLink() ? { file: f, path: p, mtimeMs: st.mtimeMs } : null;
+          const uidOk = typeof process.getuid !== 'function' || st.uid === process.getuid();
+          return st.isFile() && !st.isSymbolicLink() && uidOk ? { file: f, path: p, mtimeMs: st.mtimeMs } : null;
         } catch { /* fail open: skip unreadable routing entry */ return null; }
       })
       .filter(Boolean)
@@ -839,6 +864,18 @@ function readLatestRouting(runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.jo
   } catch { /* fail open: runtime directory unavailable */
     return null;
   }
+}
+
+export function readLatestRouting(runtimeDir = defaultRuntimeDir(), filterOpts = {}) {
+  const explicitOpt = filterOpts?.runtimeDir ? String(filterOpts.runtimeDir) : '';
+  const targetDir = path.resolve(String(explicitOpt || runtimeDir || defaultRuntimeDir()));
+  const primary = readLatestRoutingInDir(targetDir, filterOpts);
+  if (primary) return primary;
+  if (!process.env.OMAGY_RUNTIME_DIR && !filterOpts?.runtimeDir && targetDir === path.resolve(defaultRuntimeDir())) {
+    const legacyDir = path.resolve(path.join(os.tmpdir(), 'oh-my-agy'));
+    if (legacyDir !== targetDir) return readLatestRoutingInDir(legacyDir, filterOpts);
+  }
+  return null;
 }
 
 export function getCachedCodeHealth(primaryRoot, nowMs = Date.now(), transcriptPath = null) {
@@ -1409,7 +1446,7 @@ export function resolveSafeSkillDoc(pluginRoot = PLUGIN_ROOT, skillKey = '', ref
 export function resolveActiveConversationCandidates(workspaceRoot = process.cwd(), explicitId = '', options = {}) {
   const validIdRe = /^[a-zA-Z0-9_-]{6,80}$/;
   const host = String(options?.host || 'antigravity').trim().toLowerCase() || 'antigravity';
-  const runtimeDir = options?.runtimeDir || process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
+  const runtimeDir = options?.runtimeDir || defaultRuntimeDir();
   const effectiveBrainDir = host === 'antigravity' ? resolveAntigravityBrainDir(options?.brainDir) : '';
   const targetRoots = Array.isArray(options?.workspaceRoots) && options.workspaceRoots.length
     ? options.workspaceRoots
@@ -1592,7 +1629,7 @@ export function dispatchHudAction(payload = {}, options = {}) {
   const { bin, prefixArgs } = resolveAgentApiBinary();
   const runner = typeof options.runner === 'function'
     ? options.runner
-    : (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    : (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', timeout: 10000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
 
   const invokeAgentApi = (subArgs) => {
     const fullArgs = [...prefixArgs, ...subArgs];
@@ -1922,9 +1959,15 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
       if (fs.existsSync(teamRoot) && !fs.lstatSync(teamRoot).isSymbolicLink()) {
         for (const slug of fs.readdirSync(teamRoot)) {
           const dir = path.join(teamRoot, slug);
+          const dirSt = fs.lstatSync(dir, { throwIfNoEntry: false });
+          if (!dirSt || dirSt.isSymbolicLink() || !dirSt.isDirectory()) continue;
           const tasksFile = path.join(dir, 'tasks.json');
           const manifestFile = path.join(dir, 'manifest.json');
-          const board = readJsonSafe(tasksFile) || readJsonSafe(manifestFile);
+          const tasksSt = fs.lstatSync(tasksFile, { throwIfNoEntry: false });
+          const manifestSt = fs.lstatSync(manifestFile, { throwIfNoEntry: false });
+          const safeTasksFile = tasksSt && tasksSt.isFile() && !tasksSt.isSymbolicLink() ? tasksFile : '';
+          const safeManifestFile = manifestSt && manifestSt.isFile() && !manifestSt.isSymbolicLink() ? manifestFile : '';
+          const board = (safeTasksFile ? readJsonSafe(safeTasksFile) : null) || (safeManifestFile ? readJsonSafe(safeManifestFile) : null);
           if (!board || typeof board !== 'object') continue;
           const tasks = Array.isArray(board.tasks) ? board.tasks : [];
           const updatedMs = Date.parse(board.updated_at || '') || 0;
@@ -2659,17 +2702,21 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
 
   // 9. Quality gates & Doctor / Hook Diagnostics
   const qg = validateQualityGates(primaryRoot);
-  const runtimeDir = process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy');
+  const runtimeDir = defaultRuntimeDir();
   const latestRouting = readLatestRouting(runtimeDir, { host: normalizeExplicitHudHost(extraOpts?.host), roots });
 
   const hookErrorsFile = path.join(primaryRoot, '.omagy', 'logs', 'hook-errors.jsonl');
-  const hookErrors = fs.existsSync(hookErrorsFile)
-    ? readJsonlRecords(hookErrorsFile).records.slice(-10).reverse().map((e) => ({
+  let hookErrors = [];
+  try {
+    const errSt = fs.lstatSync(hookErrorsFile, { throwIfNoEntry: false });
+    if (errSt && errSt.isFile() && !errSt.isSymbolicLink()) {
+      hookErrors = readJsonlRecords(hookErrorsFile, { maxTailBytes: 65536 }).records.slice(-10).reverse().map((e) => ({
         at: String(e.at || ''),
         event: String(e.event || ''),
         error: redactSecrets(String(e.error || '')),
-      }))
-    : [];
+      }));
+    }
+  } catch { /* fail open: skip unreadable or symlinked hook-errors log */ }
 
   const doctor = {
     qualityGatesOk: Boolean(qg.ok),
@@ -2689,8 +2736,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   const forensics = getCachedForensics(primaryRoot, latestRouting?.transcriptPath || '');
   const notifications = readNotificationBooleans(primaryRoot);
 
-  // 9.7 Git Worktree Inventory (scrubbed, fail-open [])
-  const worktrees = collectGitWorktrees(primaryRoot);
+  // 9.7 Git Worktree Inventory (cached 5s / git-metadata keyed, scrubbed, fail-open [])
+  const worktrees = getCachedWorktrees(primaryRoot, nowMs);
 
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
@@ -2911,7 +2958,14 @@ export function createHudServer(token, options = {}) {
   };
 
   const server = http.createServer((req, res) => {
-    const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    let reqUrl;
+    try {
+      reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+    } catch { /* fail open: reject malformed request URL cleanly without crashing server */
+      res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
+      res.end(JSON.stringify({ ok: false, error: 'bad_request_url' }));
+      return;
+    }
     if (typeof options.onActivity === 'function') {
       try { options.onActivity(); } catch { /* fail open: ignore activity callback error */ }
     }
@@ -3111,7 +3165,7 @@ export function createHudServer(token, options = {}) {
         }
         const hasWiki = addSubtreeWatch(path.join(primaryRoot, 'omagy_wiki'), 2, schedulePush);
         if (!hasWiki) addFlatWatch(primaryRoot, schedulePush);
-        addFlatWatch(process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy'), schedulePush);
+        addFlatWatch(defaultRuntimeDir(), schedulePush);
       }
 
       syncWatchers();
@@ -3357,6 +3411,13 @@ export function createHudServer(token, options = {}) {
     }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not Found' }));
+  });
+
+  server.on('clientError', (err, socket) => {
+    if (err?.code === 'ECONNRESET' || !socket || socket.destroyed || !socket.writable) return;
+    try {
+      socket.end('HTTP/1.1 400 Bad Request\r\nContent-Type: application/json; charset=utf-8\r\nConnection: close\r\n\r\n{"ok":false,"error":"bad_request"}\n');
+    } catch { /* fail open: ignore socket write error on malformed client request */ }
   });
 
   server.closeAllSseClients = () => {

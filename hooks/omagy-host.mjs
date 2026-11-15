@@ -213,11 +213,39 @@ export function computeDesktopHudPort(workspace = process.cwd(), opts = {}) {
   return base + (digest.readUInt16BE(0) % 1000);
 }
 
+/** Resolve UID-scoped isolated runtime directory (`OMAGY_RUNTIME_DIR` -> `XDG_RUNTIME_DIR/oh-my-agy` -> `tmpdir/oh-my-agy-<uid>`). */
+export function defaultRuntimeDir(runtimeRoot = '') {
+  if (runtimeRoot) return path.resolve(String(runtimeRoot));
+  if (process.env.OMAGY_RUNTIME_DIR) return path.resolve(process.env.OMAGY_RUNTIME_DIR);
+  if (process.env.XDG_RUNTIME_DIR) return path.join(path.resolve(process.env.XDG_RUNTIME_DIR), 'oh-my-agy');
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
+  return path.join(os.tmpdir(), `oh-my-agy-${uid}`);
+}
+
+/** Create (if missing) and verify a 0o700 non-symlink same-UID runtime directory. */
+export function ensureSecureRuntimeDir(dirPath = defaultRuntimeDir()) {
+  const resolved = path.resolve(String(dirPath || defaultRuntimeDir()));
+  const existing = fs.lstatSync(resolved, { throwIfNoEntry: false });
+  if (existing) {
+    if (existing.isSymbolicLink()) throw new Error(`runtime_dir_symlink:${resolved}`);
+    if (!existing.isDirectory()) throw new Error(`runtime_dir_not_directory:${resolved}`);
+  } else {
+    fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
+  }
+  const st = fs.lstatSync(resolved);
+  if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`runtime_dir_symlink:${resolved}`);
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    throw new Error(`runtime_dir_foreign_uid:${resolved}`);
+  }
+  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) {
+    fs.chmodSync(resolved, 0o700);
+  }
+  return resolved;
+}
+
 /** Return isolated 0o600 daemon registry path under runtimeDir() (matching OMAGY_RUNTIME_DIR). */
 export function desktopHudRegistryFile(workspace = process.cwd(), runtimeRoot = '', opts = {}) {
-  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
-  const xdgDir = process.env.XDG_RUNTIME_DIR ? path.join(process.env.XDG_RUNTIME_DIR, 'oh-my-agy') : '';
-  const baseDir = runtimeRoot || process.env.OMAGY_RUNTIME_DIR || xdgDir || path.join(os.tmpdir(), `oh-my-agy-${uid}`);
+  const baseDir = defaultRuntimeDir(runtimeRoot);
   const hash = crypto.createHash('sha256').update(canonWsPath(workspace)).digest('hex').slice(0, 16);
   const prefix = opts?.channel === 'launch' ? 'hud-desktop-launch-' : 'hud-desktop-';
   return path.join(baseDir, `${prefix}${hash}.json`);

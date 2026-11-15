@@ -9,14 +9,15 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   COLD_CLI_EVENTS,
+  IDLE_GAP_MS,
+  IGNORED_SCAN_DIRS,
   MAX_EVIDENCE_BYTES,
+  TEST_FILE_NAME_RE,
   appendJsonlRecord,
   auditResearchReport,
   buildCodebaseMap,
   buildResearchMatrix,
   buildReviewPackage,
-  checkTestJunk,
-  compareSessions,
   decideWatchVerdict,
   extractGoalBrief,
   hasSymlinkSegment,
@@ -50,7 +51,7 @@ const BANNED_CLUTTER_EXACT = new Set([
 const TEXT_CHECK_EXT_RE = /\.(?:md|mjs|cjs|js|ts|tsx|jsx|py|sh|json|ya?ml|txt|toml)$/i;
 const ALLOWED_SCAFFOLD_RESOURCES = new Set(['references', 'scripts', 'assets', 'resources']);
 const ALLOWED_SCOPES = new Set(['project', 'shared', 'user']);
-const AUDIT_CLI_EVENTS = new Set(['docs-drift', 'coverage-map', 'dep-license-diff', 'mcp-audit']);
+const AUDIT_CLI_EVENTS = new Set(['docs-drift', 'coverage-map', 'dep-license-diff', 'mcp-audit', 'tmpdir-audit']);
 const TROJAN_UNICODE_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
 const HTML_COMMENT_BLOCK_RE = /<!--(?:(?!-->)[\s\S])*?-->/g;
 const PROMPT_INJ_COMMENT_RE = /\b(?:ignore\s+(?:all\s+)?previous|system\s+prompt|override\s+(?:all\s+)?instructions|disregard\s+all|you\s+must\s+silently|exfiltrate)\b/i;
@@ -1373,23 +1374,409 @@ export function validateTeamTasks(cwd, teamName) {
   return { ok, exitCode: ok ? 0 : 1, team: cleanTeam, taskCount, errors };
 }
 
+// ---------- relocated cold junk-test & session-compare helpers ----------
+const TEST_JUNK_RULES = [
+  {
+    rule: 'source-grep',
+    message: 'Reads source file inside a test to grep implementation text (class 10 source-grep). Test runtime behavior instead.',
+    test: (line) => /\b(?:readFileSync|fs\.readFile|fsPromises\.readFile|os\.ReadFile|ioutil\.ReadFile|std::fs::read_to_string)\s*\(/.test(line),
+  },
+  {
+    rule: 'prose-pin',
+    message: 'Pins exact long prose (>80 chars) in an equality assertion (class 5 exact-error-prose). Match error code/type or key phrase.',
+    test: (line) => /\b(?:toBe|toEqual|toStrictEqual|assert_eq!|assertEqual)\s*\(\s*["'`][^"'`\n]{80,}["'`]\s*\)/.test(line),
+  },
+  {
+    rule: 'fixed-sleep',
+    message: 'Uses arbitrary fixed sleep in test (class 12 fixed-sleep). Await deterministic condition or fake timers.',
+    test: (line) => /\b(?:setTimeout\s*\(\s*resolve\s*,\s*\d+|sleep\s*\(\s*\d+|time\.sleep\s*\(\s*\d+|thread::sleep|time\.Sleep)\b/.test(line),
+  },
+  {
+    rule: 'focused',
+    message: 'Focused test (.only / #[test_only]) silently skips the rest of the suite.',
+    test: (line) => /\b(?:it|test|describe)\.only\s*\(|#\[\s*test_only\s*\]/.test(line),
+  },
+  {
+    rule: 'skipped',
+    message: 'Skipped test (.skip / xit / #[ignore] / todo!() / @pytest.mark.skip / t.Skip) left in suite without suppression.',
+    test: (line) => /\b(?:(?:it|test|describe)\.skip|xit|xtest|xdescribe)\s*\(|^\s*#\[\s*(?:ignore(?:\s*=\s*["'][^"']*["'])?|cfg_attr\([^]]*\bignore\b[^]]*\))\s*\]|\b(?:todo|unimplemented)!\s*\(|^\s*@pytest\.mark\.skip\b(?!if)|\bt\.(?:Skip|Skipf|SkipNow)\s*\(/.test(line),
+  },
+  {
+    rule: 'self-compare',
+    message: 'Tautological self-comparison (expect(x).toBe(x) or assert(x == x)) (class 1 tautology).',
+    test: (line) => {
+      const m1 = /\bexpect\s*\(\s*([A-Za-z_$][A-Za-z0-9_$.]*)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*([A-Za-z_$][A-Za-z0-9_$.]*)\s*\)/.exec(line);
+      if (m1 && m1[1] === m1[2]) return true;
+      const m2 = /\b(?:assert|assert_eq!)\s*\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*(?:===?|==|,)\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)/.exec(line);
+      return Boolean(m2 && m2[1] === m2[2]);
+    },
+  },
+  {
+    rule: 'lower-bound',
+    message: 'Weak lower-bound assertion (>= 0 or >= 1 on length/size/count) instead of exact expected shape.',
+    test: (line) => /\bexpect\s*\([^)]*\.(?:length|size|count)\s*\)\s*\.\s*toBeGreaterThanOrEqual\s*\(\s*[01]\s*\)|\b(?:len|count)\s*\([^)]+\)\s*>=\s*0\b/.test(line),
+  },
+];
+
+export function checkTestJunk(targets = []) {
+  const rawList = Array.isArray(targets) ? targets : [targets];
+  const files = [];
+  const seen = new Set();
+  const collect = (p, explicit) => {
+    const abs = path.resolve(String(p || ''));
+    if (!abs || seen.has(abs)) return;
+    let st;
+    try { st = fs.lstatSync(abs); } catch { /* fail open: missing target */ return; }
+    if (st.isSymbolicLink()) return;
+    if (st.isFile()) {
+      if (explicit || TEST_FILE_NAME_RE.test(abs)) {
+        seen.add(abs);
+        files.push(abs);
+      }
+      return;
+    }
+    if (st.isDirectory()) {
+      let entries = [];
+      try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { /* fail open: unreadable dir */ return; }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const e of entries) {
+        if (e.name.startsWith('.') || IGNORED_SCAN_DIRS.has(e.name)) continue;
+        collect(path.join(abs, e.name), false);
+      }
+    }
+  };
+  for (const t of rawList) {
+    if (t && String(t).trim()) collect(String(t).trim(), true);
+  }
+  const violations = [];
+  for (const file of files) {
+    let raw = '';
+    try { raw = fs.readFileSync(file, 'utf8'); } catch { /* fail open: unreadable file */ continue; }
+    const lines = raw.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed || /^(?:\/\/|#|\/\*|\*)/.test(trimmed)) continue;
+      const prevLine = i > 0 ? lines[i - 1] : '';
+      if (/check-test-junk:\s*ignore/i.test(line) || /check-test-junk:\s*ignore/i.test(prevLine)) continue;
+      for (const ruleObj of TEST_JUNK_RULES) {
+        if (ruleObj.test(line)) {
+          violations.push({
+            file,
+            line: i + 1,
+            rule: ruleObj.rule,
+            message: ruleObj.message,
+            snippet: trimmed.slice(0, 140),
+          });
+        }
+      }
+    }
+  }
+  return {
+    ok: violations.length === 0,
+    exitCode: violations.length === 0 ? 0 : 1,
+    filesScanned: files.length,
+    violations,
+  };
+}
+
+export function summarizeTranscriptMetrics(records) {
+  let turnsStarted = 0;
+  let turnsCompleted = 0;
+  let toolCalls = 0;
+  let failedTools = 0;
+  let incomplete = 0;
+  let compactions = 0;
+  const timestamps = [];
+  const byTool = {};
+  const fileReads = {};
+  const toolIdToName = new Map();
+  const countedFailedIds = new Set();
+  const tokenUsage = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    total_tokens: 0,
+  };
+  const posNum = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+  const addUsage = (u) => {
+    const inp = posNum(u.input_tokens ?? u.inputTokens);
+    const out = posNum(u.output_tokens ?? u.outputTokens);
+    const cr = posNum(u.cache_read_input_tokens ?? u.cacheReadInputTokens ?? u.cached_input_tokens);
+    const cw = posNum(u.cache_creation_input_tokens ?? u.cacheCreationInputTokens ?? u.cache_write_input_tokens);
+    const tot = posNum(u.total_tokens ?? u.totalTokens) || (inp + out + cr + cw);
+    tokenUsage.input_tokens += inp;
+    tokenUsage.output_tokens += out;
+    tokenUsage.cache_read_input_tokens += cr;
+    tokenUsage.cache_creation_input_tokens += cw;
+    tokenUsage.total_tokens += tot;
+  };
+  const hasLastUsage = records.some((r) => r && typeof r === 'object' && r.payload?.info?.last_token_usage);
+  let lastTotalUsage = null;
+
+  for (const rec of records) {
+    if (!rec || typeof rec !== 'object') continue;
+    const ts = Date.parse(rec.created_at || rec.at || rec.timestamp || '');
+    if (Number.isFinite(ts)) timestamps.push(ts);
+    const type = String(rec.type || '').toUpperCase();
+    const status = String(rec.status || '').toUpperCase();
+    if (type === 'USER_INPUT' || rec.role === 'user') turnsStarted += 1;
+    if (type === 'PLANNER_RESPONSE' || rec.role === 'assistant') {
+      if (!status || status === 'DONE' || status === 'COMPLETED') turnsCompleted += 1;
+    }
+    if (type.includes('COMPACT') || (typeof rec.content === 'string' && /(?:^|\s)\/compact\b/i.test(rec.content))) {
+      compactions += 1;
+    }
+    const u = rec.usage || rec.message?.usage || rec.token_usage || rec.payload?.info?.last_token_usage || null;
+    if (u && typeof u === 'object') addUsage(u);
+    else if (!hasLastUsage && rec.payload?.info?.total_token_usage && typeof rec.payload.info.total_token_usage === 'object') {
+      lastTotalUsage = rec.payload.info.total_token_usage;
+    }
+    if (status === 'ERROR' || status === 'FAILED' || rec.error || rec.is_error === true || rec.isError === true) {
+      failedTools += 1;
+    } else if (status && status !== 'DONE' && status !== 'COMPLETED') {
+      incomplete += 1;
+    }
+    const calls = Array.isArray(rec.tool_calls) ? rec.tool_calls : [];
+    for (const tc of calls) {
+      if (!tc || typeof tc !== 'object') continue;
+      toolCalls += 1;
+      const rawName = String(tc.name || tc.toolName || tc.function?.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '');
+      const name = rawName || 'unknown';
+      if (!byTool[name]) byTool[name] = { calls: 0, failed: 0 };
+      byTool[name].calls += 1;
+      const callId = String(tc.id || tc.tool_use_id || tc.call_id || '');
+      if (callId) toolIdToName.set(callId, name);
+      if (tc.status === 'ERROR' || tc.error || tc.is_error === true || tc.isError === true) {
+        byTool[name].failed += 1;
+        failedTools += 1;
+        if (callId) countedFailedIds.add(callId);
+      }
+      if (/^(?:read_file|view_file|read)$/i.test(name)) {
+        let argsObj = tc.arguments || tc.args || tc.input || tc.function?.arguments || null;
+        if (typeof argsObj === 'string') {
+          try { argsObj = JSON.parse(argsObj); } catch { /* fail open: ignore non-JSON tool args */ argsObj = null; }
+        }
+        const readPath = argsObj && typeof argsObj === 'object'
+          ? String(argsObj.Path || argsObj.filePath || argsObj.TargetFile || argsObj.path || '').trim()
+          : '';
+        if (readPath) {
+          fileReads[readPath] = (fileReads[readPath] || 0) + 1;
+        }
+      }
+    }
+    const contentBlocks = Array.isArray(rec.message?.content) ? rec.message.content : (Array.isArray(rec.content) ? rec.content : []);
+    for (const blk of contentBlocks) {
+      if (blk?.type === 'tool_use' && blk.id) {
+        const bName = String(blk.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '') || 'unknown';
+        if (!toolIdToName.has(String(blk.id))) toolIdToName.set(String(blk.id), bName);
+      }
+    }
+    const resultItems = [
+      ...(Array.isArray(rec.tool_results) ? rec.tool_results : []),
+      ...contentBlocks.filter((b) => b && b.type === 'tool_result'),
+    ];
+    for (const tr of resultItems) {
+      if (!tr || typeof tr !== 'object') continue;
+      if (!(tr.is_error === true || tr.isError === true || tr.status === 'ERROR' || tr.error)) continue;
+      const tid = String(tr.tool_use_id || tr.call_id || tr.id || '');
+      if (tid && countedFailedIds.has(tid)) continue;
+      if (tid) countedFailedIds.add(tid);
+      failedTools += 1;
+      const mapped = tid ? toolIdToName.get(tid) : '';
+      if (mapped && byTool[mapped]) byTool[mapped].failed += 1;
+    }
+  }
+  if (lastTotalUsage) addUsage(lastTotalUsage);
+  const repeatedWork = Object.values(fileReads).filter((c) => c >= 3).length;
+  const stumbles = failedTools + incomplete;
+  timestamps.sort((a, b) => a - b);
+  let rawDurationMs = (records.length === 1 && timestamps.length === 1) ? 0 : null;
+  let durationMs = rawDurationMs;
+  if (timestamps.length >= 2 && timestamps.at(-1) > timestamps[0]) {
+    rawDurationMs = timestamps.at(-1) - timestamps[0];
+    let idleMs = 0;
+    for (let i = 1; i < timestamps.length; i += 1) {
+      if (timestamps[i] - timestamps[i - 1] > IDLE_GAP_MS) idleMs += timestamps[i] - timestamps[i - 1];
+    }
+    durationMs = Math.max(0, rawDurationMs - idleMs);
+  }
+  return {
+    records: records.length,
+    duration_ms: durationMs,
+    raw_duration_ms: rawDurationMs,
+    turns: turnsStarted,
+    turns_started: turnsStarted,
+    turns_completed: turnsCompleted,
+    tool_calls: toolCalls,
+    failed_tools: failedTools,
+    incomplete,
+    stumbles,
+    repeated_work: repeatedWork,
+    compactions,
+    token_usage: tokenUsage,
+    byTool,
+  };
+}
+
+export function compareSessions(baselinePath, candidatePath, opts = {}) {
+  const safeRead = (p) => {
+    try {
+      const r = readJsonlRecords(String(p || ''));
+      return Array.isArray(r) ? r : (Array.isArray(r?.records) ? r.records : []);
+    } catch { /* fail open: missing transcript file */
+      return [];
+    }
+  };
+  const baseRecs = safeRead(baselinePath);
+  const candRecs = safeRead(candidatePath);
+  const base = summarizeTranscriptMetrics(baseRecs);
+  const cand = summarizeTranscriptMetrics(candRecs);
+  const reasons = [];
+  let status = 'no_regression';
+
+  if (base.records === 0 || cand.records === 0) {
+    status = 'inconclusive';
+    reasons.push('missing_transcript_records');
+  } else if ((base.tool_calls > 0 && base.duration_ms === null) || (cand.tool_calls > 0 && cand.duration_ms === null)) {
+    status = 'inconclusive';
+    reasons.push('missing_measured_duration');
+  } else {
+    if (cand.failed_tools > base.failed_tools) reasons.push('failed_tools_increased');
+    if (cand.incomplete > base.incomplete) reasons.push('incomplete_steps_increased');
+    if (cand.stumbles > base.stumbles && !reasons.includes('failed_tools_increased') && !reasons.includes('incomplete_steps_increased')) {
+      reasons.push('stumbles_increased');
+    }
+    if (cand.repeated_work > base.repeated_work) reasons.push('repeated_work_increased');
+    const maxPct = opts.maxDurationIncreasePct !== undefined ? Number(opts.maxDurationIncreasePct) : 50;
+    if (Number.isFinite(maxPct) && base.duration_ms !== null && base.duration_ms > 0 && cand.duration_ms !== null) {
+      const pctIncrease = ((cand.duration_ms - base.duration_ms) / base.duration_ms) * 100;
+      if (pctIncrease > maxPct) reasons.push('duration_regression');
+    }
+    if (reasons.length > 0) status = 'regression';
+  }
+
+  const allTools = new Set([...Object.keys(base.byTool), ...Object.keys(cand.byTool)]);
+  const byTool = {};
+  for (const t of [...allTools].sort()) {
+    const b = base.byTool[t] || { calls: 0, failed: 0 };
+    const c = cand.byTool[t] || { calls: 0, failed: 0 };
+    byTool[t] = {
+      baseline_calls: b.calls,
+      candidate_calls: c.calls,
+      delta_calls: c.calls - b.calls,
+      baseline_failed: b.failed,
+      candidate_failed: c.failed,
+      delta_failed: c.failed - b.failed,
+    };
+  }
+  const pickSummary = (m) => ({
+    duration_ms: m.duration_ms,
+    raw_duration_ms: m.raw_duration_ms,
+    turns: m.turns,
+    turns_started: m.turns_started,
+    turns_completed: m.turns_completed,
+    tool_calls: m.tool_calls,
+    failed_tools: m.failed_tools,
+    incomplete: m.incomplete,
+    stumbles: m.stumbles,
+    repeated_work: m.repeated_work,
+    compactions: m.compactions,
+    token_usage: m.token_usage,
+  });
+  const failOnReg = Boolean(opts.failOnRegression);
+  const exitCode = !failOnReg ? 0 : (status === 'regression' ? 2 : (status === 'inconclusive' ? 3 : 0));
+  return {
+    ok: exitCode === 0,
+    exitCode,
+    baseline: pickSummary(base),
+    candidate: pickSummary(cand),
+    deltas: {
+      duration_ms: (base.duration_ms !== null && cand.duration_ms !== null) ? (cand.duration_ms - base.duration_ms) : null,
+      raw_duration_ms: (base.raw_duration_ms !== null && cand.raw_duration_ms !== null) ? (cand.raw_duration_ms - base.raw_duration_ms) : null,
+      turns: cand.turns - base.turns,
+      tool_calls: cand.tool_calls - base.tool_calls,
+      failed_tools: cand.failed_tools - base.failed_tools,
+      incomplete: cand.incomplete - base.incomplete,
+      stumbles: cand.stumbles - base.stumbles,
+      repeated_work: cand.repeated_work - base.repeated_work,
+      compactions: cand.compactions - base.compactions,
+      total_tokens: (cand.token_usage?.total_tokens ?? 0) - (base.token_usage?.total_tokens ?? 0),
+    },
+    byTool,
+    assessment: { status, reasons },
+  };
+}
+
 // ---------- selftest & CLI dispatch ----------
 async function selftest() {
   const { runSelftest } = await import('./omagy-selftest.mjs');
   return runSelftest();
 }
 
+function hasHelpFlagBeforeDashDash(rawArgs = []) {
+  for (const a of rawArgs) {
+    if (a === '--') break;
+    if (a === '--help' || a === '-h') return true;
+  }
+  return false;
+}
+
+function skillUsageText(event) {
+  const usageMap = {
+    help: [
+      'Usage: sh hooks/run.sh <command> [options]',
+      '',
+      'Lifecycle events (JSON on stdin):',
+      '  session-start | pre-invocation | pre-tool-use | stop | post-tool-use',
+      '  user-prompt-submit | subagent-start | subagent-stop | pre-compact | post-compact',
+      '',
+      'CLI utilities:',
+      '  selftest | skill-validate | skill-init | skill-eval | check-test-junk',
+      '  validate-team-tasks | verify-evidence | docs-drift | tmpdir-audit | floor-guard',
+      '  goal-done | plan-hash | session-compare | session-scan | host-setup | host-validate',
+      '',
+      'Pass --help or -h to any subcommand for details.',
+    ].join('\n'),
+    'skill-validate': 'Usage: sh hooks/run.sh skill-validate [target] [--scope project|shared|user|all] [-C <dir>] [--strict] [--json]',
+    'skill-init': 'Usage: sh hooks/run.sh skill-init <name> [--scope project|shared|user] [--dir <parent>] [--resources <list>] [--description <text>] [--force] [-C <dir>] [--json]',
+    selftest: 'Usage: sh hooks/run.sh selftest (runs offline selftest suite T1..T61)',
+    'verify-evidence': 'Usage: sh hooks/run.sh verify-evidence [cwd] <evidenceRelPath> [team] [taskId]',
+    'append-jsonl': 'Usage: sh hooks/run.sh append-jsonl <file> [jsonRecord]',
+    'read-jsonl': 'Usage: sh hooks/run.sh read-jsonl <file>',
+    'quality-gates': 'Usage: sh hooks/run.sh quality-gates [cwd] [stage]',
+    'review-package': 'Usage: sh hooks/run.sh review-package [-C <cwd>] [baseRef] [headRef] [outPath]',
+    'goal-brief': 'Usage: sh hooks/run.sh goal-brief [-C <cwd>] <sourcePath> [goalId] [outPath]',
+    'check-test-junk': 'Usage: sh hooks/run.sh check-test-junk [-C <dir>] [--json] [targets...]',
+    'research-matrix': 'Usage: sh hooks/run.sh research-matrix [--json] <topic> [lens] [facets...]',
+    'audit-research': 'Usage: sh hooks/run.sh audit-research [--json] <reportPath>',
+    'codebase-map': 'Usage: sh hooks/run.sh codebase-map [--json] [root] [budget]',
+    'scan-debt': 'Usage: sh hooks/run.sh scan-debt [--json] [root] [marker]',
+    'validate-team-tasks': 'Usage: sh hooks/run.sh validate-team-tasks [--json] [cwd] [team]',
+    'watch-pr': 'Usage: sh hooks/run.sh watch-pr [--json] <factsJsonOrFile>',
+    'failure-sig': 'Usage: sh hooks/run.sh failure-sig [--json] [fileOrText]',
+    'session-compare': 'Usage: sh hooks/run.sh session-compare [--json] [--fail-on-regression] [--max-duration-increase <pct>] <baseline> <candidate> [outPath]',
+    'wiki-repair': 'Usage: sh hooks/run.sh wiki-repair [--json] [wikiDir] [changesJsonOrFile]',
+  };
+  return usageMap[event] || usageMap.help;
+}
+
 function parseCliArgs(rawArgs = []) {
   let jsonMode = false;
+  let helpMode = false;
   let dashC = '';
+  let endOfOpts = false;
   const pos = [];
   for (let i = 0; i < rawArgs.length; i += 1) {
     const a = rawArgs[i];
-    if (a === '--json') jsonMode = true;
-    else if (a === '-C' && i + 1 < rawArgs.length) { dashC = rawArgs[i + 1]; i += 1; }
+    if (!endOfOpts && a === '--') { endOfOpts = true; continue; }
+    if (!endOfOpts && (a === '--help' || a === '-h')) helpMode = true;
+    else if (!endOfOpts && a === '--json') jsonMode = true;
+    else if (!endOfOpts && a === '-C' && i + 1 < rawArgs.length) { dashC = rawArgs[i + 1]; i += 1; }
     else pos.push(a);
   }
-  return { jsonMode, dashC, pos };
+  return { jsonMode, helpMode, dashC, pos };
 }
 
 function runThrowingJsonCli(fn) {
@@ -1405,7 +1792,17 @@ function runThrowingJsonCli(fn) {
 }
 
 export async function runNonLifecycleCli(event, rawArgs = []) {
+  if (event === '--help' || event === '-h' || event === 'help') {
+    process.stdout.write(`${skillUsageText('help')}\n`);
+    process.exitCode = 0;
+    return 0;
+  }
   if (event === 'selftest') {
+    if (hasHelpFlagBeforeDashDash(rawArgs)) {
+      process.stdout.write(`${skillUsageText('selftest')}\n`);
+      process.exitCode = 0;
+      return 0;
+    }
     const r = await selftest();
     process.stdout.write(`${JSON.stringify(r)}\n`);
     const code = r.selftest === 'PASS' ? 0 : 1;
@@ -1415,43 +1812,108 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
   if (event === 'skill-validate') {
     let jsonMode = false;
     let strict = false;
+    let helpMode = false;
     let dashC = '';
+    let scopeArg = '';
     let cliErr = '';
     let endOfOpts = false;
     const pos = [];
     for (let i = 0; i < rawArgs.length; i += 1) {
       const a = rawArgs[i];
       if (!endOfOpts && a === '--') { endOfOpts = true; continue; }
-      if (!endOfOpts && a === '--json') jsonMode = true;
+      if (!endOfOpts && (a === '--help' || a === '-h')) helpMode = true;
+      else if (!endOfOpts && a === '--json') jsonMode = true;
       else if (!endOfOpts && a === '--strict') strict = true;
       else if (!endOfOpts && a === '-C') {
         if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:-C'; }
         else { dashC = rawArgs[i + 1]; i += 1; }
+      } else if (!endOfOpts && a === '--scope') {
+        if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:--scope'; }
+        else { scopeArg = String(rawArgs[i + 1] || '').trim().toLowerCase(); i += 1; }
+      } else if (!endOfOpts && a.startsWith('--scope=')) {
+        scopeArg = a.slice(8).trim().toLowerCase();
       } else if (!endOfOpts && a.startsWith('-')) {
         if (!cliErr) cliErr = `unknown_option:${a}`;
       } else {
         pos.push(a);
       }
     }
-    if (!cliErr && pos.length > 1) cliErr = `unexpected_argument:${pos[1]}`;
-    const baseDir = dashC ? path.resolve(dashC) : process.cwd();
-    let targetArg = pos[0] ? (path.isAbsolute(pos[0]) ? pos[0] : path.resolve(baseDir, pos[0])) : '';
-    if (!cliErr && !targetArg) {
-      const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { /* fail open: missing path */ return false; } };
-      const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { /* fail open: missing path */ return false; } };
-      const pluginSkills = path.join(baseDir, 'skills');
-      const sharedManifest = path.join(baseDir, '.agents', 'skills.json');
-      const projectSkills = path.join(baseDir, '.agents', 'skills');
-      const selfSkillMd = path.join(baseDir, 'SKILL.md');
-      if (isDir(pluginSkills)) targetArg = pluginSkills;
-      else if (isFile(sharedManifest)) targetArg = sharedManifest;
-      else if (isDir(projectSkills)) targetArg = projectSkills;
-      else if (isFile(selfSkillMd)) targetArg = baseDir;
-      else cliErr = `no_skills_target_found:${baseDir}`;
+    if (helpMode) {
+      process.stdout.write(`${skillUsageText('skill-validate')}\n`);
+      process.exitCode = 0;
+      return 0;
     }
-    const res = cliErr
-      ? { ok: false, exitCode: 2, kind: 'unknown', target: targetArg || baseDir, skillCount: 0, referenceFiles: [], errors: [cliErr], warnings: [] }
-      : await validateSkillDirectory(targetArg, { strict, rootDir: baseDir });
+    if (!cliErr && pos.length > 1) cliErr = `unexpected_argument:${pos[1]}`;
+    if (!cliErr && scopeArg && pos.length > 0) cliErr = 'scope_conflicts_with_positional_target';
+    const VALIDATE_SCOPES = new Set(['project', 'shared', 'user', 'all']);
+    if (!cliErr && scopeArg && !VALIDATE_SCOPES.has(scopeArg)) cliErr = `invalid_scope:${scopeArg}`;
+    const baseDir = dashC ? path.resolve(dashC) : process.cwd();
+    const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { /* fail open: missing path */ return false; } };
+    const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { /* fail open: missing path */ return false; } };
+    const userSkillsDir = process.env.OMAGY_USER_SKILLS_DIR
+      ? path.resolve(process.env.OMAGY_USER_SKILLS_DIR)
+      : path.join(os.homedir(), '.gemini', 'config', 'skills');
+    const pluginSkills = path.join(baseDir, 'skills');
+    const sharedManifest = path.join(baseDir, '.agents', 'skills.json');
+    const sharedDir = path.join(baseDir, 'tools', 'agents', 'skills');
+    const projectSkills = path.join(baseDir, '.agents', 'skills');
+    const selfSkillMd = path.join(baseDir, 'SKILL.md');
+
+    let res;
+    if (cliErr) {
+      res = { ok: false, exitCode: 2, kind: 'unknown', target: pos[0] || baseDir, skillCount: 0, referenceFiles: [], errors: [cliErr], warnings: [] };
+    } else if (scopeArg === 'all') {
+      const candidates = [
+        ...(isDir(pluginSkills) ? [pluginSkills] : []),
+        ...(isDir(projectSkills) ? [projectSkills] : []),
+        ...(isFile(sharedManifest) ? [sharedManifest] : (isDir(sharedDir) ? [sharedDir] : [])),
+        ...(isDir(userSkillsDir) ? [userSkillsDir] : []),
+      ];
+      const seenTargets = new Set();
+      const uniqueTargets = [];
+      for (const c of candidates) {
+        const key = safeRealpath(c) || path.resolve(c);
+        if (!seenTargets.has(key)) {
+          seenTargets.add(key);
+          uniqueTargets.push(c);
+        }
+      }
+      if (uniqueTargets.length === 0) {
+        res = { ok: false, exitCode: 2, kind: 'scope:all', target: baseDir, targets: [], skillCount: 0, referenceFiles: [], errors: [`no_skills_target_found:${baseDir}`], warnings: [] };
+      } else {
+        const errors = [];
+        const warnings = [];
+        const referenceFiles = [];
+        let skillCount = 0;
+        let worstExit = 0;
+        for (const t of uniqueTargets) {
+          const r = await validateSkillDirectory(t, { strict, rootDir: baseDir });
+          const relT = path.relative(baseDir, t) || t;
+          skillCount += Number(r.skillCount ?? r.entriesCount ?? (r.kind === 'skill' ? 1 : 0));
+          for (const e of (r.errors || [])) errors.push(`${relT}:${e}`);
+          for (const w of (r.warnings || [])) warnings.push(`${relT}:${w}`);
+          for (const rf of (r.referenceFiles || [])) referenceFiles.push({ ...rf, scopeTarget: relT });
+          if (r.exitCode && r.exitCode > worstExit) worstExit = r.exitCode;
+        }
+        const ok = errors.length === 0 && worstExit === 0;
+        res = { ok, exitCode: ok ? 0 : (worstExit || 1), kind: 'scope:all', target: baseDir, targets: uniqueTargets, skillCount, referenceFiles, errors, warnings };
+      }
+    } else {
+      let targetArg = pos[0] ? (path.isAbsolute(pos[0]) ? pos[0] : path.resolve(baseDir, pos[0])) : '';
+      if (!targetArg) {
+        if (scopeArg === 'project') targetArg = projectSkills;
+        else if (scopeArg === 'shared') targetArg = isFile(sharedManifest) ? sharedManifest : sharedDir;
+        else if (scopeArg === 'user') targetArg = userSkillsDir;
+        else if (isDir(pluginSkills)) targetArg = pluginSkills;
+        else if (isFile(sharedManifest)) targetArg = sharedManifest;
+        else if (isDir(projectSkills)) targetArg = projectSkills;
+        else if (isFile(selfSkillMd)) targetArg = baseDir;
+        else cliErr = `no_skills_target_found:${baseDir}`;
+      }
+      res = cliErr
+        ? { ok: false, exitCode: 2, kind: 'unknown', target: targetArg || baseDir, skillCount: 0, referenceFiles: [], errors: [cliErr], warnings: [] }
+        : await validateSkillDirectory(targetArg, { strict, rootDir: baseDir });
+    }
     if (jsonMode) {
       process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
     } else {
@@ -1468,6 +1930,7 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
   if (event === 'skill-init') {
     let jsonMode = false;
     let force = false;
+    let helpMode = false;
     let dashC = '';
     let scope = 'project';
     let dir = '';
@@ -1480,7 +1943,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     for (let i = 0; i < rawArgs.length; i += 1) {
       const a = rawArgs[i];
       if (!endOfOpts && a === '--') { endOfOpts = true; continue; }
-      if (!endOfOpts && a === '--json') jsonMode = true;
+      if (!endOfOpts && (a === '--help' || a === '-h')) helpMode = true;
+      else if (!endOfOpts && a === '--json') jsonMode = true;
       else if (!endOfOpts && a === '--force') force = true;
       else if (!endOfOpts && a === '-C') {
         if (i + 1 >= rawArgs.length) { if (!cliErr) cliErr = 'missing_option_value:-C'; }
@@ -1506,6 +1970,11 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
       } else {
         pos.push(a);
       }
+    }
+    if (helpMode) {
+      process.stdout.write(`${skillUsageText('skill-init')}\n`);
+      process.exitCode = 0;
+      return 0;
     }
     if (!cliErr && pos.length > 1) cliErr = `unexpected_argument:${pos[1]}`;
     const baseDir = dashC ? path.resolve(dashC) : process.cwd();
@@ -1540,17 +2009,21 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return res.exitCode;
   }
   if (event === 'verify-evidence') {
+    if (hasHelpFlagBeforeDashDash(rawArgs)) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const [cwdArg, relArg, teamArg, taskIdArg] = rawArgs;
     return runThrowingJsonCli(() => validateCompletionEvidence(cwdArg || process.cwd(), relArg, { team: teamArg, taskId: taskIdArg }));
   }
   if (event === 'append-jsonl') {
+    if (hasHelpFlagBeforeDashDash(rawArgs)) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const [fileArg, jsonArg] = rawArgs;
     return runThrowingJsonCli(() => appendJsonlRecord(fileArg, jsonArg || readStdin()));
   }
   if (event === 'read-jsonl') {
+    if (hasHelpFlagBeforeDashDash(rawArgs)) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     return runThrowingJsonCli(() => readJsonlRecords(rawArgs[0]));
   }
   if (event === 'quality-gates') {
+    if (hasHelpFlagBeforeDashDash(rawArgs)) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const res = validateQualityGates(rawArgs[0] || process.cwd(), rawArgs[1] || '');
     process.stdout.write(`${JSON.stringify(res)}\n`);
     const code = res.ok ? 0 : 1;
@@ -1558,7 +2031,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return code;
   }
   if (event === 'review-package') {
-    const { dashC, pos } = parseCliArgs(rawArgs);
+    const { helpMode, dashC, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const res = buildReviewPackage(dashC || pos[0] || process.cwd(), dashC ? pos[0] : pos[1], (dashC ? pos[1] : pos[2]) || 'HEAD', (dashC ? pos[2] : pos[3]) || '');
     process.stdout.write(`${JSON.stringify(res)}\n`);
     const code = res.ok ? 0 : (res.exitCode || 1);
@@ -1566,7 +2040,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return code;
   }
   if (event === 'goal-brief') {
-    const { dashC, pos } = parseCliArgs(rawArgs);
+    const { helpMode, dashC, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const baseDir = dashC ? path.resolve(dashC) : process.cwd();
     const resolveRel = (p) => (p ? (path.isAbsolute(p) ? p : path.resolve(baseDir, p)) : '');
     const res = extractGoalBrief(resolveRel(pos[0]), pos[1] || '', resolveRel(pos[2]));
@@ -1576,7 +2051,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return code;
   }
   if (event === 'check-test-junk') {
-    const { jsonMode, dashC, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, dashC, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const baseDir = dashC ? path.resolve(dashC) : process.cwd();
     const targets = pos.length
       ? pos.map((p) => (path.isAbsolute(p) ? p : path.resolve(baseDir, p)))
@@ -1592,7 +2068,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return res.exitCode;
   }
   if (event === 'research-matrix') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const res = buildResearchMatrix(pos[0] || '', pos[1] || 'general', pos.slice(2));
     if (!res.ok) {
       process.stdout.write(`${JSON.stringify(res)}\n`);
@@ -1605,7 +2082,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return 0;
   }
   if (event === 'audit-research') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const res = auditResearchReport(pos[0] || '');
     if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
     else {
@@ -1622,7 +2100,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return code;
   }
   if (event === 'codebase-map') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const targetRoot = pos[0] ? path.resolve(pos[0]) : process.cwd();
     const budgetArg = pos[1] ? intOr(pos[1], 1800, 100) : intOr(process.env.OMAGY_MAP_CHARS, 1800, 100);
     const mapText = buildCodebaseMap([targetRoot], budgetArg);
@@ -1632,7 +2111,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return 0;
   }
   if (event === 'scan-debt') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const targetRoot = pos[0] ? path.resolve(pos[0]) : process.cwd();
     const res = scanShortcutDebt([targetRoot], pos[1] || '');
     if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
@@ -1646,14 +2126,16 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return 0;
   }
   if (event === 'validate-team-tasks') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const res = validateTeamTasks(pos[0] ? path.resolve(pos[0]) : process.cwd(), pos[1] || '');
     process.stdout.write(`${JSON.stringify(res, null, jsonMode ? 2 : 0)}\n`);
     process.exitCode = res.exitCode;
     return res.exitCode;
   }
   if (event === 'watch-pr') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const inputArg = pos[0] || '{}';
     let facts = {};
     try {
@@ -1670,7 +2152,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return code;
   }
   if (event === 'failure-sig') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const inputArg = pos[0] || '';
     const signature = normalizeFailureSignature((inputArg && fs.existsSync(inputArg)) ? fs.readFileSync(inputArg, 'utf8') : (inputArg || readStdin()));
     process.stdout.write(jsonMode ? `${JSON.stringify({ ok: true, signature }, null, 2)}\n` : `${signature}\n`);
@@ -1678,16 +2161,22 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return 0;
   }
   if (event === 'session-compare') {
-    const jsonMode = rawArgs.includes('--json');
-    const failOnRegression = rawArgs.includes('--fail-on-regression');
+    let jsonMode = false;
+    let failOnRegression = false;
+    let helpMode = false;
+    let endOfOpts = false;
     let maxDurationIncreasePct = 50;
     const pos = [];
     for (let i = 0; i < rawArgs.length; i += 1) {
       const a = rawArgs[i];
-      if (a === '--json' || a === '--fail-on-regression') continue;
-      if (a === '--max-duration-increase' && i + 1 < rawArgs.length) { maxDurationIncreasePct = Number(rawArgs[i + 1]); i += 1; }
+      if (!endOfOpts && a === '--') { endOfOpts = true; continue; }
+      if (!endOfOpts && (a === '--help' || a === '-h')) helpMode = true;
+      else if (!endOfOpts && a === '--json') jsonMode = true;
+      else if (!endOfOpts && a === '--fail-on-regression') failOnRegression = true;
+      else if (!endOfOpts && a === '--max-duration-increase' && i + 1 < rawArgs.length) { maxDurationIncreasePct = Number(rawArgs[i + 1]); i += 1; }
       else pos.push(a);
     }
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const res = compareSessions(pos[0] || '', pos[1] || '', { failOnRegression, maxDurationIncreasePct });
     if (pos[2]) {
       const outPath = path.resolve(pos[2]);
@@ -1699,7 +2188,8 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     return res.exitCode;
   }
   if (event === 'wiki-repair') {
-    const { jsonMode, pos } = parseCliArgs(rawArgs);
+    const { jsonMode, helpMode, pos } = parseCliArgs(rawArgs);
+    if (helpMode) { process.stdout.write(`${skillUsageText(event)}\n`); process.exitCode = 0; return 0; }
     const wikiDirArg = pos[0] ? path.resolve(pos[0]) : path.join(process.cwd(), 'omagy_wiki');
     const changesArg = pos[1] || '{}';
     let changes = {};

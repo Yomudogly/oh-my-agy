@@ -11,6 +11,7 @@ import {
   buildCompactClaudeContract,
   checkHostBundleDrift,
   detectHost,
+  defaultRuntimeDir,
   extractHostTranscriptRecords,
   hasClaudeRulesFile,
   isDesktopAppSession,
@@ -44,9 +45,7 @@ import {
   buildResearchMatrix,
   buildReviewPackage,
   canonicalizePath,
-  checkTestJunk,
   checkVerificationFreshness,
-  compareSessions,
   decideWatchVerdict,
   detectSkills,
   discoverOmagyScopes,
@@ -111,6 +110,8 @@ import {
   verifyPlanHash,
 } from './omagy-cli.mjs';
 import {
+  checkTestJunk,
+  compareSessions,
   initSkillScaffold,
   runNonLifecycleCli,
   validateSkillDirectory,
@@ -781,7 +782,7 @@ export function runG1SelftestChecks(ctx) {
 export async function runSelftest() {
   const results = [];
   const check = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail });
-  const defaultTmpRuntime = path.join(os.tmpdir(), 'oh-my-agy');
+  const defaultTmpRuntime = defaultRuntimeDir();
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-selftest-'));
   const prevRuntimeDir = process.env.OMAGY_RUNTIME_DIR;
   process.env.OMAGY_RUNTIME_DIR = path.join(ws, 'runtime');
@@ -3173,7 +3174,7 @@ export async function runSelftest() {
         && cxAsk.hookSpecificOutput?.permissionDecision === 'ask'
         && cxDeny.hookSpecificOutput?.permissionDecision === 'deny'
         && cxSys.systemMessage === 'confirm' && !cxSys.hookSpecificOutput
-        && JSON.parse(readFixture(path.join(process.env.OMAGY_RUNTIME_DIR || path.join(os.tmpdir(), 'oh-my-agy'), `${conv}-t53-agy.routing.json`))).host === 'antigravity';
+        && JSON.parse(readFixture(path.join(process.env.OMAGY_RUNTIME_DIR || defaultRuntimeDir(), `${conv}-t53-agy.routing.json`))).host === 'antigravity';
       t53Detail = `prio=${dPriority} desk=${deskPos && deskNeg} ag=${agMsgLen} cv=${claudeVf.status}/${codexVf.status}`;
     } catch (e) { /* fail open: capture T53 error detail */
       t53Detail = e instanceof Error ? e.message : String(e);
@@ -3509,7 +3510,10 @@ export async function runSelftest() {
       const pyTok = 'pypi-' + 'AgEIcHlwaS5vcmcCJDEyMzQ1Njc4OTA';
       const pem = '-----BEGIN ' + 'RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34Gkx\n-----END ' + 'RSA PRIVATE KEY-----';
       const dbUri = 'postgres://admin:' + 's3cr3tPass@db.internal:5432/app';
-      const sampleSecrets = [gKey, sKey, rKey, nTok, sgKey, awsKey, pyTok, pem, dbUri, 'healthy diagnostic text'].join('\n');
+      const curlU1 = 'curl -u admin:' + 'curlpass1 https://example.com';
+      const curlU2 = 'curl --user "alice:' + 'curlpass2" https://example.com';
+      const curlU3 = 'curl --user=bob:' + 'curlpass3 https://example.com';
+      const sampleSecrets = [gKey, sKey, rKey, nTok, sgKey, awsKey, pyTok, pem, dbUri, curlU1, curlU2, curlU3, 'healthy diagnostic text'].join('\n');
       const redactedOut = redactSecrets(sampleSecrets);
       const redactAllOk = redactedOut.includes('healthy diagnostic text')
         && !redactedOut.includes('SyD1234567890')
@@ -3518,7 +3522,11 @@ export async function runSelftest() {
         && !redactedOut.includes('1234567890ABCDEF')
         && !redactedOut.includes('AgEIcHlwaS5vcmc')
         && !redactedOut.includes('MIIBOgIBAAJBAKj34Gkx')
-        && !redactedOut.includes('s3cr3tPass');
+        && !redactedOut.includes('s3cr3tPass')
+        && !redactedOut.includes('curlpass1')
+        && !redactedOut.includes('curlpass2')
+        && !redactedOut.includes('curlpass3')
+        && redactedOut.includes('"alice:[REDACTED_SECRET]"');
 
       const t56Repo = path.join(ws, 't56-fg-repo');
       initTestGit(t56Repo);
