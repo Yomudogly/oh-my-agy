@@ -24,7 +24,8 @@
         "Investigate why the checkout retry queue drops events and give me a ranked cross-file synthesis with file references",
         "Analyze what is causing stale session tokens across auth middleware and worker handlers before making any changes",
         "Perform a read-only deep repository analysis with explicit confidence and evidence versus inference boundaries",
-        "Why does the webhook signature check fail intermittently across src/webhooks/verify.ts and src/http/rawBody.ts?"
+        "Why does the webhook signature check fail intermittently across src/webhooks/verify.ts and src/http/rawBody.ts?",
+        "Why is this pasted stack trace failing? TypeError: Cannot read properties of undefined (reading 'token') at verifySession (src/auth/session.ts:42:17) caused by middleware ordering"
       ],
       "negative": [
         {
@@ -96,7 +97,8 @@
         "Run a merge-readiness code review through independent code-reviewer and architect lanes before merging this branch",
         "Give me a quality and security code review assessment with a deterministic APPROVE or REQUEST CHANGES verdict",
         "Review this scoped diff `if (token == undefined) return true;` for merge readiness across reviewer and architect lanes",
-        "Assess merge readiness of our changes with two independent review subagent lanes"
+        "Assess merge readiness of our changes with two independent review subagent lanes",
+        "Review this pasted unified diff before we merge: diff --git a/src/auth.ts b/src/auth.ts @@ -10,4 +10,5 @@ - if (!session) return 401; + if (session == null) return 200;"
       ],
       "negative": [
         {
@@ -154,7 +156,8 @@
         "Check why subagents or lifecycle hooks are failing and audit stale workflow state and manifest health",
         "Audit runtime health including hook selftests, rules byte size, skills integrity, and stale state files",
         "Install, enable, or update the plugin in user or project scope and bootstrap a project AGENTS.md",
-        "Configure stop and idle notifications to Slack, Discord, or Telegram webhooks when the agent stops"
+        "Configure stop and idle notifications to Slack, Discord, or Telegram webhooks when the agent stops",
+        "Audit runtime temp-dir trust permissions with tmpdir-audit and inspect hook health and stale state"
       ],
       "negative": [
         {
@@ -281,7 +284,7 @@
     },
     "release": {
       "positive": [
-        "Prepare a versioned v0.7.0 release by checking release readiness, SemVer bump, CHANGELOG sync, and dry-run packaging",
+        "Prepare a versioned v0.8.0 release by checking release readiness, SemVer bump, CHANGELOG sync, and dry-run packaging",
         "Stage an end-to-end software release by checking license and docs readiness gates, synchronizing manifests, and running rollout checklists",
         "Generate verified release notes from git commits, sync package and plugin versions, and run dry-run validation",
         "Check if the repository passes pre-release readiness checks and assemble a rollout and rollback release playbook"
@@ -305,7 +308,8 @@
         "Manage project skills by scanning and validating SKILL.md files and removing an obsolete skill",
         "Scaffold a new project SKILL.md directory with bundled references and deterministic helper scripts",
         "Validate a custom skill folder frontmatter description, progressive-disclosure links, and 20KB byte budget",
-        "Share team skills in version control with .agents/skills.json entries and inherits filters"
+        "Share team skills in version control with .agents/skills.json entries and inherits filters",
+        "Run skill-validate --scope all --strict to verify project, shared, and user SKILL.md packs"
       ],
       "negative": [
         {

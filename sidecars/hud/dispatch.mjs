@@ -231,7 +231,7 @@ export async function dispatchViaCodexAppServer(wsUrl, opts = {}) {
     const runProtocolHandshake = async () => {
       try {
         await sendRpc('initialize', {
-          clientInfo: { name: 'oh-my-agy-hud', version: String(opts.version || '0.7.0') },
+          clientInfo: { name: 'oh-my-agy-hud', version: String(opts.version || '0.8.0') },
           capabilities: { experimentalApi: true },
         });
         await sendRpc('initialized', {}, true);
@@ -505,7 +505,7 @@ export async function dispatchDesktopHostAction(ctx, payload = {}, options = {})
         workspaceRoot,
         threadId: (mode === 'active-chat' || mode === 'subagent-active') ? (payload?.conversationId || options.threadId || '') : '',
         fallbackToNewThread: mode === 'active-chat',
-        version: options.version || '0.7.0',
+        version: options.version || '0.8.0',
         wsConnect: options.wsConnect,
       });
       if (wsRes.ok) {

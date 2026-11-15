@@ -1,6 +1,6 @@
 ---
 name: analyze
-description: "[oh-my-agy] Read-only deep repository analysis returning a ranked synthesis with explicit confidence, concrete file references, and evidence-vs-inference boundaries. Use when the user says 'analyze', 'investigate', 'why does', 'what's causing', or needs a grounded cross-file explanation before any changes."
+description: "[oh-my-agy] Read-only deep repository analysis returning a ranked synthesis with explicit confidence, concrete file references, and evidence-vs-inference boundaries. Use when the user says 'analyze', 'investigate', 'why does', 'what's causing', pastes a stack trace or runtime error log, or needs a grounded cross-file explanation before any changes."
 ---
 
 # Analyze — Read-Only Deep Analysis
@@ -11,7 +11,7 @@ Shared operating, delegation, state, and verification invariants live in the oh-
 
 ## Use when
 
-- The user needs a causal, architectural, behavioral, impact, or tradeoff explanation.
+- The user needs a causal, architectural, behavioral, impact, or tradeoff explanation (including diagnosing a pasted stack trace or runtime error log).
 - The answer requires tracing multiple files or boundaries, or ranking plausible explanations.
 - The user needs confidence and concrete evidence before changing anything.
 

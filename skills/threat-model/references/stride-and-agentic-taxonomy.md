@@ -36,7 +36,16 @@ Every boundary entry in a `$threat-model` deliverable must capture: Source Actor
 | **Repudiation** | Can an actor deny performing a mutation or erase audit trails? | Silent fallback catches masking errors, unlogged destructive tool calls, overwritten ledgers without history | Append-only audit logs with actor/session ID and UTC timestamps; preserve suppression/exemption audit reasons |
 | **Information Disclosure** | Can secrets, cross-tenant rows, or host paths leak in logs/errors? | Stack traces exposing `process.env`, literal secrets in configs, unredacted DB URIs, symlink workspace escapes, `/Users/` host paths | Run `redactSecrets` on logs/artifacts, scrub home paths, enforce canonical containment inside root, separate public errors |
 | **Denial of Service** | Can untrusted input exhaust memory, CPU, disk, or event loops? | Unbounded recursive file walks, catastrophic backtracking regexes, missing HTTP timeouts, oversize binary assets, infinite retry loops | Hard depth/file/byte caps (`maxBuffer`, timeouts), linear-time string/regex scanners, bounded retry/QA cycle limits |
-| **Elevation of Privilege** | Can a lower-privilege caller trigger admin/write actions or escape sandboxes? | SSRF to cloud metadata `169.254.169.254`, shell metacharacters in subprocess args, XSS in preview panes, over-broad CI `GITHUB_TOKEN` | Parameterized `execFileSync` (never invoke shell interpreters), private-IP SSRF blocking, strict CSP + HTML `esc()`, minimal CI `permissions:` |
+- **Elevation of Privilege** | Can a lower-privilege caller trigger admin/write actions or escape sandboxes? | SSRF to cloud metadata `169.254.169.254`, shell metacharacters in subprocess args, XSS in preview panes, over-broad CI `GITHUB_TOKEN` | Parameterized `execFileSync` (never invoke shell interpreters), private-IP SSRF blocking, strict CSP + HTML `esc()`, minimal CI `permissions:` |
+
+## OWASP Top 10:2025 & Local Runtime Trust Additions
+
+Evaluate **OWASP Top 10:2025** alongside classic STRIDE:
+- **`A01:2025` Broken Access Control** (now absorbs SSRF alongside IDOR, path traversal, and RBAC bypasses).
+- **`A02:2025` Security Misconfiguration**, **`A04:2025` Cryptographic Failures**, **`A05:2025` Injection**, **`A06:2025` Insecure Design**, **`A07:2025` Authentication Failures**, **`A08:2025` Software or Data Integrity Failures**, **`A09:2025` Security Logging and Alerting Failures**.
+- **`A03:2025` Software Supply Chain Failures**: lockfile/dependency tampering, unpinned remote scripts, Trojan Unicode, and skill/MCP manifest poisoning (`dep-license-diff`, `mcp-audit`, `skill-validate --strict`).
+- **`A10:2025` Mishandling of Exceptional Conditions**: fail-open `catch` blocks, uncaught malformed URL/socket crashes, symlink `TOCTOU` fallbacks, and unrotated logs.
+- **Shared Temp-Dir Trust Boundary**: never write secrets or session routing into shared world-writable `/tmp/<app>` folders; require `0o700` UID-scoped runtime dirs (`XDG_RUNTIME_DIR` or `<tmpdir>/<app>-<uid>`), `lstatSync` symlink rejection, bounded log rotation, and `tmpdir-audit` verification.
 
 ## Agentic, LLM & MCP Threat Extensions (OWASP LLM / Agentic)
 

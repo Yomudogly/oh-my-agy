@@ -10,7 +10,7 @@ Prepare, verify, and stage a versioned software release cleanly. Unlike `$pr` (w
 ## Usage
 
 ```text
-$release "0.7.0"
+$release "0.8.0"
 $release --check "validate release readiness without modifying manifests"
 $release --dry-run "prepare bump, changelog, and dry-run bundle validation"
 ```

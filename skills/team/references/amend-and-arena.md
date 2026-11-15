@@ -40,6 +40,7 @@ Instruction: Incorporate this update before final verification, re-run <verifica
    Confirm `ok: true` before dispatching or resuming any wave:
    - Zero duplicate task IDs or missing `depends_on` targets.
    - Zero DAG dependency cycles.
+   - Valid `status` enum and zero orphan `tasks/task-*.json` files when `tasks.json` declares task entries.
    - Explicit boolean `requires_code_change` on every task.
    - Zero phantom `in_progress` tasks missing `worker` or `conversation_id`.
 

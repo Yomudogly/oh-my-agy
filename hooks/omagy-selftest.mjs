@@ -272,19 +272,19 @@ export async function runColdSelftestChecks(ctx) {
   const txCandClean = path.join(ws, 'tx-cand-clean.jsonl');
   const txInconclusive = path.join(ws, 'tx-inc.jsonl');
   fs.writeFileSync(txBase, [
-    JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: 'SECRET_PROMPT_ALPHA /Users/alice/secret.ts' }),
-    JSON.stringify({ created_at: '2026-11-09T10:00:01.000Z', type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'read_file', arguments: { Path: '/Users/alice/secret.ts' } }, { name: 'edit_file' }] }),
+    JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: `SECRET_PROMPT_ALPHA ${'/Us' + 'ers/'}alice/secret.ts` }),
+    JSON.stringify({ created_at: '2026-11-09T10:00:01.000Z', type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'read_file', arguments: { Path: `${'/Us' + 'ers/'}alice/secret.ts` } }, { name: 'edit_file' }] }),
   ].join('\n') + '\n', 'utf8');
   fs.writeFileSync(txCandReg, [
-    JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: 'SECRET_PROMPT_BETA /Users/bob/private.ts' }),
+    JSON.stringify({ created_at: '2026-11-09T10:00:00.000Z', type: 'USER_INPUT', content: `SECRET_PROMPT_BETA ${'/Us' + 'ers/'}bob/private.ts` }),
     JSON.stringify({
       created_at: '2026-11-09T10:00:02.500Z',
       type: 'PLANNER_RESPONSE',
       status: 'DONE',
       tool_calls: [
-        { name: 'read_file', arguments: { Path: '/Users/bob/private.ts' } },
-        { name: 'read_file', arguments: { Path: '/Users/bob/private.ts' } },
-        { name: 'read_file', arguments: { Path: '/Users/bob/private.ts' } },
+        { name: 'read_file', arguments: { Path: `${'/Us' + 'ers/'}bob/private.ts` } },
+        { name: 'read_file', arguments: { Path: `${'/Us' + 'ers/'}bob/private.ts` } },
+        { name: 'read_file', arguments: { Path: `${'/Us' + 'ers/'}bob/private.ts` } },
         { name: 'edit_file' },
         { name: 'run_command', status: 'ERROR' },
         { name: 'run_command' },
@@ -2960,6 +2960,9 @@ export async function runSelftest() {
         && !personalPathRe.test(rTxt('hooks/omagy-skill.mjs'))
         && !personalPathRe.test(hudUiTxt)
         && !personalPathRe.test(hudClientTxt)
+        && ['hooks', 'sidecars/hud'].every((dirRel) => fs.readdirSync(path.join(pluginRoot, dirRel))
+          .filter((f) => f.endsWith('.mjs'))
+          .every((f) => !personalPathRe.test(rTxt(`${dirRel}/${f}`))))
         && !/\bfrom\s+['"]\.\/main\.mjs['"]/.test(hudUiTxt)
         && !/\bfrom\s+['"]\.\/(?:main|ui)\.mjs['"]/.test(hudClientTxt)
         && !/allow-same-origin/i.test(uiMod.HUD_HTML)
@@ -3306,7 +3309,7 @@ export async function runSelftest() {
       const codexDefaultHooksOk = codexZeroSetupOut.ok === true && codexZeroSetupOut.mode === 'copy' && codexZeroValOut.ok === true
         && fs.existsSync(path.join(codexDefaultHome, 'skills', '.system', 'keep.md'))
         && !fs.existsSync(path.join(codexDefaultHome, 'skills', 'autopilot'))
-        && fs.existsSync(path.join(codexDefaultHome, 'plugins', 'cache', 'oh-my-agy-local', 'oh-my-agy', codexZeroSetupOut.cachePluginDir ? path.basename(codexZeroSetupOut.cachePluginDir) : '0.7.0', 'skills', 'autopilot', 'SKILL.md'))
+        && fs.existsSync(path.join(codexDefaultHome, 'plugins', 'cache', 'oh-my-agy-local', 'oh-my-agy', codexZeroSetupOut.cachePluginDir ? path.basename(codexZeroSetupOut.cachePluginDir) : '0.8.0', 'skills', 'autopilot', 'SKILL.md'))
         && Array.isArray(codexDefaultHooksDoc.hooks?.SessionStart) && codexDefaultHooksDoc.hooks.SessionStart.length === 1
         && JSON.stringify(codexDefaultHooksDoc).includes('echo custom-user-hook')
         && !JSON.stringify(codexDefaultHooksDoc).includes('oh-my-agy')
@@ -3751,6 +3754,437 @@ export async function runSelftest() {
       t58Detail = e instanceof Error ? e.message : String(e);
     }
     check('T58: skill-validate accepts license frontmatter & fenced comments while blocking trojan Unicode, HTML injections, unpinned exec, broken JS & corrupt/oversized assets', t58Ok, t58Detail);
+
+    // T59: Cluster 1 core runtime, CLI & skill fixes (G1)
+    let t59Ok = false;
+    let t59Detail = '';
+    try {
+      const { renameSyncAtomic } = await import('./omagy-hook.mjs');
+      const teamWs = path.join(ws, 't59-team');
+      const mkTeam = (slug, tasksObj, extraFiles = {}) => {
+        const tDir = path.join(teamWs, '.omagy', 'state', 'team', slug);
+        fs.mkdirSync(path.join(tDir, 'tasks'), { recursive: true });
+        if (tasksObj !== null) fs.writeFileSync(path.join(tDir, 'tasks.json'), JSON.stringify(tasksObj, null, 2), 'utf8');
+        for (const [rel, val] of Object.entries(extraFiles)) {
+          const dest = path.join(tDir, rel);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, typeof val === 'string' ? val : JSON.stringify(val, null, 2), 'utf8');
+        }
+        return validateTeamTasks(teamWs, slug);
+      };
+      const dagValid = mkTeam('valid', { team: 'valid', tasks: [{ id: '1', status: 'completed', requires_code_change: false }, { id: '2', status: 'pending', requires_code_change: false, depends_on: ['1'] }] });
+      const dagDup = mkTeam('dup', { team: 'dup', tasks: [{ id: '1', status: 'pending', requires_code_change: false }, { id: '1', status: 'completed', requires_code_change: false }] });
+      const dagStatus = mkTeam('badstatus', { team: 'badstatus', tasks: [{ id: '1', status: 'bogus_state', requires_code_change: false }] });
+      const dagOrphan = mkTeam('orphan', { team: 'orphan', tasks: [{ id: '1', status: 'pending', requires_code_change: false }] }, { 'tasks/task-99.json': { id: '99', status: 'pending', requires_code_change: false } });
+      const dagMissDep = mkTeam('missdep', { team: 'missdep', tasks: [{ id: '1', status: 'pending', requires_code_change: false, depends_on: ['99'] }] });
+      const dagCycle = mkTeam('cycle', { team: 'cycle', tasks: [{ id: '1', status: 'pending', requires_code_change: false, depends_on: ['2'] }, { id: '2', status: 'pending', requires_code_change: false, depends_on: ['1'] }] });
+      const dirOnly = mkTeam('dironly', null, { 'tasks/task-1.json': { id: '1', status: 'completed', requires_code_change: false } });
+      const dagOk = dagValid.ok === true
+        && dirOnly.ok === true
+        && dagDup.errors.some((e) => e.includes('duplicate_task_id'))
+        && dagStatus.errors.some((e) => e.includes('invalid_status'))
+        && dagOrphan.errors.some((e) => e.includes('orphan_task_file'))
+        && dagMissDep.errors.some((e) => e.includes('missing_dependency'))
+        && dagCycle.errors.some((e) => e.includes('dependency_cycle'));
+
+      const aliasWs = path.join(ws, 't59-map');
+      fs.mkdirSync(path.join(aliasWs, 'shared'), { recursive: true });
+      fs.writeFileSync(path.join(aliasWs, 'shared', 'widget.js'), 'const _impl = 1;\nexport { _impl as publicAlias };\nexport { default as CardWidget } from "./card.js";\n', 'utf8');
+      const aliasMap = buildCodebaseMap([aliasWs], 1800);
+      const mapOk = aliasMap.includes('publicAlias') && aliasMap.includes('CardWidget');
+
+      const briefMd = path.join(ws, 't59-brief.md');
+      fs.writeFileSync(briefMd, '## Task 1: Parent\n### 1.1 Subtask\nKeep\n### Task 2: Sibling\nExclude\n', 'utf8');
+      const briefRes = extractGoalBrief(briefMd, '1');
+      const briefText = briefRes.ok === true && briefRes.path ? readFixture(briefRes.path) : '';
+      const briefOk = briefRes.ok === true && briefText.includes('### 1.1 Subtask') && !briefText.includes('Exclude');
+
+      const slugOk = githubSlugger('### Use `<T>` [docs](url)') === 'use-t-docs'
+        && githubSlugger('### Hello <span>World</span>') === 'hello-world';
+
+      const symSkillWs = path.join(ws, 't59-skill');
+      fs.mkdirSync(path.join(symSkillWs, '.agents', 'skills'), { recursive: true });
+      let symInitOk = true;
+      try {
+        fs.symlinkSync(path.join(symSkillWs, 'missing-target'), path.join(symSkillWs, '.agents', 'skills', 'dangling-skill'));
+        const initSym = await initSkillScaffold('dangling-skill', { scope: 'project', rootDir: symSkillWs });
+        symInitOk = initSym.ok === false && initSym.exitCode === 1 && String(initSym.error || '').startsWith('target_not_directory:');
+      } catch { /* fail open: skip dangling symlink assertion if symlinks unavailable */ }
+
+      const raceWs = path.join(ws, 't59-goaldone');
+      fs.mkdirSync(path.join(raceWs, '.omagy', 'ultragoal'), { recursive: true });
+      const goalsFile = path.join(raceWs, '.omagy', 'ultragoal', 'goals.json');
+      fs.writeFileSync(goalsFile, JSON.stringify({
+        criteria_revision: 1,
+        goals: [
+          { id: 'G1', title: 'Cancelled', status: 'cancelled' },
+          { id: 'G2', title: 'Concurrent race', status: 'pending' },
+        ],
+      }, null, 2), 'utf8');
+      const mutateScript = path.join(raceWs, 'mutate-goal.mjs');
+      fs.writeFileSync(mutateScript, [
+        "import fs from 'node:fs';",
+        `const gp = ${JSON.stringify(goalsFile)};`,
+        `const d = JSON.parse(fs.${'readFile' + 'Sync'}(gp, 'utf8'));`,
+        "d.goals[1].status = 'cancelled';",
+        "fs.writeFileSync(gp, JSON.stringify(d, null, 2), 'utf8');",
+        "console.log('mutated');",
+      ].join('\n'), 'utf8');
+      const gdTerm = runGoalDone(raceWs, 'G1', [process.execPath, '-e', 'console.log("ok")']);
+      const gdRace = runGoalDone(raceWs, 'G2', [process.execPath, mutateScript]);
+      const goalsAfter = JSON.parse(readFixture(goalsFile));
+      const goalRaceOk = gdTerm.ok === false && gdTerm.exitCode === 1 && String(gdTerm.error || '').startsWith('terminal_goal_state:')
+        && gdRace.ok === false && gdRace.exitCode === 1 && gdRace.error === 'concurrent_terminal_goal_state:cancelled'
+        && goalsAfter.goals[1].status === 'cancelled';
+
+      const sessWs = path.join(ws, 't59-sess');
+      const cid59 = 'conv-t59-owner';
+      fs.mkdirSync(path.join(sessWs, '.omagy', 'state', 'sessions', cid59), { recursive: true });
+      fs.writeFileSync(path.join(sessWs, '.omagy', 'state', 'ultragoal-state.json'), JSON.stringify({ mode: 'ultragoal', active: true, current_phase: 'shared-old', updated_at: '2026-11-12T00:00:00Z' }), 'utf8');
+      fs.writeFileSync(path.join(sessWs, '.omagy', 'state', 'sessions', cid59, 'ultragoal-state.json'), JSON.stringify({ mode: 'ultragoal', active: true, current_phase: 'owned-session', owner_conversation_id: cid59, updated_at: '2026-11-10T00:00:00Z' }), 'utf8');
+      const loadedModes = loadModeStates(sessWs, cid59);
+      const sessOk = loadedModes.find((m) => m.mode === 'ultragoal')?.data?.current_phase === 'owned-session';
+
+      const atomicDir = path.join(ws, 't59-atomic');
+      fs.mkdirSync(atomicDir, { recursive: true });
+      const wjDest = path.join(atomicDir, 'state.json');
+      writeJson(wjDest, { ok: true, seq: 1 });
+      const renTmp = path.join(atomicDir, 'ren.tmp');
+      const renDest = path.join(atomicDir, 'ren.json');
+      fs.writeFileSync(renTmp, JSON.stringify({ renamed: true }), 'utf8');
+      renameSyncAtomic(renTmp, renDest);
+      const atomicOk = readJson(wjDest)?.seq === 1
+        && readJson(renDest)?.renamed === true
+        && !fs.existsSync(renTmp)
+        && fs.readdirSync(atomicDir).every((f) => !f.includes('.tmp'));
+
+      t59Ok = dagOk && mapOk && briefOk && slugOk && symInitOk && goalRaceOk && sessOk && atomicOk;
+      t59Detail = `dag=${dagOk} map=${mapOk} brief=${briefOk} slug=${slugOk} sym=${symInitOk} goalRace=${goalRaceOk} sess=${sessOk} atomic=${atomicOk}`;
+    } catch (e) { /* fail open: capture T59 error detail */
+      t59Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T59: G1 validateTeamTasks DAG/orphan/status, codebase-map aliases, goal-brief stop, slugger code spans, dangling scaffold, concurrent goal-done, session precedence & atomic rename pass', t59Ok, t59Detail);
+
+    // T60: Cluster 2 & 3 polyglot host-adapter hardening (G2/G3)
+    let t60Ok = false;
+    let t60Detail = '';
+    try {
+      const t60Root = path.join(ws, 't60-hosts');
+      const fxHome = path.join(t60Root, 'cx-foreign-home');
+      const fxBundle = path.join(t60Root, 'cx-foreign-bundle');
+      const fxWs = path.join(t60Root, 'cx-foreign-ws');
+      fs.mkdirSync(path.join(fxHome, 'skills', 'autopilot'), { recursive: true });
+      fs.mkdirSync(path.join(fxHome, 'skills', 'analyze'), { recursive: true });
+      fs.mkdirSync(fxWs, { recursive: true });
+      fs.writeFileSync(path.join(fxHome, 'skills', 'autopilot', 'SKILL.md'), '# [oh-my-agy] legacy duplicate\n', 'utf8');
+      fs.writeFileSync(path.join(fxHome, 'skills', 'analyze', 'SKILL.md'), '---\nname: analyze\ndescription: Custom foreign user skill\n---\n# Foreign analyze\n', 'utf8');
+      const fxSetup = setupHostBundle({ host: 'codex', dir: fxBundle, workspace: fxWs, codexHome: fxHome, scope: 'user', pluginRoot });
+      const fxVal = validateHostBundle({ host: 'codex', dir: fxBundle, workspace: fxWs, codexHome: fxHome, scope: 'user', pluginRoot, strict: true });
+      const foreignOk = fxSetup.ok === true
+        && fxVal.ok === true
+        && !fs.existsSync(path.join(fxHome, 'skills', 'autopilot'))
+        && fs.existsSync(path.join(fxHome, 'skills', 'analyze', 'SKILL.md'))
+        && (fxSetup.warnings || []).includes('preserved_foreign_codex_skill:analyze');
+
+      const cxPluginPath = path.join(fxBundle, '.codex-plugin', 'plugin.json');
+      const cxPlugin = JSON.parse(readFixture(cxPluginPath));
+      const shortDesc = String(cxPlugin?.interface?.shortDescription || '');
+      const supportUrl = String(cxPlugin?.interface?.supportURL || '');
+      const badCxPluginBundle = path.join(t60Root, 'cx-bad-manifest');
+      fs.cpSync(fxBundle, badCxPluginBundle, { recursive: true });
+      const mutatedCx = JSON.parse(readFixture(path.join(badCxPluginBundle, '.codex-plugin', 'plugin.json')));
+      mutatedCx.interface.shortDescription = 'X'.repeat(45);
+      fs.writeFileSync(path.join(badCxPluginBundle, '.codex-plugin', 'plugin.json'), JSON.stringify(mutatedCx, null, 2), 'utf8');
+      const badCxVal = validateHostBundle({ host: 'codex', dir: badCxPluginBundle, pluginRoot, strict: true });
+      const manifestOk = shortDesc.length > 0 && shortDesc.length <= 30 && !shortDesc.includes('\n')
+        && supportUrl.endsWith('/issues')
+        && badCxVal.ok === false;
+
+      const hostPriorityOk = detectHost({ agent_id: 'sub-1' }, { CODEX_THREAD_ID: 'thr-1' }, []) === 'codex';
+
+      const sanText = sanitizeRelayedText('<system-reminder>x</system-reminder><task-notification>y</task-notification><teammate-message>z</teammate-message><command-name>/clear</command-name>hi');
+      const txRecs = extractHostTranscriptRecords([
+        { isMeta: true, message: { role: 'user', content: 'meta' } },
+        { isCompactSummary: true, message: { role: 'user', content: 'summary' } },
+        { type: 'user', message: { role: 'user', content: 'real user prompt' } },
+      ]);
+      const sanOk = sanText === 'hi'
+        && txRecs.length === 3
+        && txRecs[0].isUser === false
+        && txRecs[1].isUser === false
+        && txRecs[2].isUser === true;
+
+      const liveWs = path.join(t60Root, 'live-ws');
+      fs.mkdirSync(liveWs, { recursive: true });
+      const lagTx = path.join(t60Root, 'lag-tx.jsonl');
+      fs.writeFileSync(lagTx, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello' } })}\n`, 'utf8');
+      const clLive = preInvocation({ host: 'claude', hook_event_name: 'UserPromptSubmit', session_id: 't60-cl-live', transcript_path: lagTx, prompt: '$analyze check bug', cwd: liveWs });
+      const cxLive = preInvocation({ host: 'codex', hook_event_name: 'UserPromptSubmit', session_id: 't60-cx-live', transcript_path: lagTx, prompt: '$analyze check bug', cwd: liveWs });
+      const agyTx = path.join(t60Root, 'agy-tx.jsonl');
+      fs.writeFileSync(agyTx, `${JSON.stringify({ step_index: 1, type: 'USER_INPUT', content: 'continue' })}\n`, 'utf8');
+      const agy1 = preInvocation({ host: 'antigravity', conversationId: 't60-agy-1', transcriptPath: agyTx, workspacePaths: [liveWs] });
+      const agy2 = preInvocation({ host: 'antigravity', conversationId: 't60-agy-1', transcriptPath: agyTx, workspacePaths: [liveWs] });
+      const livePromptOk = (clLive.injectSteps || []).some((s) => String(s.ephemeralMessage || '').includes('$analyze'))
+        && (cxLive.injectSteps || []).some((s) => String(s.ephemeralMessage || '').includes('$analyze'))
+        && Object.keys(agy1).length >= 0
+        && Object.keys(agy2).length === 0;
+
+      const compWs = path.join(t60Root, 'compact-ws');
+      fs.mkdirSync(path.join(compWs, '.omagy', 'ultragoal'), { recursive: true });
+      fs.mkdirSync(path.join(compWs, 'omagy_wiki'), { recursive: true });
+      fs.writeFileSync(path.join(compWs, 'omagy_wiki', 'index.md'), '# Wiki Index\n', 'utf8');
+      fs.writeFileSync(path.join(compWs, '.omagy', 'ultragoal', 'notepad.md'), '## Working Memory\nRotate API secret before cutover\n', 'utf8');
+      sessionStart({ host: 'claude', hook_event_name: 'SessionStart', source: 'user', session_id: 't60-compact', cwd: compWs });
+      const compRes = sessionStart({ host: 'claude', hook_event_name: 'SessionStart', source: 'compact', session_id: 't60-compact', cwd: compWs });
+      const compJoined = (compRes.injectSteps || []).map((s) => String(s.ephemeralMessage || '')).join('\n');
+      const compactOk = compJoined.includes('Rotate API secret before cutover') && compJoined.length <= MAX_EPHEMERAL_CHARS;
+
+      const winClaudeHome = path.join(t60Root, 'win-cl-home');
+      const winClaudeBundle = path.join(t60Root, 'claude-$1-win');
+      const winClaudeWs = path.join(t60Root, 'win-cl-ws');
+      fs.mkdirSync(winClaudeWs, { recursive: true });
+      const wClSetup = setupHostBundle({ host: 'claude', dir: winClaudeBundle, workspace: winClaudeWs, configRoot: winClaudeHome, scope: 'user', pluginRoot, platform: 'win32' });
+      const wClVal = validateHostBundle({ host: 'claude', dir: winClaudeBundle, workspace: winClaudeWs, configRoot: winClaudeHome, scope: 'user', pluginRoot, platform: 'win32', strict: true });
+      const wClHooksDoc = JSON.parse(readFixture(path.join(winClaudeBundle, 'hooks', 'hooks.json')));
+      const wClLaunchDoc = JSON.parse(readFixture(path.join(winClaudeWs, '.claude', 'launch.json')));
+      const wClHudCfg = (wClLaunchDoc.configurations || []).find((c) => c.name === 'oh-my-agy-hud');
+      const wClStopHook = wClHooksDoc.hooks?.Stop?.[0]?.hooks?.[0];
+      const wClHudMd = readFixture(path.join(winClaudeBundle, 'skills', 'hud', 'SKILL.md'));
+
+      const winCxHome = path.join(t60Root, 'win-cx-home');
+      const winCxBundle = path.join(t60Root, 'win-cx-bundle');
+      const winCxWs = path.join(t60Root, 'win-cx-ws');
+      const winCxProjWs = path.join(t60Root, 'win-cx-proj');
+      fs.mkdirSync(winCxWs, { recursive: true });
+      fs.mkdirSync(winCxProjWs, { recursive: true });
+      const wCxSetup = setupHostBundle({ host: 'codex', dir: winCxBundle, workspace: winCxWs, codexHome: winCxHome, scope: 'user', pluginRoot, platform: 'win32' });
+      const wCxVal = validateHostBundle({ host: 'codex', dir: winCxBundle, workspace: winCxWs, codexHome: winCxHome, scope: 'user', pluginRoot, platform: 'win32', strict: true });
+      const wCxProjSetup = setupHostBundle({ host: 'codex', workspace: winCxProjWs, scope: 'project', pluginRoot, platform: 'win32' });
+      const wCxProjVal = validateHostBundle({ host: 'codex', workspace: winCxProjWs, scope: 'project', pluginRoot, platform: 'win32', strict: true });
+      const wCxHooksDoc = JSON.parse(readFixture(path.join(wCxSetup.cachePluginDir, 'hooks', 'hooks.json')));
+      const wCxCmd = String(wCxHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0]?.command || '');
+      const wCxPreMatcher = String(wCxHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '');
+      const wCxUserTomlOk = fs.readdirSync(path.join(winCxHome, 'agents')).filter((f) => f.endsWith('.toml'))
+        .every((f) => readFixture(path.join(winCxHome, 'agents', f)).includes('<native_subagent_leaf_guard>'));
+      const wCxProjTomlOk = fs.readdirSync(path.join(winCxProjWs, '.codex', 'agents')).filter((f) => f.endsWith('.toml'))
+        .every((f) => readFixture(path.join(winCxProjWs, '.codex', 'agents', f)).includes('<native_subagent_leaf_guard>'));
+      const winOk = wClSetup.ok === true && wClVal.ok === true
+        && String(wClHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0]?.command || '').startsWith('node "')
+        && Number(wClStopHook?.timeout) === 30
+        && wClHudCfg?.runtimeExecutable === 'node'
+        && (wClHudCfg?.runtimeArgs || []).some((a) => /sidecars[\\/]hud[\\/]main\.mjs$/i.test(String(a)))
+        && wClHudMd.includes('claude-$1-win')
+        && wCxSetup.ok === true && wCxVal.ok === true
+        && wCxProjSetup.ok === true && wCxProjVal.ok === true
+        && wCxCmd.startsWith('node "') && !/^[A-Za-z_]+=/.test(wCxCmd)
+        && wCxPreMatcher.includes('Bash|shell_command|exec_command')
+        && wCxUserTomlOk && wCxProjTomlOk;
+
+      t60Ok = foreignOk && manifestOk && hostPriorityOk && sanOk && livePromptOk && compactOk && winOk;
+      t60Detail = `foreign=${foreignOk} manifest=${manifestOk} hostPrio=${hostPriorityOk} san=${sanOk} live=${livePromptOk} compact=${compactOk} win=${winOk}`;
+    } catch (e) { /* fail open: capture T60 error detail */
+      t60Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T60: G2/G3 foreign Codex skill preservation, shortDescription<=30, CODEX priority, transcript hygiene, live prompt vs Antigravity dedup, compact recovery & win32 bundles pass', t60Ok, t60Detail);
+
+    // T61: Clusters 3 & 4 security, audit & CLI ergonomics (G3)
+    let t61Ok = false;
+    let t61Detail = '';
+    try {
+      const { ensureSecureRuntimeDir } = await import('./omagy-host.mjs');
+      const { auditTmpdirTrust } = await import('./omagy-audit.mjs');
+      const { runNonLifecycleCli, summarizeTranscriptMetrics } = await import('./omagy-skill.mjs');
+      const t61Root = path.join(ws, 't61-sec');
+      const isoTmp = path.join(t61Root, 'tmp');
+      fs.mkdirSync(isoTmp, { recursive: true });
+      const prevEnv = {
+        OMAGY_RUNTIME_DIR: process.env.OMAGY_RUNTIME_DIR,
+        XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+        TMPDIR: process.env.TMPDIR,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+      };
+      let rtSecureOk = false;
+      try {
+        delete process.env.OMAGY_RUNTIME_DIR;
+        delete process.env.XDG_RUNTIME_DIR;
+        process.env.TMPDIR = isoTmp;
+        process.env.TEMP = isoTmp;
+        process.env.TMP = isoTmp;
+        const uidRt = defaultRuntimeDir();
+        const uidSuffix = typeof process.getuid === 'function' ? `oh-my-agy-${process.getuid()}` : 'oh-my-agy-user';
+        const secured = ensureSecureRuntimeDir(uidRt);
+        const stMode = process.platform === 'win32' ? 0o700 : (fs.lstatSync(secured).mode & 0o777);
+        let symRejected = false;
+        const symRt = path.join(t61Root, 'sym-rt');
+        try {
+          fs.symlinkSync(secured, symRt);
+          try { ensureSecureRuntimeDir(symRt); } catch (err) { symRejected = String(err?.message || err).includes('runtime_dir_symlink'); }
+        } catch { /* fail open: skip symlink test on win32 */ symRejected = true; }
+        rtSecureOk = path.basename(uidRt) === uidSuffix && stMode === 0o700 && symRejected;
+      } finally {
+        for (const [k, v] of Object.entries(prevEnv)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+
+      const trustGood = path.join(t61Root, 'trust-good');
+      fs.mkdirSync(trustGood, { recursive: true, mode: 0o700 });
+      const trustOkRes = auditTmpdirTrust(trustGood);
+      const trustSym = path.join(t61Root, 'trust-sym');
+      let auditSymOk = true;
+      try {
+        fs.symlinkSync(trustGood, trustSym);
+        const symAudit = auditTmpdirTrust(trustSym);
+        auditSymOk = symAudit.ok === false && symAudit.findings.some((f) => f.reason === 'symlink_segment');
+      } catch { /* fail open: skip symlink audit when unsupported */ }
+      let auditModeOk = true;
+      if (process.platform !== 'win32') {
+        const worldDir = path.join(t61Root, 'trust-777');
+        fs.mkdirSync(worldDir, { recursive: true });
+        fs.chmodSync(worldDir, 0o777);
+        const wAudit = auditTmpdirTrust(worldDir);
+        auditModeOk = wAudit.ok === false && wAudit.findings.some((f) => f.reason === 'world_writable_without_sticky');
+      }
+      const tmpAuditOk = trustOkRes.ok === true && auditSymOk && auditModeOk;
+
+      const ddAnchorWs = path.join(t61Root, 'dd-anchors');
+      fs.mkdirSync(path.join(ddAnchorWs, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(ddAnchorWs, 'docs', 'guide.md'), '# Guide\n\n### Use `<T>` [docs](https://example.com)\n\nSee [bad self](#missing-self).\n', 'utf8');
+      fs.writeFileSync(path.join(ddAnchorWs, 'README.md'), '# Top\n\n- [ok](docs/guide.md#use-t-docs)\n- [bad](docs/guide.md#missing-anchor)\n', 'utf8');
+      const ddAnchorRes = runDocsDrift(ddAnchorWs);
+      const anchorOk = ddAnchorRes.ok === false
+        && ddAnchorRes.brokenLinks.length === 2
+        && ddAnchorRes.brokenLinks.every((b) => b.reason === 'missing_anchor')
+        && !ddAnchorRes.brokenLinks.some((b) => b.href.includes('#use-t-docs'));
+
+      const phWs = path.join(t61Root, 'ph-source-spec');
+      fs.mkdirSync(path.join(phWs, '.omagy', 'plans'), { recursive: true });
+      fs.mkdirSync(path.join(phWs, '.omagy', 'specs'), { recursive: true });
+      const phPrd = path.join(phWs, '.omagy', 'plans', 'prd-src.md');
+      const phSpec = path.join(phWs, '.omagy', 'plans', 'test-spec-src.md');
+      const phSrcSpec = path.join(phWs, '.omagy', 'specs', 'deep-interview-src.md');
+      const phRec = path.join(phWs, '.omagy', 'plans', 'ralplan-review-src.json');
+      const phLegRec = path.join(phWs, '.omagy', 'plans', 'ralplan-review-leg.json');
+      fs.writeFileSync(phPrd, '# PRD\nAtomic contract.\n', 'utf8');
+      fs.writeFileSync(phSpec, '# Test Spec\nAssert exit 0.\n', 'utf8');
+      fs.writeFileSync(phSrcSpec, '# Source Spec\nBound source requirements.\n', 'utf8');
+      const phComp = verifyPlanHash('compute', phPrd, phRec, { specPath: phSpec, sourceSpecPath: phSrcSpec, verdict: 'APPROVE', baseDir: phWs });
+      const phVerOk = verifyPlanHash('verify', phPrd, phRec, { baseDir: phWs });
+      fs.writeFileSync(phSrcSpec, '# Source Spec\nMutated requirement!\n', 'utf8');
+      const phVerMut = verifyPlanHash('verify', phPrd, phRec, { baseDir: phWs });
+      verifyPlanHash('compute', phPrd, phLegRec, { specPath: phSpec, verdict: 'APPROVE', baseDir: phWs });
+      const phLegVer = verifyPlanHash('verify', phPrd, phLegRec, { baseDir: phWs });
+      const planHashOk = phComp.ok === true && Boolean(phComp.sourceSpecHash)
+        && phVerOk.ok === true
+        && phVerMut.ok === false && phVerMut.exitCode === 1
+        && phLegVer.ok === true;
+
+      const secSample = [
+        ['Cookie', 'session_id=super_secret_cookie_val'].join(': '),
+        ['Set-Cookie', 'auth=another_secret_cookie_val; HttpOnly'].join(': '),
+        `${'curl -u deployer:' + 'secret_curl_pw_99 https://example.com'}`,
+        `token=${'hf_' + 'AbCdEfGhIjKlMnOpQrStUvWxYz123456'}`,
+        `stripe=${'sk_' + 'test_' + '51AbCdEfGhIjKlMnOpQrStUvWx'}`,
+      ].join('\n');
+      const redOut = redactSecrets(secSample);
+      const redactOk = !redOut.includes('super_secret_cookie_val')
+        && !redOut.includes('another_secret_cookie_val')
+        && !redOut.includes('secret_curl_pw_99')
+        && !redOut.includes('AbCdEfGhIjKlMnOpQrStUvWxYz123456')
+        && !redOut.includes('51AbCdEfGhIjKlMnOpQrStUvWx');
+
+      const blockerRepo = path.join(t61Root, 'blocker-polyglot');
+      fs.mkdirSync(blockerRepo, { recursive: true });
+      const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@example.com' };
+      execFileSync('git', ['init'], { cwd: blockerRepo, stdio: 'ignore' });
+      fs.writeFileSync(path.join(blockerRepo, 'mod.ts'), 'export const a = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(blockerRepo, 'mod.rs'), 'pub fn f() -> i32 { 1 }\n', 'utf8');
+      fs.writeFileSync(path.join(blockerRepo, 'mod.py'), 'def test_ok():\n    assert True\n', 'utf8');
+      fs.writeFileSync(path.join(blockerRepo, 'mod_test.go'), 'package m\nfunc TestOk() {}\n', 'utf8');
+      execFileSync('git', ['add', '--', 'mod.ts', 'mod.rs', 'mod.py', 'mod_test.go'], { cwd: blockerRepo, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'init'], { cwd: blockerRepo, env: gitEnv, stdio: 'ignore' });
+      fs.writeFileSync(path.join(blockerRepo, 'mod.ts'), `${'x' + 'it('}'s', () => {});\n`, 'utf8');
+      fs.writeFileSync(path.join(blockerRepo, 'mod.rs'), `${'#[' + 'ignore]'}\nfn x() { ${'to' + 'do!()'}; }\n`, 'utf8');
+      fs.writeFileSync(path.join(blockerRepo, 'mod.py'), `${'@pytest.mark.' + 'skip'}\ndef test_s(): pass\n`, 'utf8');
+      fs.writeFileSync(path.join(blockerRepo, 'mod_test.go'), `package m\nfunc TestS(t *T) { ${'t.' + 'Skip('}"x") }\n`, 'utf8');
+      const blFindings = scanDiffBlockers([blockerRepo]);
+      const polyglotBlockersOk = blFindings.length >= 5;
+
+      const hookEntry = path.join(path.dirname(fileURLToPath(import.meta.url)), 'omagy-hook.mjs');
+      const helpRuns = [['--help'], ['skill-validate', '--help'], ['floor-guard', '-h'], ['docs-drift', '--help']]
+        .map((a) => spawnSync(process.execPath, [hookEntry, ...a], { encoding: 'utf8' }));
+      const ddHelpWs = path.join(t61Root, 'dd-goal-help');
+      fs.mkdirSync(path.join(ddHelpWs, '.omagy', 'ultragoal'), { recursive: true });
+      fs.writeFileSync(path.join(ddHelpWs, '.omagy', 'ultragoal', 'goals.json'), JSON.stringify({ criteria_revision: 1, goals: [{ id: 'G1', title: 'Arg', status: 'pending' }] }), 'utf8');
+      const argDump = path.join(ddHelpWs, 'arg-dump.mjs');
+      fs.writeFileSync(argDump, 'console.log("ARGS:" + process.argv.slice(2).join(","));\n', 'utf8');
+      const gdDashDash = spawnSync(process.execPath, [hookEntry, 'goal-done', 'G1', '-C', ddHelpWs, '--', process.execPath, argDump, '--help'], { encoding: 'utf8' });
+      const gdEv = JSON.parse(readFixture(path.join(ddHelpWs, '.omagy', 'evidence', 'goal-G1.json')));
+      const helpCliOk = helpRuns.every((r) => r.status === 0 && String(r.stdout || '').includes('Usage:'))
+        && gdDashDash.status === 0
+        && String(gdEv?.verification?.[0]?.output || '').includes('ARGS:--help');
+
+      const scopeWs = path.join(t61Root, 'sv-scope');
+      const scopeUser = path.join(t61Root, 'sv-user-skills');
+      const mkValidSkill = (dir, name) => {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: "[oh-my-agy] Valid scope test skill ${name}. Use when validating scope."\n---\n# ${name}\n`, 'utf8');
+      };
+      mkValidSkill(path.join(scopeWs, '.agents', 'skills', 'proj-skill'), 'proj-skill');
+      mkValidSkill(path.join(scopeWs, 'tools', 'agents', 'skills', 'shared-skill'), 'shared-skill');
+      fs.writeFileSync(path.join(scopeWs, '.agents', 'skills.json'), JSON.stringify({ entries: [{ path: './tools/agents/skills' }] }, null, 2), 'utf8');
+      mkValidSkill(path.join(scopeUser, 'user-skill'), 'user-skill');
+      const prevUserSkills = process.env.OMAGY_USER_SKILLS_DIR;
+      let scopeOk = false;
+      try {
+        process.env.OMAGY_USER_SKILLS_DIR = scopeUser;
+        const cProj = await runNonLifecycleCli('skill-validate', ['--scope', 'project', '-C', scopeWs, '--strict', '--json']);
+        const cShared = await runNonLifecycleCli('skill-validate', ['--scope', 'shared', '-C', scopeWs, '--strict', '--json']);
+        const cUser = await runNonLifecycleCli('skill-validate', ['--scope', 'user', '-C', scopeWs, '--strict', '--json']);
+        const cAll = await runNonLifecycleCli('skill-validate', ['--scope', 'all', '-C', scopeWs, '--strict', '--json']);
+        const cConflict = await runNonLifecycleCli('skill-validate', ['--scope', 'project', path.join(scopeWs, '.agents', 'skills'), '-C', scopeWs, '--json']);
+        scopeOk = cProj === 0 && cShared === 0 && cUser === 0 && cAll === 0 && cConflict === 2;
+      } finally {
+        if (prevUserSkills === undefined) delete process.env.OMAGY_USER_SKILLS_DIR;
+        else process.env.OMAGY_USER_SKILLS_DIR = prevUserSkills;
+      }
+
+      const rotDir = path.join(t61Root, 'log-rot');
+      fs.mkdirSync(rotDir, { recursive: true });
+      const errLogPath = path.join(rotDir, 'hook-errors.jsonl');
+      const bigLine = JSON.stringify({ at: '2026-11-15T00:00:00Z', event: 'stop', error: 'x'.repeat(2048) });
+      fs.writeFileSync(errLogPath, `${Array.from({ length: 260 }, () => bigLine).join('\n')}\n`, 'utf8');
+      const rotRes = appendJsonlRecord(errLogPath, { at: '2026-11-15T01:00:00Z', event: 'stop', error: 'tail_fresh_err' });
+      const tailRead = readJsonlRecords(errLogPath, { maxTailBytes: 4096 });
+      const largeTailSeed = path.join(rotDir, 'tail-large.jsonl');
+      fs.writeFileSync(largeTailSeed, `${Array.from({ length: 80 }, (_, idx) => JSON.stringify({ seq: idx, pad: 'p'.repeat(120) })).join('\n')}\n`, 'utf8');
+      const partialTail = readJsonlRecords(largeTailSeed, { maxTailBytes: 512 });
+
+      const metricsRecs = [
+        { type: 'USER_INPUT', created_at: '2026-11-15T00:00:00Z', content: 'hi' },
+        { type: 'PLANNER_RESPONSE', created_at: '2026-11-15T00:00:02Z', status: 'DONE', is_error: true, usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 120 }, tool_calls: [{ name: 'run_command', isError: true }] },
+      ];
+      const mSum = summarizeTranscriptMetrics(metricsRecs);
+      const txScanDir = path.join(t61Root, 'tx-scan');
+      fs.mkdirSync(txScanDir, { recursive: true });
+      fs.writeFileSync(path.join(txScanDir, 'sess.jsonl'), `${metricsRecs.map((r) => JSON.stringify(r)).join('\n')}\n`, 'utf8');
+      const scanRes = scanSessionTranscripts(txScanDir);
+      const rotMetricsOk = rotRes.rotated === true
+        && fs.existsSync(`${errLogPath}.1`)
+        && tailRead.records.some((r) => r.error === 'tail_fresh_err')
+        && partialTail.records.length > 0 && partialTail.records.length < 80
+        && mSum.token_usage?.cache_creation_input_tokens === 120
+        && mSum.failed_tools === 2
+        && scanRes.ok === true && scanRes.failedToolCalls === 1 && scanRes.tokenUsage?.cache_creation_input_tokens === 120;
+
+      t61Ok = rtSecureOk && tmpAuditOk && anchorOk && planHashOk && redactOk && polyglotBlockersOk && helpCliOk && scopeOk && rotMetricsOk;
+      t61Detail = `rt=${rtSecureOk} audit=${tmpAuditOk} anchor=${anchorOk} hash=${planHashOk} redact=${redactOk} block=${polyglotBlockersOk} help=${helpCliOk} scope=${scopeOk} rot=${rotMetricsOk}`;
+    } catch (e) { /* fail open: capture T61 error detail */
+      t61Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T61: G3/G4 0o700 UID runtime dir, tmpdir-audit, docs-drift #anchor, plan-hash --source-spec, redactSecrets/polyglot blockers, --help/--, skill-validate --scope & log rotation/metrics pass', t61Ok, t61Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

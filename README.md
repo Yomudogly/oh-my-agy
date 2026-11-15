@@ -39,7 +39,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 oh-my-agy/
 ├── .gitattributes            # LF line-ending normalization across POSIX & Windows checkouts
 ├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 20)
-├── plugin.json               # Antigravity manifest (v0.7.0, strict JSON)
+├── plugin.json               # Antigravity manifest (v0.8.0, strict JSON)
 ├── assets/
 │   ├── logo.png              # Plugin icon
 │   └── sidecar-hud.gif       # Live Aux Pane HUD showcase animation
@@ -51,10 +51,10 @@ oh-my-agy/
 │   ├── omagy-hook.mjs        # hot-path hook runtime (<170 KB: SessionStart, PreInvocation, PreToolUse, Stop & state primitives)
 │   ├── omagy-host.mjs        # polyglot Claude/Codex wire codecs, Desktop session gating, bundle drift & transcript normalization
 │   ├── omagy-host-setup.mjs  # lazy-loaded `host-setup` & `host-validate` generator for Claude Code & OpenAI Codex
-│   ├── omagy-skill.mjs       # lazy-loaded non-lifecycle CLI dispatcher + zero-dep `skill-validate` & `skill-init` (`38` total CLI subcommands)
-│   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<90 KB; 13 COLD_CLI_EVENTS)
-│   ├── omagy-audit.mjs       # lazy-loaded repo audit CLIs (`docs-drift`, `coverage-map`, `dep-license-diff`, `mcp-audit`)
-│   ├── omagy-selftest.mjs    # lazy-loaded 93-check offline selftest suite (`T1`–`T10`, `T20`–`T58`)
+│   ├── omagy-skill.mjs       # lazy-loaded non-lifecycle CLI dispatcher + zero-dep `skill-validate` & `skill-init` (`39` total CLI subcommands)
+│   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<93.7 KB; 13 COLD_CLI_EVENTS)
+│   ├── omagy-audit.mjs       # lazy-loaded repo audit CLIs (`docs-drift`, `coverage-map`, `dep-license-diff`, `mcp-audit`, `tmpdir-audit`)
+│   ├── omagy-selftest.mjs    # lazy-loaded 96-check offline selftest suite (`T1`–`T10`, `T20`–`T61`)
 │   └── skill-eval-cases.json # 23-skill positive + owner-paired negative routing benchmark corpus (>=95% rank-1)
 ├── sidecars/hud/             # Modular Desktop-only HUD (`main.mjs` + `dispatch.mjs` + `ui.mjs` + `client.mjs`: SSE, `desktop-serve`, Codex WS, 5 tabs, 11 workflows)
 ├── agents/                   # 18 role subagents with verified `subagent`/`mainAgent`/`tools` frontmatter
@@ -195,7 +195,7 @@ Delete the plugin directory and restart Antigravity. Workspace `.omagy/` and `om
 
 ## Usage
 
-> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 23 skills (with flags and examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, all 38 CLI utilities, and end-to-end recipes.
+> **Full Guide**: See **[HOW_TO_USE.md](HOW_TO_USE.md)** for a complete walkthrough of all 23 skills (with flags and examples), all 18 role subagents, `.omagy/` state & crash-resilient ledgers, `omagy_wiki/` working agreements, lifecycle hooks, all 39 CLI utilities, and end-to-end recipes.
 
 In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot build X`, `/deep-research --technical "topic"`, `/visual-ralph --design`, `/code-review --security`, `/threat-model`, `/modernize`, `/release`, `/hud --handoff`, `/cancel`). `$<skill>` is also supported by the `PreInvocation` hook as an alias.
 

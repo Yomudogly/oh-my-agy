@@ -266,7 +266,7 @@ const SKILL_GUIDE_META = {
   release: {
     category: 'Review, QA & Cleanup',
     flags: [],
-    quickStart: '/release prepare v0.7.0 changelog, manifest sync, and dry-run packaging',
+    quickStart: '/release prepare v0.8.0 changelog, manifest sync, and dry-run packaging',
     howToUse: 'End-to-end release engineering workflow covering pre-release quality/license/docs-drift gates, SemVer classification, CHANGELOG sync, dry-run packaging validation, and human-confirmed tag/publish steps.',
   },
   'visual-ralph': {
@@ -5221,6 +5221,115 @@ async function runSelftest() {
       && h28WtList !== null
       && h28NoUserLeak;
 
+    // H29: v0.8.0 crash guards (malformed URL / clientError 400), getCachedWorktrees cache + nogit, team symlink skip + 64 KiB tail log, and readLatestRouting fallback gating
+    let h29Ok = false;
+    const netMod = await import('node:net');
+    const h29Srv = createHudServer('h29-tok', { workspaceRoot: ws });
+    try {
+      await new Promise((resolve) => h29Srv.listen(0, BIND_HOST, resolve));
+      const h29Port = h29Srv.address().port;
+      const sendRawHttp = (rawReq) => new Promise((resolve, reject) => {
+        const sock = netMod.connect(h29Port, BIND_HOST);
+        const chunks = [];
+        sock.setTimeout(2500);
+        sock.on('timeout', () => { sock.destroy(); resolve(Buffer.concat(chunks).toString('utf8')); });
+        sock.on('connect', () => { sock.write(rawReq); });
+        sock.on('data', (c) => chunks.push(c));
+        sock.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        sock.on('error', (err) => {
+          if (chunks.length) resolve(Buffer.concat(chunks).toString('utf8'));
+          else reject(err);
+        });
+      });
+      const badUrlRes = await sendRawHttp('GET http://[invalid HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      const clientErrRes = await sendRawHttp('BAD_REQ_LINE\r\n\r\n');
+      const aliveRes = await new Promise((resolve, reject) => {
+        const req = http.request({ host: BIND_HOST, port: h29Port, path: '/preload.js', method: 'GET' }, (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      const httpCrashOk = badUrlRes.includes('400') && badUrlRes.includes('bad_request_url')
+        && clientErrRes.includes('400')
+        && aliveRes === 200;
+
+      const h29NoGit = path.join(ws, 'h29-nogit');
+      fs.mkdirSync(h29NoGit, { recursive: true });
+      const h29T0 = Date.now();
+      const nogitWt = getCachedWorktrees(h29NoGit, h29T0);
+      const gWt1 = getCachedWorktrees(PLUGIN_ROOT, h29T0);
+      const gWt2 = getCachedWorktrees(PLUGIN_ROOT, h29T0 + 100);
+      const wtCacheOk = Array.isArray(nogitWt) && nogitWt.length === 0 && gWt1 === gWt2 && Array.isArray(gWt1);
+
+      const h29TeamWs = path.join(ws, 'h29-team-sym');
+      const h29ExtDir = path.join(ws, 'h29-ext-team');
+      fs.mkdirSync(path.join(h29TeamWs, '.omagy', 'state', 'team'), { recursive: true });
+      fs.mkdirSync(path.join(h29TeamWs, '.omagy', 'logs'), { recursive: true });
+      fs.mkdirSync(h29ExtDir, { recursive: true });
+      fs.writeFileSync(path.join(h29ExtDir, 'tasks.json'), JSON.stringify({ team: 'sym-team', tasks: [{ id: '1', status: 'in_progress' }] }), 'utf8');
+      try {
+        fs.symlinkSync(h29ExtDir, path.join(h29TeamWs, '.omagy', 'state', 'team', 'sym-team'));
+      } catch { /* fail open: ignore symlink creation on win32 without symlink perms */ }
+      const bigErr = JSON.stringify({ at: '2026-11-15T00:00:00Z', event: 'stop', error: 'pad_'.repeat(300) });
+      fs.writeFileSync(
+        path.join(h29TeamWs, '.omagy', 'logs', 'hook-errors.jsonl'),
+        `${Array.from({ length: 70 }, () => bigErr).join('\n')}\n${JSON.stringify({ at: '2026-11-15T01:00:00Z', event: 'stop', error: 'h29_tail_marker' })}\n`,
+        'utf8',
+      );
+      const h29Snap = buildHudSnapshot([h29TeamWs], Date.now());
+      const symTailOk = !h29Snap.teams.some((t) => t.team === 'sym-team')
+        && Array.isArray(h29Snap.doctor?.hookErrors)
+        && h29Snap.doctor.hookErrors.some((e) => e.error === 'h29_tail_marker');
+
+      const h29RtBox = path.join(ws, 'h29-routing-iso');
+      const h29IsoTmp = path.join(h29RtBox, 'tmp');
+      const h29Xdg = path.join(h29RtBox, 'xdg');
+      const h29LegacyDir = path.join(h29IsoTmp, 'oh-my-agy');
+      const h29PrimaryDir = path.join(h29Xdg, 'oh-my-agy');
+      fs.mkdirSync(h29LegacyDir, { recursive: true });
+      fs.writeFileSync(path.join(h29LegacyDir, 'sess-h29.routing.json'), JSON.stringify({ host: 'antigravity', at: '2026-11-15T10:00:00Z', skills: ['analyze'], workspaces: [h29TeamWs] }), 'utf8');
+      const h29SavedEnv = {
+        OMAGY_RUNTIME_DIR: process.env.OMAGY_RUNTIME_DIR,
+        XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+        TMPDIR: process.env.TMPDIR,
+        TEMP: process.env.TEMP,
+        TMP: process.env.TMP,
+      };
+      let routingFallbackOk = false;
+      try {
+        delete process.env.OMAGY_RUNTIME_DIR;
+        process.env.XDG_RUNTIME_DIR = h29Xdg;
+        process.env.TMPDIR = h29IsoTmp;
+        process.env.TEMP = h29IsoTmp;
+        process.env.TMP = h29IsoTmp;
+        const hitLegacy = readLatestRouting(undefined, { roots: [h29TeamWs] });
+        const missCustomArg = readLatestRouting(path.join(h29RtBox, 'custom-rt'), { roots: [h29TeamWs] });
+        const missCustomOpt = readLatestRouting(undefined, { runtimeDir: path.join(h29RtBox, 'opt-rt'), roots: [h29TeamWs] });
+        process.env.OMAGY_RUNTIME_DIR = path.join(h29RtBox, 'env-rt');
+        const missEnv = readLatestRouting(undefined, { roots: [h29TeamWs] });
+        delete process.env.OMAGY_RUNTIME_DIR;
+        fs.mkdirSync(h29PrimaryDir, { recursive: true });
+        fs.writeFileSync(path.join(h29PrimaryDir, 'sess-h29.routing.json'), JSON.stringify({ host: 'antigravity', at: '2026-11-15T10:01:00Z', skills: ['code-review'], workspaces: [h29TeamWs] }), 'utf8');
+        const hitPrimary = readLatestRouting(undefined, { roots: [h29TeamWs] });
+        routingFallbackOk = hitLegacy?.skills?.[0] === 'analyze'
+          && missCustomArg === null
+          && missCustomOpt === null
+          && missEnv === null
+          && hitPrimary?.skills?.[0] === 'code-review';
+      } finally {
+        for (const [k, v] of Object.entries(h29SavedEnv)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+
+      h29Ok = httpCrashOk && wtCacheOk && symTailOk && routingFallbackOk;
+    } finally {
+      await new Promise((resolve) => h29Srv.close(resolve));
+    }
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -5320,7 +5429,8 @@ async function runSelftest() {
       && h25Ok
       && h26Ok
       && h27Ok
-      && h28Ok;
+      && h28Ok
+      && h29Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',

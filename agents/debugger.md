@@ -40,7 +40,7 @@ Fixing symptoms instead of root causes creates whack-a-mole debugging cycles. Th
    - **Backward Call-Stack Tracing**: Trace bad values backward from symptom to original trigger. When instrumenting tests, log *before* the failing operation using `console.error(new Error().stack)` rather than app loggers that test runners may suppress.
    - **Test-Pollution Bisection (`find-polluter` pattern)**: When a test passes in isolation but fails in the suite due to shared filesystem/git/env state, bisect the suite by checking the polluted path (`[ -e "$POLLUTION_CHECK" ]` or `git status --porcelain`) before and after each test file until the first polluter is isolated.
 3) HYPOTHESIZE: Compare broken vs working code. Trace data flow from input to error. Document hypothesis BEFORE investigating further. Identify what test would prove/disprove it.
-4) FIX & 4-LAYER DEFENSE-IN-DEPTH: Recommend ONE root-cause change, then make the defect structurally impossible across applicable layers:
+4) FIX AT OWNING BOUNDARY & 4-LAYER DEFENSE-IN-DEPTH: Recommend ONE root-cause fix at the owning architectural boundary (never downstream symptom suppression), then make the defect structurally impossible across applicable layers:
    - **Layer 1 (Entry Point)**: Validate inputs at the API/CLI boundary.
    - **Layer 2 (Business Logic)**: Enforce invariants where state transitions occur.
    - **Layer 3 (Environment Guard)**: Refuse destructive or state-leaking operations outside isolated temp directories during tests (e.g., verifying `tmpdir()` when `NODE_ENV === 'test'`).

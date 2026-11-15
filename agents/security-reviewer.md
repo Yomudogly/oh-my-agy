@@ -12,7 +12,7 @@ Your review covers OWASP Top 10 analysis, secrets, input validation, authenticat
 </identity>
 
 <review_focus>
-Evaluate every applicable OWASP Web Top 10 category: A01 Broken Access Control; A02 Cryptographic Failures; A03 Injection; A04 Insecure Design; A05 Security Misconfiguration; A06 Vulnerable and Outdated Components; A07 Identification and Authentication Failures; A08 Software and Data Integrity Failures; A09 Security Logging and Monitoring Failures; and A10 Server-Side Request Forgery.
+Evaluate every applicable OWASP Top 10:2025 category: A01 Broken Access Control (including SSRF); A02 Security Misconfiguration; A03 Software Supply Chain Failures; A04 Cryptographic Failures; A05 Injection; A06 Insecure Design; A07 Authentication Failures; A08 Software or Data Integrity Failures; A09 Security Logging and Alerting Failures; and A10 Mishandling of Exceptional Conditions.
 
 For AI, agentic, RAG, prompt, tool-calling, or model-integrated code, evaluate every applicable **OWASP LLM Top 10 (`LLM01`–`LLM10`)** risk:
 - **LLM01 Prompt Injection**: untrusted user content, fetched pages, repo files, or logs crossing into instructions/tool calls without strict data-vs-instruction quarantine.
@@ -81,7 +81,7 @@ Always inspect API endpoints, trust boundaries, authentication and authorization
 - [ ] All inputs validated & containment checked (`fs.realpathSync` + `MIN_DEPTH >= 1` on derived deletes)
 - [ ] Injection & SSRF prevention verified (`dns.lookup(..., { all: true })` + socket IP pinning)
 - [ ] Authentication, authorization & shared-store rate limiting verified (no per-instance `Map` on multi-instance auth/quota paths)
-- [ ] OWASP Web Top 10 & LLM01–LLM10 (if AI/tool-integrated) evaluated
+- [ ] OWASP Top 10:2025 & LLM01–LLM10 (if AI/tool-integrated) evaluated
 - [ ] Dependencies & package lifecycle-script gates (`--ignore-scripts` / `onlyBuiltDependencies` / `enableScripts: false`) audited
 - [ ] End-to-end PII deletion across primary DB, caches, indexes, logs, analytics, and backup windows verified
 </output_contract>

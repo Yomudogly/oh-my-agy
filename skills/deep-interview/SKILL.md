@@ -139,7 +139,7 @@ Score each dimension in `[0.0, 1.0]` with a justification and gap:
 - Greenfield: `ambiguity = 1 - (intent×0.30 + outcome×0.25 + scope×0.20 + constraints×0.15 + success×0.10)`
 - Brownfield: `ambiguity = 1 - (intent×0.25 + outcome×0.20 + scope×0.20 + constraints×0.15 + success×0.10 + context×0.10)`
 
-Enforce all readiness gates (`Non-goals`, `Decision Boundaries`, pressure pass complete, practical closure audit, and zero-context `Builder Check` triage) and round controls (Dialectic Rhythm Guard after 3 consecutive non-user entries; early exit from round 4 with risk warning; hard cap at `max_rounds`) per [scoring-and-templates.md](./references/scoring-and-templates.md). If `ambiguity <= 0.10` and gates pass, crystallize immediately.
+Enforce readiness gates (`Non-goals`, `Decision Boundaries`, pressure pass, closure + 3-Question Predictability Check, `Builder Check` triage) & round caps (`Dialectic Rhythm` after 3 non-user turns, exit `>= 4`, `max_rounds`) per [scoring-and-templates.md](./references/scoring-and-templates.md); crystallize at `ambiguity <= 0.10`.
 
 ### 2d) Report progress & persist state
 Show the weighted breakdown table, readiness-gate status, and next focus dimension. Append the round (question, answer, label, scores) to state and refresh `updated_at`.
@@ -163,7 +163,7 @@ When threshold is met (or on early exit with a warning, or at the hard cap):
 Present handoff options with `ask_question` (single-answer, recommended option first). The spec is the requirements source of truth. Preserve intent, non-goals, decision boundaries, acceptance criteria, terminology grounding, and residual-risk warnings across the handoff.
 
 1. **`$ultragoal`** (default durable execution): input is the spec. Convert it into durable goals with sequential completion tracking. It skips requirements discovery.
-2. **`$ralplan`** (recommended when architecture/test-shape review is still needed): treat the spec as requirements truth and do not repeat the interview. Output goes to `.omagy/plans/`.
+2. **`$ralplan`** (recommended when architecture/test review is needed): treat `.omagy/specs/deep-interview-{slug}.md` as requirements truth & bind it via `plan-hash --source-spec`.
 3. **`$autopilot`**: planning plus execution from the clarified brief.
 4. **`$team`**: coordinated parallel execution against the shared spec.
 5. **Refine further**: continue the interview loop.

@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, live HUD sidecar tab, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.7.0`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
+This guide covers every workflow skill, role subagent, live HUD sidecar tab, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.8.0`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
 
 ---
 
@@ -18,7 +18,7 @@ This guide covers every workflow skill, role subagent, live HUD sidecar tab, hoo
 5. [Durable State (`.omagy/`), Ledgers & Resuming Work](#5-durable-state-omagy-ledgers--resuming-work)
 6. [Project Wiki (`omagy_wiki/`) & Subdirectory `AGENTS.md`](#6-project-wiki-omagy_wiki--subdirectory-agentsmd)
 7. [Live Auxiliary Pane HUD (`sidecars/hud/`)](#7-live-auxiliary-pane-hud-sidecarshud)
-8. [Lifecycle Hooks & CLI Utilities (38 Total)](#8-lifecycle-hooks--cli-utilities-38-total)
+8. [Lifecycle Hooks & CLI Utilities (39 Total)](#8-lifecycle-hooks--cli-utilities-39-total)
 9. [End-to-End Recipes](#9-end-to-end-recipes)
 
 ---
@@ -307,7 +307,7 @@ Maps trust boundaries and data flows, enumerates `STRIDE` and OWASP Agentic/LLM 
 Runs pre-release quality gates (`selftest`, `skill-validate --strict`, `docs-drift`, `dep-license-diff`, `wiki-lint`), classifies SemVer bumps, synchronizes `plugin.json` / `CHANGELOG.md` / docs / wiki, validates cross-host dry-run bundles (`host-setup --dry-run`), and prepares rollout/rollback playbooks with explicit confirmation gates before tagging or publishing (`references/rollout-and-compliance.md`).
 - **Example**:
   ```text
-  /release Prepare v0.7.0 release notes, manifest sync, and dry-run bundle validation
+  /release Prepare v0.8.0 release notes, manifest sync, and dry-run bundle validation
   ```
 
 ---
@@ -347,7 +347,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
 
 #### `/doctor` — Diagnostics, Setup, Notifications, Deep Init & Session Forensics
 All-in-one operational health, setup, notification, and transcript forensics toolkit:
-- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`93/93`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`23` skills), `hooks/run.sh floor-guard`, `docs-drift`, `wiki-lint`, `dep-license-diff`, `mcp-audit`, `sidecars/hud/run.sh selftest` (`H1`–`H28`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 90 KB`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 18-agent `tools:` YAML frontmatter, `plugin.json` `v0.7.0` parity, cross-host bundle drift (`host-validate`, experimental), and stale/waiting `.omagy/state/` files.
+- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`96/96`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`23` skills), `hooks/run.sh floor-guard`, `docs-drift`, `wiki-lint`, `dep-license-diff`, `mcp-audit`, `tmpdir-audit`, `sidecars/hud/run.sh selftest` (`H1`–`H29`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93.7 KB`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 18-agent `tools:` YAML frontmatter, `plugin.json` `v0.8.0` parity, cross-host bundle drift (`host-validate`, experimental), and stale/waiting `.omagy/state/` files.
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density, git churn, and infra/migration/CI boundaries (`migrations`, `workflows`, `containers`, `infra`) and generates non-duplicative child `AGENTS.md` files where warranted.
@@ -505,9 +505,9 @@ The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.
 
 ---
 
-## 8. Lifecycle Hooks & CLI Utilities (38 Total)
+## 8. Lifecycle Hooks & CLI Utilities (39 Total)
 
-`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-host-setup.mjs`](hooks/omagy-host-setup.mjs) for `host-setup`/`host-validate`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 90 KB`) for `COLD_CLI_EVENTS`, [`hooks/omagy-audit.mjs`](hooks/omagy-audit.mjs) for static/supply-chain audit commands, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
+`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-host-setup.mjs`](hooks/omagy-host-setup.mjs) for `host-setup`/`host-validate`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93.7 KB`) for `COLD_CLI_EVENTS`, [`hooks/omagy-audit.mjs`](hooks/omagy-audit.mjs) for static/supply-chain audit commands, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
 
 - **`SessionStart` & `PreInvocation` (Enabled by default)**:
   - Strips UTF-8 BOMs (`stripUtf8Bom`) and sanitizes relayed `[Message ...]` / `<SYSTEM_MESSAGE>` / `<CONTEXT_SUMMARY>` blocks (`sanitizeRelayedText`), fenced/inline code, comments, blockquotes, URLs, quotes, negations, and help queries before `/skill` / `$skill` detection.
@@ -518,10 +518,10 @@ The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.
 - **`PreToolUse` (Opt-in in `hooks.json`)**:
   - Enforces `append-only-guard` (blocking `Overwrite: true` on non-empty `.omagy/ultragoal/ledger.jsonl` and `omagy_wiki/log.md` before planning exemptions), the planning-phase write boundary, `protected-block-guard`, `agreements-guard`, `notifications-guard`, and `write-existing-file-guard`.
 
-### Built-In Hook CLI Commands (38 Total)
+### Built-In Hook CLI Commands (39 Total)
 
 ```bash
-# 1. Run the 93-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
+# 1. Run the 96-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Evaluate TF-IDF skill routing accuracy, owner-negative survival, and cosine collisions across all 23 skills (>=95% default)
@@ -548,8 +548,8 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh handoff . pre-compact --json
 # 9. Scan commands or SQL/shell files across 6 destructive & supply-chain hazard classes with a 48-char negation window
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh lookout scripts/deploy.sh --json
 
-# 10. Compute or verify SHA-256 plan + test-spec receipts and lint fake calendar timelines (.omagy/plans/ralplan-review-<slug>.json)
-sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh plan-hash compute .omagy/plans/prd-auth.md --spec .omagy/plans/test-spec-auth.md --write-receipt APPROVE --json
+# 10. Compute or verify SHA-256 plan + test-spec receipts (--source-spec optional) and lint fake calendar timelines (.omagy/plans/ralplan-review-<slug>.json)
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh plan-hash compute .omagy/plans/prd-auth.md --spec .omagy/plans/test-spec-auth.md --source-spec .omagy/specs/deep-interview-auth.md --write-receipt APPROVE --json
 
 # 11. Rank subdirectories needing nested AGENTS.md files by code density, git churn, and infra/migration signals (/doctor --init-deep)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh init-deep-scan . --json
@@ -611,7 +611,7 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh session-compare baseline.json
 # 30. Repair [[wiki-links]] and [label](slug.md) links outside code spans on move/archive/delete (/wiki)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh wiki-repair omagy_wiki '{"moved":{"old-slug":"new-slug"},"archived":["old-arch"],"deleted":["gone"]}'
 
-# 31. Validate a SKILL.md directory, a skills/ catalog root, or .agents/skills.json under SDO, supply-chain & asset checks (/skill validate)
+# 31. Validate a SKILL.md directory, skills/ root, .agents/skills.json, or --scope (project|shared|user|all) under SDO, supply-chain & asset checks (/skill validate)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh skill-validate ~/.gemini/config/plugins/oh-my-agy/skills --strict --json
 
 # 32. Scaffold an SDO-compliant skill across project (.agents/skills), shared (.agents/skills.json), or user scope (/skill init)
@@ -636,6 +636,9 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh dep-license-diff . --json
 
 # 38. Audit MCP server configs for hardcoded secrets, plain HTTP URLs, unpinned @latest packages & unsafe path mounts
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh mcp-audit . --json
+
+# 39. Audit runtime tmpdir ownership, permissions (0700), sticky-bit parent directories, and symlink safety
+sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh tmpdir-audit --json
 ```
 
 ---

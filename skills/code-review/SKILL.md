@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: "[oh-my-agy] Merge-readiness code review through two independent subagent lanes (code-reviewer + architect) with a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict. Use when the user asks for a code review or quality/security assessment, or before merging a change."
+description: "[oh-my-agy] Merge-readiness code review through two independent subagent lanes (code-reviewer + architect) with a deterministic APPROVE / REQUEST CHANGES / COMMENT verdict. Use when the user asks for a code review or quality/security assessment of a repository branch or pasted unified diff, or before merging a change."
 ---
 
 # Code Review Task Card
@@ -9,13 +9,13 @@ Use this explicit opt-in for a merge-readiness review. It is read-only and never
 
 ## When to use
 
-- The user asks for a code review or quality/security assessment.
+- The user asks for a code review or quality/security assessment of local changes or a pasted unified diff.
 - A change is ready for review before merge, or a major feature needs independent review.
 - Do not activate this card for implementation, broad planning, or automatic cleanup.
 
 ## Inputs
 
-- Scope: the requested files, commit, PR, or whole diff.
+- Scope: the requested files, commit, PR, pasted unified diff, or whole diff.
 - Requirements/spec, acceptance criteria, and relevant test/CI evidence.
 - Existing review artifacts and known risks, if any.
 - If the user says `continue`, advance the current review step rather than restarting.
