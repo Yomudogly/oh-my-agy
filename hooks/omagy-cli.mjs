@@ -810,7 +810,7 @@ const TERMINAL_GOAL_STATUSES = new Set(['cancelled', 'canceled', 'blocked', 'sup
   }
   latestGoal.status = 'complete'; latestGoal.evidence = relEv; latestGoals.updated_at = at;
   writeJsonStrict(goalsPath, latestGoals);
-  appendJsonlRecord(path.join(workDir, '.omagy', 'ultragoal', 'ledger.jsonl'), { at, goal_id: id, event: 'checkpoint', status: 'complete', criteria_revision: goalsObj.criteria_revision ?? 1, verdict: 'unit-test-verified', ...(headSha ? { verified_head: headSha } : {}), evidence: relEv, evidence_path: relEv });
+  appendJsonlRecord(path.join(workDir, '.omagy', 'ultragoal', 'ledger.jsonl'), { at, goal_id: id, event: 'checkpoint', status: 'complete', criteria_revision: latestGoals.criteria_revision ?? 1, verdict: 'unit-test-verified', ...(headSha ? { verified_head: headSha } : {}), evidence: relEv, evidence_path: relEv });
   return { ok: true, exitCode: 0, goalId: id, commandExitCode: 0, evidencePath: relEv, headSha };
 }
 

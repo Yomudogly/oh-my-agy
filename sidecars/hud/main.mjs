@@ -817,34 +817,47 @@ export function getCachedWorktrees(primaryRoot, nowMs = Date.now()) {
   return value;
 }
 
+function listSecureRoutingEntries(dirPath) {
+  if (!dirPath || !fs.existsSync(dirPath)) return [];
+  const dirSt = fs.lstatSync(dirPath);
+  if (dirSt.isSymbolicLink() || !dirSt.isDirectory()) return [];
+  if (typeof process.getuid === 'function' && dirSt.uid !== process.getuid()) return [];
+  return fs.readdirSync(dirPath)
+    .filter((f) => f.endsWith('.routing.json'))
+    .map((f) => {
+      const p = path.join(dirPath, f);
+      try {
+        const st = fs.lstatSync(p);
+        const uidOk = typeof process.getuid !== 'function' || st.uid === process.getuid();
+        return st.isFile() && !st.isSymbolicLink() && uidOk
+          ? { file: f, id: f.replace(/\.routing\.json$/, ''), path: p, mtimeMs: st.mtimeMs }
+          : null;
+      } catch { /* fail open: skip unreadable routing entry */ return null; }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+}
+
+function resolveLegacyRoutingDirIfEligible(explicitOpt, primaryTargetDir) {
+  if (process.env.OMAGY_RUNTIME_DIR || explicitOpt) return '';
+  if (primaryTargetDir !== path.resolve(defaultRuntimeDir())) return '';
+  const legacyDir = path.resolve(path.join(os.tmpdir(), 'oh-my-agy'));
+  return legacyDir !== primaryTargetDir ? legacyDir : '';
+}
+
 function readLatestRoutingInDir(dirPath, filterOpts = {}) {
   try {
-    if (!dirPath || !fs.existsSync(dirPath)) return null;
-    const dirSt = fs.lstatSync(dirPath);
-    if (dirSt.isSymbolicLink() || !dirSt.isDirectory()) return null;
-    if (typeof process.getuid === 'function' && dirSt.uid !== process.getuid()) return null;
     const expectedHost = String(filterOpts?.host || 'antigravity').trim().toLowerCase() || 'antigravity';
     const targetRoots = Array.isArray(filterOpts?.roots) ? filterOpts.roots : (filterOpts?.roots ? [filterOpts.roots] : []);
     const brainDir = expectedHost === 'antigravity' ? resolveAntigravityBrainDir(filterOpts?.brainDir) : '';
-    const routingFiles = fs.readdirSync(dirPath)
-      .filter((f) => f.endsWith('.routing.json'))
-      .map((f) => {
-        const p = path.join(dirPath, f);
-        try {
-          const st = fs.lstatSync(p);
-          const uidOk = typeof process.getuid !== 'function' || st.uid === process.getuid();
-          return st.isFile() && !st.isSymbolicLink() && uidOk ? { file: f, path: p, mtimeMs: st.mtimeMs } : null;
-        } catch { /* fail open: skip unreadable routing entry */ return null; }
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const routingFiles = listSecureRoutingEntries(dirPath);
     if (!routingFiles.length) return null;
     let unscopedFallback = null;
     for (const rf of routingFiles) {
       const data = readJsonSafe(rf.path);
       if (!data) continue;
       if (data.isSubagent === true) continue;
-      const conversationId = rf.file.replace(/\.routing\.json$/, '');
+      const conversationId = rf.id;
       if (!isRoutingHostCompatible(data, expectedHost, conversationId, brainDir)) continue;
       const workspaces = Array.isArray(data.workspaces) ? data.workspaces.map(String).filter(Boolean) : [];
       const wsMatch = routingMatchesWorkspaces(workspaces, targetRoots);
@@ -871,10 +884,8 @@ export function readLatestRouting(runtimeDir = defaultRuntimeDir(), filterOpts =
   const targetDir = path.resolve(String(explicitOpt || runtimeDir || defaultRuntimeDir()));
   const primary = readLatestRoutingInDir(targetDir, filterOpts);
   if (primary) return primary;
-  if (!process.env.OMAGY_RUNTIME_DIR && !filterOpts?.runtimeDir && targetDir === path.resolve(defaultRuntimeDir())) {
-    const legacyDir = path.resolve(path.join(os.tmpdir(), 'oh-my-agy'));
-    if (legacyDir !== targetDir) return readLatestRoutingInDir(legacyDir, filterOpts);
-  }
+  const legacyDir = resolveLegacyRoutingDirIfEligible(filterOpts?.runtimeDir, targetDir);
+  if (legacyDir) return readLatestRoutingInDir(legacyDir, filterOpts);
   return null;
 }
 
@@ -1467,21 +1478,9 @@ export function resolveActiveConversationCandidates(workspaceRoot = process.cwd(
   pushCandidate(explicitId);
 
   try {
-    if (fs.existsSync(runtimeDir) && !fs.lstatSync(runtimeDir).isSymbolicLink()) {
-      const routingFiles = fs.readdirSync(runtimeDir)
-        .filter((f) => f.endsWith('.routing.json'))
-        .map((f) => {
-          const p = path.join(runtimeDir, f);
-          try {
-            const st = fs.lstatSync(p);
-            return st.isFile() && !st.isSymbolicLink()
-              ? { id: f.replace(/\.routing\.json$/, ''), path: p, mtimeMs: st.mtimeMs }
-              : null;
-          } catch { /* fail open: skip unreadable routing file */ return null; }
-        })
-        .filter((r) => r && validIdRe.test(r.id))
-        .sort((a, b) => b.mtimeMs - a.mtimeMs);
-
+    const targetRtDir = path.resolve(String(runtimeDir || defaultRuntimeDir()));
+    const scanDir = (dirPath) => {
+      const routingFiles = listSecureRoutingEntries(dirPath).filter((r) => validIdRe.test(r.id));
       const matched = [];
       const unscoped = [];
       for (const rf of routingFiles) {
@@ -1494,8 +1493,16 @@ export function resolveActiveConversationCandidates(workspaceRoot = process.cwd(
         if (wsMatch === 'match') matched.push(rf.id);
         else unscoped.push(rf.id);
       }
-      for (const id of matched) pushCandidate(id);
-      for (const id of unscoped) pushCandidate(id);
+      return [...matched, ...unscoped];
+    };
+    const primaryHits = scanDir(targetRtDir);
+    if (primaryHits.length > 0) {
+      for (const id of primaryHits) pushCandidate(id);
+    } else {
+      const legacyDir = resolveLegacyRoutingDirIfEligible(options?.runtimeDir, targetRtDir);
+      if (legacyDir) {
+        for (const id of scanDir(legacyDir)) pushCandidate(id);
+      }
     }
   } catch { /* fail open: runtime directory unavailable */ }
 
@@ -5305,18 +5312,24 @@ async function runSelftest() {
         process.env.TEMP = h29IsoTmp;
         process.env.TMP = h29IsoTmp;
         const hitLegacy = readLatestRouting(undefined, { roots: [h29TeamWs] });
+        const candLegacy = resolveActiveConversationCandidates(h29TeamWs);
         const missCustomArg = readLatestRouting(path.join(h29RtBox, 'custom-rt'), { roots: [h29TeamWs] });
         const missCustomOpt = readLatestRouting(undefined, { runtimeDir: path.join(h29RtBox, 'opt-rt'), roots: [h29TeamWs] });
+        const candMissOpt = resolveActiveConversationCandidates(h29TeamWs, '', { runtimeDir: path.join(h29RtBox, 'opt-rt') });
         process.env.OMAGY_RUNTIME_DIR = path.join(h29RtBox, 'env-rt');
         const missEnv = readLatestRouting(undefined, { roots: [h29TeamWs] });
+        const candMissEnv = resolveActiveConversationCandidates(h29TeamWs);
         delete process.env.OMAGY_RUNTIME_DIR;
         fs.mkdirSync(h29PrimaryDir, { recursive: true });
         fs.writeFileSync(path.join(h29PrimaryDir, 'sess-h29.routing.json'), JSON.stringify({ host: 'antigravity', at: '2026-11-15T10:01:00Z', skills: ['code-review'], workspaces: [h29TeamWs] }), 'utf8');
         const hitPrimary = readLatestRouting(undefined, { roots: [h29TeamWs] });
         routingFallbackOk = hitLegacy?.skills?.[0] === 'analyze'
+          && candLegacy.includes('sess-h29')
           && missCustomArg === null
           && missCustomOpt === null
+          && !candMissOpt.includes('sess-h29')
           && missEnv === null
+          && !candMissEnv.includes('sess-h29')
           && hitPrimary?.skills?.[0] === 'code-review';
       } finally {
         for (const [k, v] of Object.entries(h29SavedEnv)) {

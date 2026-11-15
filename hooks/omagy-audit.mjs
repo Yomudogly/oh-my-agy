@@ -968,6 +968,19 @@ export function auditTmpdirTrust(targetDir = '') {
       if (!checkSeg(cur)) break;
     }
   }
+  const sysTmpReal = (() => {
+    try { return fs.realpathSync(os.tmpdir()); } catch { /* fail open: fallback to unresolved os.tmpdir */ return path.resolve(os.tmpdir()); }
+  })();
+  const isSystemRoot = walkTarget === '/' || walkTarget === '/tmp' || walkTarget === '/private/tmp'
+    || walkTarget === '/var' || walkTarget === '/private/var' || walkTarget === sysTmpReal;
+  if (!isSystemRoot && leafSt && !leafSt.isSymbolicLink()) {
+    if (typeof process.getuid === 'function' && leafSt.uid !== process.getuid()) {
+      findings.push({ path: resolved, reason: 'foreign_owner', uid: leafSt.uid });
+    }
+    if (process.platform !== 'win32' && (leafSt.mode & 0o077) !== 0) {
+      findings.push({ path: resolved, reason: 'non_private_runtime_mode', mode: (leafSt.mode & 0o7777).toString(8) });
+    }
+  }
   const unique = [];
   const seen = new Set();
   for (const f of findings) {

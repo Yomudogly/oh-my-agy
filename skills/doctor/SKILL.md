@@ -65,7 +65,7 @@ ls -la .omagy/state 2>/dev/null
 ## Session Transcript Forensics, Clustering & A/B Comparison (`$doctor --session` / `--session-compare` / `--session-scan`)
 
 When invoked with `--session` (or when diagnosing why a workflow drifted, repeated work, or skipped a skill gate), run the 7-dimension transcript forensics protocol in [session-forensics.md](./references/session-forensics.md):
-1. Resolve the transcript via `$TMPDIR/oh-my-agy/<conversationId>.routing.json` (`transcriptPath`) or `<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`.
+1. Resolve the transcript via `$TMPDIR/oh-my-agy-<uid>/<conversationId>.routing.json` (`transcriptPath`) or `<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`.
 2. Enforce the **Context-Safety Protocol** (`wc -lc`, checking lines `> 100 KB`, extracting line numbers and metadata before reading step fields).
 3. Evaluate the 7 behavioral lenses (`skill-timeline`, `plan-adherence`, `repeated-work`, `stumbles`, `quality-evidence`, `request-conflicts`, `cost-and-time`) with `[line N / step S]` citations.
 4. **Comparative Session Analysis (`$doctor --session-compare <baseline.jsonl> <candidate.jsonl>`) & Multi-Session Clustering (`$doctor --session-scan [transcriptOrDir]`)**:

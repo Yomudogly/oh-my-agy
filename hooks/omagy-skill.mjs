@@ -1538,23 +1538,21 @@ export function summarizeTranscriptMetrics(records) {
     } else if (status && status !== 'DONE' && status !== 'COMPLETED') {
       incomplete += 1;
     }
-    const calls = Array.isArray(rec.tool_calls) ? rec.tool_calls : [];
-    for (const tc of calls) {
-      if (!tc || typeof tc !== 'object') continue;
+    const recordToolCall = (rawToolName, rawArgs, rawCallId, isFailedCall = false) => {
       toolCalls += 1;
-      const rawName = String(tc.name || tc.toolName || tc.function?.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '');
-      const name = rawName || 'unknown';
+      const cleaned = String(rawToolName || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '');
+      const name = cleaned || 'unknown';
       if (!byTool[name]) byTool[name] = { calls: 0, failed: 0 };
       byTool[name].calls += 1;
-      const callId = String(tc.id || tc.tool_use_id || tc.call_id || '');
-      if (callId) toolIdToName.set(callId, name);
-      if (tc.status === 'ERROR' || tc.error || tc.is_error === true || tc.isError === true) {
+      const cid = String(rawCallId || '');
+      if (cid) toolIdToName.set(cid, name);
+      if (isFailedCall) {
         byTool[name].failed += 1;
         failedTools += 1;
-        if (callId) countedFailedIds.add(callId);
+        if (cid) countedFailedIds.add(cid);
       }
       if (/^(?:read_file|view_file|read)$/i.test(name)) {
-        let argsObj = tc.arguments || tc.args || tc.input || tc.function?.arguments || null;
+        let argsObj = rawArgs || null;
         if (typeof argsObj === 'string') {
           try { argsObj = JSON.parse(argsObj); } catch { /* fail open: ignore non-JSON tool args */ argsObj = null; }
         }
@@ -1565,12 +1563,21 @@ export function summarizeTranscriptMetrics(records) {
           fileReads[readPath] = (fileReads[readPath] || 0) + 1;
         }
       }
+    };
+    const calls = Array.isArray(rec.tool_calls) ? rec.tool_calls : [];
+    for (const tc of calls) {
+      if (!tc || typeof tc !== 'object') continue;
+      recordToolCall(
+        tc.name || tc.toolName || tc.function?.name || 'unknown',
+        tc.arguments || tc.args || tc.input || tc.function?.arguments || null,
+        tc.id || tc.tool_use_id || tc.call_id || '',
+        tc.status === 'ERROR' || Boolean(tc.error) || tc.is_error === true || tc.isError === true,
+      );
     }
     const contentBlocks = Array.isArray(rec.message?.content) ? rec.message.content : (Array.isArray(rec.content) ? rec.content : []);
     for (const blk of contentBlocks) {
-      if (blk?.type === 'tool_use' && blk.id) {
-        const bName = String(blk.name || 'unknown').replace(/[^A-Za-z0-9_:-]/g, '') || 'unknown';
-        if (!toolIdToName.has(String(blk.id))) toolIdToName.set(String(blk.id), bName);
+      if (blk?.type === 'tool_use') {
+        recordToolCall(blk.name || 'unknown', blk.input || null, blk.id || '', false);
       }
     }
     const resultItems = [

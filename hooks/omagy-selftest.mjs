@@ -4045,7 +4045,12 @@ export async function runSelftest() {
         fs.mkdirSync(worldDir, { recursive: true });
         fs.chmodSync(worldDir, 0o777);
         const wAudit = auditTmpdirTrust(worldDir);
-        auditModeOk = wAudit.ok === false && wAudit.findings.some((f) => f.reason === 'world_writable_without_sticky');
+        const mode755Dir = path.join(t61Root, 'trust-755');
+        fs.mkdirSync(mode755Dir, { recursive: true });
+        fs.chmodSync(mode755Dir, 0o755);
+        const mAudit = auditTmpdirTrust(mode755Dir);
+        auditModeOk = wAudit.ok === false && wAudit.findings.some((f) => f.reason === 'world_writable_without_sticky')
+          && mAudit.ok === false && mAudit.findings.some((f) => f.reason === 'non_private_runtime_mode');
       }
       const tmpAuditOk = trustOkRes.ok === true && auditSymOk && auditModeOk;
 
@@ -4165,6 +4170,8 @@ export async function runSelftest() {
       const metricsRecs = [
         { type: 'USER_INPUT', created_at: '2026-11-15T00:00:00Z', content: 'hi' },
         { type: 'PLANNER_RESPONSE', created_at: '2026-11-15T00:00:02Z', status: 'DONE', is_error: true, usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 120 }, tool_calls: [{ name: 'run_command', isError: true }] },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'cu1', name: 'Read', input: { path: 'a.js' } }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'cu1', is_error: true, content: 'fail' }] } },
       ];
       const mSum = summarizeTranscriptMetrics(metricsRecs);
       const txScanDir = path.join(t61Root, 'tx-scan');
@@ -4176,8 +4183,10 @@ export async function runSelftest() {
         && tailRead.records.some((r) => r.error === 'tail_fresh_err')
         && partialTail.records.length > 0 && partialTail.records.length < 80
         && mSum.token_usage?.cache_creation_input_tokens === 120
-        && mSum.failed_tools === 2
-        && scanRes.ok === true && scanRes.failedToolCalls === 1 && scanRes.tokenUsage?.cache_creation_input_tokens === 120;
+        && mSum.tool_calls === 2
+        && mSum.byTool?.Read?.calls === 1 && mSum.byTool?.Read?.failed === 1
+        && mSum.failed_tools === 3
+        && scanRes.ok === true && scanRes.failedToolCalls === 2 && scanRes.tokenUsage?.cache_creation_input_tokens === 120;
 
       t61Ok = rtSecureOk && tmpAuditOk && anchorOk && planHashOk && redactOk && polyglotBlockersOk && helpCliOk && scopeOk && rotMetricsOk;
       t61Detail = `rt=${rtSecureOk} audit=${tmpAuditOk} anchor=${anchorOk} hash=${planHashOk} redact=${redactOk} block=${polyglotBlockersOk} help=${helpCliOk} scope=${scopeOk} rot=${rotMetricsOk}`;
