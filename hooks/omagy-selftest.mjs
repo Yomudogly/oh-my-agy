@@ -3227,7 +3227,7 @@ export async function runSelftest() {
       fs.mkdirSync(path.join(codexHome, 'skills', 'custom-user-skill'), { recursive: true });
       fs.writeFileSync(path.join(codexHome, 'skills', 'custom-user-skill', 'SKILL.md'), '# custom skill\n', 'utf8');
       fs.mkdirSync(path.join(codexHome, 'skills', 'autopilot'), { recursive: true });
-      fs.writeFileSync(path.join(codexHome, 'skills', 'autopilot', 'SKILL.md'), '# legacy duplicate\n', 'utf8');
+      fs.writeFileSync(path.join(codexHome, 'skills', 'autopilot', 'SKILL.md'), '# [oh-my-agy] legacy duplicate\n', 'utf8');
       fs.writeFileSync(path.join(codexHome, 'hooks.json'), JSON.stringify({
         hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'sh /old/oh-my-agy/hooks/run.sh session-start --host=codex' }] }] },
       }, null, 2), 'utf8');

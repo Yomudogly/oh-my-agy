@@ -2538,7 +2538,12 @@ function readTranscriptTailSlice(p, maxBytes = TRANSCRIPT_TAIL_BYTES, dropPartia
 function readTranscriptTailText(p, maxBytes = TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
   return readTranscriptTailSlice(p, maxBytes, dropPartial).text;
 }
-function lastUserMessage(transcriptPath, payload = null) {
+function lastUserMessage(transcriptPath, payload = null, host = 'antigravity') {
+  const directInput = payload?.lastUserInput ?? payload?.last_user_input ?? payload?.prompt;
+  if ((host === 'claude' || host === 'codex') && typeof directInput === 'string' && directInput.trim()) {
+    const trimmed = directInput.trim();
+    return { key: `input:${trimmed.length}:${trimmed.slice(0, 64)}`, text: directInput };
+  }
   const text = readTranscriptTailText(transcriptPath);
   if (text) {
     const lines = text.split('\n');
@@ -2552,7 +2557,6 @@ function lastUserMessage(transcriptPath, payload = null) {
       return { key: `${nr.keyHint}:${nr.text.length}`, text: nr.text };
     }
   }
-  const directInput = payload?.lastUserInput ?? payload?.last_user_input ?? payload?.prompt;
   if (typeof directInput === 'string' && directInput.trim()) {
     const trimmed = directInput.trim();
     return { key: `input:${trimmed.length}:${trimmed.slice(0, 64)}`, text: directInput };
@@ -2726,7 +2730,8 @@ function isInformationalHelpPrompt(text) {
 export function sanitizeRelayedText(text) {
   const stripped = String(text ?? '')
     .replace(/<SYSTEM_MESSAGE\b[^>]*>[\s\S]*?<\/SYSTEM_MESSAGE>/gi, '\n')
-    .replace(/<CONTEXT_SUMMARY\b[^>]*>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, '\n');
+    .replace(/<CONTEXT_SUMMARY\b[^>]*>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, '\n')
+    .replace(/<(?:system-reminder|task-notification|teammate-message|command-name)\b[^>]*>[\s\S]*?<\/(?:system-reminder|task-notification|teammate-message|command-name)>/gi, '\n');
   const reqs = [...stripped.matchAll(/<USER_REQUEST\b[^>]*>([\s\S]*?)<\/USER_REQUEST>/gi)].map((m) => m[1]);
   const body = reqs.length ? reqs.join('\n') : stripped;
   return body.replace(/^\s*\[Message\b[^\r\n]*$/gim, '').replace(/<\/?USER_REQUEST\b[^>]*>/gi, '\n').trim();
@@ -2778,12 +2783,13 @@ function detectCompactionEpoch(transcriptPath, payload) {
   };
   for (const raw of readTranscriptTailText(transcriptPath, COMPACTION_TAIL_BYTES, true).split('\n')) {
     const line = raw.trim();
-    if (!line || !/CONTEXT_SUMMARY/i.test(line)) continue;
+    if (!line || !/(?:CONTEXT_SUMMARY|isCompactSummary|compact_boundary)/i.test(line)) continue;
     try {
       const o = JSON.parse(line);
       if (/^(?:PLANNER_RESPONSE|GENERIC|EPHEMERAL_MESSAGE)$/i.test(String(o?.type || ''))
         || o?.source === 'MODEL' || o?.role === 'assistant' || o?.role === 'tool' || Array.isArray(o?.tool_calls)) continue;
       const [nr] = extractHostTranscriptRecords([o]);
+      if (nr?.isCompaction) { latest = nr.text || nr.keyHint || line; continue; }
       if (nr?.isModel) continue;
       scan(nr?.text || String(o?.content ?? o?.text ?? o?.message ?? o?.summary ?? ''));
     } catch { /* fail open: ignore non-json compaction fragment */ }
@@ -2852,8 +2858,20 @@ export function sessionStart(payload) {
   const activeMsg = buildActiveModeMessage(roots, conv);
   if (activeMsg) messages.push(activeMsg);
 
+  const detectedEpoch = detectCompactionEpoch(transcriptPath, payload);
+  const isCompactedSession = payload.source === 'compact'
+    || payload.reason === 'compact'
+    || Boolean(detectedEpoch && detectedEpoch !== (record.compactionEpoch || ''));
+
   let wikiInjected = Boolean(record.wikiInjected);
-  if (!wikiInjected) {
+  if (isCompactedSession) {
+    const parts = [`[oh-my-agy] Context compaction recovery${detectedEpoch ? ` (epoch ${detectedEpoch})` : ''}:`];
+    const w = loadWikiSummary(roots);
+    if (w) { parts.push(w); wikiInjected = true; }
+    const np = loadUltragoalNotepad(roots);
+    if (np) parts.push(np);
+    if (parts.length > 1) messages.push(parts.join('\n'));
+  } else if (!wikiInjected) {
     const wikiMsg = loadWikiSummary(roots);
     if (wikiMsg) { messages.push(wikiMsg); wikiInjected = true; }
   }
@@ -2866,7 +2884,18 @@ export function sessionStart(payload) {
   }
   const capped = capEphemeralMessages(messages);
   if (candMap && capped.some((m) => m.startsWith('[oh-my-agy] Codebase map'))) mapInjected = true;
-  writeJson(recordFile, { ...record, host: record.host || host, wikiInjected, mapInjected, isSubagent, workspaces: roots, transcriptPath, artifactDirectoryPath, at: new Date().toISOString() });
+  writeJson(recordFile, {
+    ...record,
+    host: record.host || host,
+    wikiInjected,
+    mapInjected,
+    isSubagent,
+    compactionEpoch: detectedEpoch || record.compactionEpoch || '',
+    workspaces: roots,
+    transcriptPath,
+    artifactDirectoryPath,
+    at: new Date().toISOString(),
+  });
   return capped.length ? { injectSteps: capped.map((m) => ({ ephemeralMessage: m })) } : {};
 }
 
@@ -2881,7 +2910,7 @@ export function preInvocation(payload) {
   const transcriptPath = (typeof rawTx === 'string' && rawTx.trim()) ? rawTx.trim() : (record.transcriptPath || null);
   const rawArt = payload.artifactDirectoryPath || payload.artifact_directory_path;
   const artifactDirectoryPath = (typeof rawArt === 'string' && rawArt.trim()) ? rawArt.trim() : (record.artifactDirectoryPath || null);
-  const user = lastUserMessage(transcriptPath, payload);
+  const user = lastUserMessage(transcriptPath, payload, host);
   const userKey = user ? user.key : '';
   const detectedEpoch = detectCompactionEpoch(transcriptPath, payload);
   const compactionChanged = Boolean(detectedEpoch && detectedEpoch !== (record.compactionEpoch || ''));
@@ -3487,7 +3516,7 @@ async function main() {
         }
       } else if (normEvent === 'pre-invocation' && isDesktopAppSession(host, rawPayload, process.env)) {
         const ws = workspaceRoots(payload)[0] || process.cwd();
-        const txt = String(payload.prompt || rawPayload?.prompt || '');
+        const txt = String(payload.lastUserInput || payload.last_user_input || payload.prompt || rawPayload?.prompt || '');
         const hudAsk = detectSkills(txt).includes('hud')
           || (result.injectSteps || []).some((s) => String(s?.ephemeralMessage || '').includes('$hud'));
         if (hudAsk || !fs.existsSync(desktopHudRegistryFile(ws))) {

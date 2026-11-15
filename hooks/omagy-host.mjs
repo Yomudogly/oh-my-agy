@@ -76,8 +76,6 @@ export function detectHost(payload = {}, env = process.env, argv = process.argv.
     || bundleId === 'com.anthropic.claudefordesktop'
     || p.client === 'claude-desktop'
     || p.permission_mode !== undefined
-    || p.agent_id !== undefined
-    || p.agent_type !== undefined
   ) {
     return 'claude';
   }
@@ -107,6 +105,7 @@ export function detectHost(payload = {}, env = process.env, argv = process.argv.
 
   if (CLAUDE_ONLY_TOOLS.has(toolName)) return 'claude';
   if (CODEX_ONLY_TOOLS.has(toolName)) return 'codex';
+  if (p.agent_id !== undefined || p.agent_type !== undefined) return 'claude';
   return 'antigravity';
 }
 
@@ -358,6 +357,7 @@ function normalizeSingleToolCall(toolName, rawArgs) {
 export function normalizeLifecyclePayload(payload = {}, host = 'antigravity') {
   const src = (payload && typeof payload === 'object') ? payload : {};
   const out = { ...src };
+  if (VALID_HOSTS.has(host) && !out._host) out._host = host;
 
   const conv = src.conversationId || src.conversation_id || src.session_id || src.sessionId || src.thread_id || src.threadId;
   if (conv && !out.conversationId) out.conversationId = conv;
@@ -435,6 +435,8 @@ function safeParseObj(val) {
   return {};
 }
 
+const SYNTHETIC_USER_PREFIX_RE = /^\s*<(?:task-notification|system-reminder|teammate-message|command-name|local-command-caveat|local-command-stdout)\b/i;
+
 /** Extract normalized message + tool call view from Antigravity, Claude, or Codex transcript records. */
 export function extractHostTranscriptRecords(rawRecords) {
   const list = Array.isArray(rawRecords) ? rawRecords : [rawRecords];
@@ -499,9 +501,11 @@ export function extractHostTranscriptRecords(rawRecords) {
       }
       if (pl.type === 'message') {
         const text = textFromContentArray(pl.content);
+        const isMeta = Boolean(rec.isMeta || rec.isCompactSummary || (pl.role === 'user' && SYNTHETIC_USER_PREFIX_RE.test(text)));
         return {
-          isUser: pl.role === 'user',
-          isModel: pl.role === 'assistant',
+          isUser: pl.role === 'user' && !isMeta,
+          isModel: pl.role === 'assistant' && !isMeta,
+          ...(rec.isCompactSummary ? { isCompaction: true } : {}),
           text,
           keyHint: `${rec.timestamp || ''}`,
           toolCalls: [],
@@ -539,9 +543,13 @@ export function extractHostTranscriptRecords(rawRecords) {
       }
     }
     const text = typeof content === 'string' ? content : textFromContentArray(blocks);
+    const isMetaOrSystem = Boolean(rec.isMeta || rec.isCompactSummary || rec.type === 'system' || rec.subtype === 'compact_boundary');
+    const isCompaction = Boolean(rec.isCompactSummary || rec.subtype === 'compact_boundary');
+    const isSyntheticUserText = role === 'user' && SYNTHETIC_USER_PREFIX_RE.test(text);
     return {
-      isUser: role === 'user' && !toolResults.length,
-      isModel: role === 'assistant',
+      isUser: role === 'user' && !toolResults.length && !isMetaOrSystem && !isSyntheticUserText,
+      isModel: role === 'assistant' && !isMetaOrSystem,
+      ...(isCompaction ? { isCompaction: true } : {}),
       text,
       keyHint: `${rec.uuid || rec.id || rec.timestamp || ''}`,
       toolCalls,
@@ -708,6 +716,9 @@ export function serializeHookOutcome(rawEvent, rawResult = {}, host = 'antigravi
   if (ev === 'subagent-stop' || ev === 'subagentstop') {
     return host === 'claude' ? { continue: true, suppressOutput: true } : {};
   }
+  if (ev === 'pre-compact' || ev === 'precompact') {
+    return {};
+  }
 
   if (ev === 'stop') {
     if (res.decision === 'continue' && res.reason) {
@@ -761,6 +772,7 @@ export function serializeHookOutcome(rawEvent, rawResult = {}, host = 'antigravi
   if (ev === 'user-prompt-submit' || ev === 'userpromptsubmit' || ev === 'pre-invocation') hookEventName = 'UserPromptSubmit';
   else if (ev === 'subagent-start' || ev === 'subagentstart') hookEventName = 'SubagentStart';
   else if (ev === 'post-tool-use' || ev === 'posttooluse') hookEventName = 'PostToolUse';
+  else if (ev === 'post-compact' || ev === 'postcompact') hookEventName = 'PostCompact';
 
   let additionalContext = msgs.join('\n\n');
   if (additionalContext.length > 12_000) {

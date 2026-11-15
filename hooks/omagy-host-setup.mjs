@@ -146,7 +146,8 @@ function escapeRegExp(s) {
 function replaceBacktickTools(body, mapping) {
   let out = String(body || '');
   for (const [src, dst] of Object.entries(mapping)) {
-    out = out.replace(new RegExp(`\`${escapeRegExp(src)}\``, 'g'), `\`${dst}\``);
+    const repl = `\`${dst}\``;
+    out = out.replace(new RegExp(`\`${escapeRegExp(src)}\``, 'g'), () => repl);
   }
   return out;
 }
@@ -172,8 +173,11 @@ const HOST_TOOL_MAP = {
 
 const HOST_PROSE_LEAK_RE = /\bantigravity\b|sidecar:\/\/|customization:\/\/|\bmanage_task\b/i;
 
-function buildHostHudSection(host, bundleDir = '') {
-  const hudRun = bundleDir ? path.join(bundleDir, 'sidecars', 'hud', 'run.sh') : 'sidecars/hud/run.sh';
+function buildHostHudSection(host, bundleDir = '', { platform = process.platform } = {}) {
+  const isWin = platform === 'win32';
+  const hudCmd = isWin
+    ? `node "${bundleDir ? path.win32.join(bundleDir, 'sidecars', 'hud', 'main.mjs') : 'sidecars\\hud\\main.mjs'}" desktop-ensure --host ${host} --workspace "."`
+    : `sh ${shellQuote(bundleDir ? path.join(bundleDir, 'sidecars', 'hud', 'run.sh') : 'sidecars/hud/run.sh')} desktop-ensure --host ${host} --workspace "$PWD"`;
   if (host === 'claude') {
     return [
       '## Live Desktop HUD (Claude Desktop)',
@@ -184,7 +188,7 @@ function buildHostHudSection(host, bundleDir = '') {
       '1. Check if the current context already includes `[oh-my-agy] Desktop HUD Preview running/ready at http://127.0.0.1:<port>/` (or Preview `oh-my-agy-hud`).',
       '2. Otherwise run:',
       '   ```sh',
-      `   sh ${shellQuote(hudRun)} desktop-ensure --host claude --workspace "$PWD"`,
+      `   ${hudCmd}`,
       '   ```',
       '3. When `desktop-ensure` prints JSON with `"ok": true` and `"url": "http://127.0.0.1:<port>/"`, include `[oh-my-agy HUD](<url>)` in your response.',
       '',
@@ -199,7 +203,7 @@ function buildHostHudSection(host, bundleDir = '') {
     '1. Check if the current context already includes `[oh-my-agy] Desktop HUD Preview running/ready at http://127.0.0.1:<port>/`.',
     '2. Otherwise run:',
     '   ```sh',
-    `   sh ${shellQuote(hudRun)} desktop-ensure --host codex --workspace "$PWD"`,
+    `   ${hudCmd}`,
     '   ```',
     '3. When `desktop-ensure` prints JSON with `"ok": true` and `"url": "http://127.0.0.1:<port>/"`, end your `/hud` response with `[oh-my-agy HUD](<url>)`.',
     '',
@@ -209,45 +213,49 @@ function buildHostHudSection(host, bundleDir = '') {
 function adaptHostProse(rawText, host, bundleDir = '') {
   const shortHost = host === 'claude' ? 'Claude Code' : 'Codex';
   const fullHost = host === 'claude' ? 'Claude Code' : 'OpenAI Codex';
+  const hudLinkText = host === 'claude'
+    ? '- **Desktop HUD Workbench**: In Claude Desktop, the oh-my-agy HUD runs via `.claude/launch.json` or loopback `http://127.0.0.1:<port>/` started on Desktop `SessionStart` or via `$hud` (`desktop-ensure`). Link only real loopback URLs reported by the HUD helper.'
+    : '- **Desktop HUD Workbench**: In Codex Desktop, the oh-my-agy HUD runs as a loopback server (`http://127.0.0.1:<port>/`) started on Desktop `SessionStart` or via `$hud` (`desktop-ensure`). Link only real loopback URLs reported by the HUD helper.';
+  const dispatchRepl = host === 'claude'
+    ? 'POST /api/dispatch` (`clipboard-handoff` / `claude -p`)'
+    : 'POST /api/dispatch` (`app-server` / `codex exec` / `clipboard-handoff`)';
   let out = replaceBacktickTools(rawText, HOST_TOOL_MAP[host] || {});
   out = out
-    .replace(/<antigravity_runtime>/g, `<${host}_runtime>`)
-    .replace(/<\/antigravity_runtime>/g, `</${host}_runtime>`)
-    .replace(/,\s*manage_task\b/g, '')
+    .replace(/<antigravity_runtime>/g, () => `<${host}_runtime>`)
+    .replace(/<\/antigravity_runtime>/g, () => `</${host}_runtime>`)
+    .replace(/,\s*manage_task\b/g, () => '')
     .replace(
       /- \*\*Antigravity tool disambiguation \(`manage_task` vs task checklists\)\*\*:[^\n]*/g,
-      '- **Task checklists vs shell processes**: Background shell tasks are separate from durable workflow state. Track checklists and multi-goal plans using `.omagy/ultragoal/goals.json` (never invent ad-hoc state files).',
+      () => '- **Task checklists vs shell processes**: Background shell tasks are separate from durable workflow state. Track checklists and multi-goal plans using `.omagy/ultragoal/goals.json` (never invent ad-hoc state files).',
     )
     .replace(
       /- \*\*UI Plugin Navigation \(`sidecar:\/\/` & `customization:\/\/`\)\*\*:[^\n]*/g,
-      host === 'claude'
-        ? '- **Desktop HUD Workbench**: In Claude Desktop, the oh-my-agy HUD runs via `.claude/launch.json` or loopback `http://127.0.0.1:<port>/` started on Desktop `SessionStart` or via `$hud` (`desktop-ensure`). Link only real loopback URLs reported by the HUD helper.'
-        : '- **Desktop HUD Workbench**: In Codex Desktop, the oh-my-agy HUD runs as a loopback server (`http://127.0.0.1:<port>/`) started on Desktop `SessionStart` or via `$hud` (`desktop-ensure`). Link only real loopback URLs reported by the HUD helper.',
+      () => hudLinkText,
     )
     .replace(
       /\s*\(and optionally copy to the conversation artifact directory[\s\S]*?`generative_ui`\s*skill\)/g,
-      ' (keeping local assets self-contained in the workspace HTML)',
+      () => ' (keeping local assets self-contained in the workspace HTML)',
     )
-    .replace(/POST \/api\/dispatch` via Antigravity's native `agentapi` CLI/g, host === 'claude' ? 'POST /api/dispatch` (`clipboard-handoff` / `claude -p`)' : 'POST /api/dispatch` (`app-server` / `codex exec` / `clipboard-handoff`)')
-    .replace(/- `manage_subagents list` and `manage_task list`: live subagents and background tasks/g, '- Active subagent threads and background shell processes (when running)')
-    .replace(/`manage_task list`[^`\n]*`kill`/g, 'list and stop background processes')
-    .replace(/`manage_task kill`/g, 'terminate hung background processes')
-    .replace(/\bmanage_task kill\b/g, 'terminate hung processes')
-    .replace(/\bmanage_task\b/g, 'background process control')
-    .replace(/use Antigravity's `generate_image` tool/g, 'use available image generation tooling (if present)')
-    .replace(/Codex's hidden goal tools do not exist in Antigravity\./g, 'Hidden built-in goal tools are superseded here by repo-native artifacts.')
-    .replace(/surface `\[oh-my-agy HUD\]\(sidecar:\/\/oh-my-agy\/hud\/?\)`/g, 'surface the Desktop HUD URL (run `$hud`)')
-    .replace(/\[oh-my-agy HUD\]\(sidecar:\/\/oh-my-agy\/hud\/?\)/g, 'Desktop HUD (run `$hud` for live URL)')
-    .replace(/`?sidecar:\/\/oh-my-agy\/hud\/?`?/gi, '`http://127.0.0.1:<port>/`')
-    .replace(/sidecar:\/\/[^\s`)"']*/gi, 'http://127.0.0.1:<port>/')
-    .replace(/`?\[oh-my-agy\]\(customization:\/\/oh-my-agy\)`?/gi, `${shortHost} plugin settings`)
-    .replace(/customization:\/\/[^\s`)"']*/gi, 'plugin settings')
-    .replace(/\bin the Auxiliary Pane\b/g, 'in the Desktop HUD')
-    .replace(/\bAuxiliary Pane\b/g, 'Desktop HUD')
-    .replace(/\bAux Pane\b/g, 'Desktop HUD')
-    .replace(/\bfor Antigravity\./g, `for ${fullHost}.`)
-    .replace(/\bAntigravity's\b/g, `${shortHost}'s`)
-    .replace(/\bAntigravity\b/gi, shortHost);
+    .replace(/POST \/api\/dispatch` via Antigravity's native `agentapi` CLI/g, () => dispatchRepl)
+    .replace(/- `manage_subagents list` and `manage_task list`: live subagents and background tasks/g, () => '- Active subagent threads and background shell processes (when running)')
+    .replace(/`manage_task list`[^`\n]*`kill`/g, () => 'list and stop background processes')
+    .replace(/`manage_task kill`/g, () => 'terminate hung background processes')
+    .replace(/\bmanage_task kill\b/g, () => 'terminate hung processes')
+    .replace(/\bmanage_task\b/g, () => 'background process control')
+    .replace(/use Antigravity's `generate_image` tool/g, () => 'use available image generation tooling (if present)')
+    .replace(/Codex's hidden goal tools do not exist in Antigravity\./g, () => 'Hidden built-in goal tools are superseded here by repo-native artifacts.')
+    .replace(/surface `\[oh-my-agy HUD\]\(sidecar:\/\/oh-my-agy\/hud\/?\)`/g, () => 'surface the Desktop HUD URL (run `$hud`)')
+    .replace(/\[oh-my-agy HUD\]\(sidecar:\/\/oh-my-agy\/hud\/?\)/g, () => 'Desktop HUD (run `$hud` for live URL)')
+    .replace(/`?sidecar:\/\/oh-my-agy\/hud\/?`?/gi, () => '`http://127.0.0.1:<port>/`')
+    .replace(/sidecar:\/\/[^\s`)"']*/gi, () => 'http://127.0.0.1:<port>/')
+    .replace(/`?\[oh-my-agy\]\(customization:\/\/oh-my-agy\)`?/gi, () => `${shortHost} plugin settings`)
+    .replace(/customization:\/\/[^\s`)"']*/gi, () => 'plugin settings')
+    .replace(/\bin the Auxiliary Pane\b/g, () => 'in the Desktop HUD')
+    .replace(/\bAuxiliary Pane\b/g, () => 'Desktop HUD')
+    .replace(/\bAux Pane\b/g, () => 'Desktop HUD')
+    .replace(/\bfor Antigravity\./g, () => `for ${fullHost}.`)
+    .replace(/\bAntigravity's\b/g, () => `${shortHost}'s`)
+    .replace(/\bAntigravity\b/gi, () => shortHost);
   return out;
 }
 
@@ -256,13 +264,15 @@ function adaptSkillMarkdown(rawMd, host, opts = {}) {
   if (!fm) return { text: rawMd, reverted: false };
   const skillName = String(opts.skillName || '');
   const bundleDir = String(opts.bundleDir || '');
+  const platform = opts.platform || process.platform;
   const header = adaptHostProse(fm[0], host, bundleDir);
   let body = rawMd.slice(fm[0].length);
   if (skillName === 'hud') {
     const shortHost = host === 'claude' ? 'Claude Code' : 'OpenAI Codex';
+    const hudHeading = `# HUD (Status Board)\n\nIn **${shortHost}**, \`oh-my-agy\` provides an **on-demand chat status board** and a **live Desktop HUD workbench** served over loopback HTTP/SSE.\n\n${buildHostHudSection(host, bundleDir, { platform })}\n`;
     body = body.replace(
       /^# HUD \(Status Board\)[\s\S]*?(?=## Presets)/m,
-      `# HUD (Status Board)\n\nIn **${shortHost}**, \`oh-my-agy\` provides an **on-demand chat status board** and a **live Desktop HUD workbench** served over loopback HTTP/SSE.\n\n${buildHostHudSection(host, bundleDir)}\n`,
+      () => hudHeading,
     );
   }
   body = adaptHostProse(body, host, bundleDir);
@@ -277,6 +287,9 @@ function adaptAgentBody(body, host, bundleDir = '') {
 
 function buildCodexPluginManifest(pluginJson) {
   const devName = typeof pluginJson.author === 'object' ? pluginJson.author?.name : pluginJson.author;
+  const repoRaw = typeof pluginJson.repository === 'string' ? pluginJson.repository : (pluginJson.repository?.url || '');
+  const repoBase = String(repoRaw || '').replace(/\.git$/i, '').replace(/\/+$/, '');
+  const supportURL = repoBase ? `${repoBase}/issues` : (pluginJson.homepage || '');
   return {
     name: pluginJson.name,
     version: pluginJson.version,
@@ -290,12 +303,13 @@ function buildCodexPluginManifest(pluginJson) {
     hooks: './hooks/hooks.json',
     interface: {
       displayName: pluginJson.displayName || 'Oh My Agy',
-      shortDescription: 'Multi-agent orchestration workflows, consensus planning, durable goals & HUD.',
+      shortDescription: 'Multi-agent workflow & HUD.',
       longDescription: pluginJson.description,
       developerName: devName || 'yomudogly',
       category: 'Coding',
       capabilities: ['Interactive', 'Write'],
       websiteURL: pluginJson.homepage || '',
+      supportURL,
       composerIcon: './assets/logo.png',
       logo: './assets/logo.png',
       logoDark: './assets/logo.png',
@@ -352,11 +366,19 @@ function renderCodexAgentToml(roleName, rawAgentMd, bundleDir = '') {
   const name = parsed.fields.name || roleName;
   const desc = adaptHostProse(String(parsed.fields.description || `${roleName} specialist`), 'codex', bundleDir);
   const sandboxMode = WRITE_ROLES.has(roleName) ? 'workspace-write' : 'read-only';
+  const leafGuard = [
+    '<native_subagent_leaf_guard>',
+    'Execute only the scoped task assigned by the parent session.',
+    'Do not spawn nested child agents, orchestrate workflows recursively, or rewrite parent state files.',
+    'Report concrete findings, blockers, and scope boundary crossings back to the caller.',
+    '</native_subagent_leaf_guard>',
+  ].join('\n');
+  const instructions = `${adaptAgentBody(parsed.body, 'codex', bundleDir).trimStart().trimEnd()}\n\n${leafGuard}`;
   return [
     `name = ${JSON.stringify(name)}`,
     `description = ${JSON.stringify(desc)}`,
     `sandbox_mode = ${JSON.stringify(sandboxMode)}`,
-    `developer_instructions = ${formatTomlMultiline(adaptAgentBody(parsed.body, 'codex', bundleDir).trimStart())}`,
+    `developer_instructions = ${formatTomlMultiline(instructions)}`,
     '',
   ].join('\n');
 }
@@ -382,11 +404,15 @@ function renderCodexOpenAiYaml(skillName, fmFields, bundleDir = '') {
 
 const SUPPORTED_HOOK_EVENTS = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']);
 
-function buildHostHooksJson(host, bundleDir) {
+function buildHostHooksJson(host, bundleDir, { platform = process.platform } = {}) {
+  const isWin = platform === 'win32';
   const runSh = path.join(bundleDir, 'hooks', 'run.sh');
-  const mkEntry = (cliEvent, matcher = '') => {
-    const cmd = `OMAGY_HOST=${host} OMAGY_BUNDLE_DIR=${shellQuote(bundleDir)} sh ${shellQuote(runSh)} ${cliEvent} --host=${host}`;
-    const entry = { hooks: [{ type: 'command', command: cmd, timeout: 15 }] };
+  const hookMjs = path.win32.join(bundleDir, 'hooks', 'omagy-hook.mjs');
+  const mkEntry = (cliEvent, matcher = '', timeout = 15) => {
+    const cmd = isWin
+      ? `node "${hookMjs}" ${cliEvent} --host=${host}`
+      : `OMAGY_HOST=${host} OMAGY_BUNDLE_DIR=${shellQuote(bundleDir)} sh ${shellQuote(runSh)} ${cliEvent} --host=${host}`;
+    const entry = { hooks: [{ type: 'command', command: cmd, timeout }] };
     if (matcher) entry.matcher = matcher;
     return [entry];
   };
@@ -397,7 +423,7 @@ function buildHostHooksJson(host, bundleDir) {
         SessionStart: mkEntry('session-start'),
         UserPromptSubmit: mkEntry('user-prompt-submit'),
         PreToolUse: mkEntry('pre-tool-use', 'Write|Edit|MultiEdit|NotebookEdit|Read'),
-        Stop: mkEntry('stop'),
+        Stop: mkEntry('stop', '', 30),
       },
     };
   }
@@ -406,8 +432,8 @@ function buildHostHooksJson(host, bundleDir) {
     hooks: {
       SessionStart: mkEntry('session-start'),
       UserPromptSubmit: mkEntry('user-prompt-submit'),
-      PreToolUse: mkEntry('pre-tool-use', 'apply_patch|Write|Edit|MultiEdit|Read'),
-      Stop: mkEntry('stop'),
+      PreToolUse: mkEntry('pre-tool-use', 'apply_patch|Write|Edit|MultiEdit|Read|Bash|shell_command|exec_command'),
+      Stop: mkEntry('stop', '', 30),
     },
   };
 }
@@ -431,6 +457,7 @@ function writeRealFileSync(filePath, content) {
   try {
     const st = fs.lstatSync(filePath);
     if (st.isSymbolicLink() || !st.isFile()) fs.rmSync(filePath, { recursive: true, force: true });
+    else if (fs.readFileSync(filePath, 'utf8') === content) return;
   } catch { /* fail open: destination file does not exist yet */ }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf8');
@@ -550,7 +577,7 @@ function assertSafeBundleTargetDir(bundleDir, pluginRoot, workspace = '') {
   }
 }
 
-function mergeLaunchJson(launchPath, bundleDir, workspaceRoot) {
+function mergeLaunchJson(launchPath, bundleDir, workspaceRoot, { platform = process.platform } = {}) {
   assertNotSymlinkTarget(path.dirname(launchPath), 'launch_dir_symlink_target');
   assertNotSymlinkTarget(launchPath, 'launch_json_symlink_target');
   let doc = { version: '0.0.1', configurations: [] };
@@ -562,11 +589,12 @@ function mergeLaunchJson(launchPath, bundleDir, workspaceRoot) {
   const configs = Array.isArray(doc.configurations) ? doc.configurations.filter((c) => c && c.name !== 'oh-my-agy-hud') : [];
   const port = computeDesktopHudPort(workspaceRoot, { channel: 'launch' });
   const registryFile = desktopHudRegistryFile(workspaceRoot, '', { channel: 'launch' });
+  const isWin = platform === 'win32';
   configs.push({
     name: 'oh-my-agy-hud',
-    runtimeExecutable: 'sh',
+    runtimeExecutable: isWin ? 'node' : 'sh',
     runtimeArgs: [
-      path.join(bundleDir, 'sidecars', 'hud', 'run.sh'),
+      isWin ? path.win32.join(bundleDir, 'sidecars', 'hud', 'main.mjs') : path.join(bundleDir, 'sidecars', 'hud', 'run.sh'),
       'desktop-serve', '--host', 'claude', '--workspace', path.resolve(workspaceRoot), '--port', String(port), '--registry', registryFile,
     ],
     port,
@@ -738,7 +766,7 @@ function isOmagyHookEntry(entry) {
     entry
     && typeof entry === 'object'
     && Array.isArray(entry.hooks)
-    && entry.hooks.some((h) => h && typeof h.command === 'string' && (h.command.includes('oh-my-agy') || h.command.includes('hooks/run.sh'))),
+    && entry.hooks.some((h) => h && typeof h.command === 'string' && (h.command.includes('oh-my-agy') || /hooks[\/\\](?:run\.sh|omagy-hook\.mjs)/.test(h.command))),
   );
 }
 
@@ -805,13 +833,29 @@ function stripOmagyCodexHooksJson(hooksPath) {
   return { removedAll: false, keptForeign: true };
 }
 
+function isOmagyOwnedCodexSkill(skillDir) {
+  try {
+    const st = fs.lstatSync(skillDir);
+    if (st.isSymbolicLink()) {
+      const target = fs.readlinkSync(skillDir);
+      if (/oh-my-agy/i.test(target)) return true;
+    }
+    const skillMd = path.join(skillDir, 'SKILL.md');
+    if (!fs.existsSync(skillMd)) return false;
+    const content = fs.readFileSync(skillMd, 'utf8');
+    return /(?:\[oh-my-agy\]|oh-my-agy|\.omagy\/|omagy_wiki\/|omagy-hook\.mjs|hooks[\/\\]run\.sh)/i.test(content);
+  } catch {
+    return false; /* fail open: cannot inspect legacy skill directory */
+  }
+}
+
 function cleanLegacyDuplicateCodexUserSkills(skillsDir, skillNames) {
   assertNotSymlinkTarget(skillsDir, 'codex_skills_dir_symlink_target');
   if (!fs.existsSync(skillsDir)) return;
   for (const sName of skillNames) {
     const legacy = path.join(skillsDir, sName);
     try {
-      if (fs.lstatSync(legacy)) fs.rmSync(legacy, { recursive: true, force: true });
+      if (isOmagyOwnedCodexSkill(legacy)) fs.rmSync(legacy, { recursive: true, force: true });
     } catch { /* fail open: legacy skill absent */ }
   }
 }
@@ -832,7 +876,7 @@ function getCodexPluginLocations(codexTargetRoot, pluginJson) {
   };
 }
 
-function materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson }) {
+function materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson, platform = process.platform }) {
   const loc = getCodexPluginLocations(codexTargetRoot, pluginJson);
   for (const p of [
     path.join(codexTargetRoot, 'marketplaces'),
@@ -857,7 +901,7 @@ function materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson })
   copyDirRecursive(bundleDir, loc.mktPluginDir, { dereference: true });
   writeRealFileSync(
     path.join(loc.mktPluginDir, 'hooks', 'hooks.json'),
-    `${JSON.stringify(buildHostHooksJson('codex', loc.mktPluginDir), null, 2)}\n`,
+    `${JSON.stringify(buildHostHooksJson('codex', loc.mktPluginDir, { platform }), null, 2)}\n`,
   );
   resetRealCleanDir(loc.mktAgentsDir);
   writeRealFileSync(
@@ -869,7 +913,7 @@ function materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson })
   copyDirRecursive(bundleDir, loc.cachePluginDir, { dereference: true });
   writeRealFileSync(
     path.join(loc.cachePluginDir, 'hooks', 'hooks.json'),
-    `${JSON.stringify(buildHostHooksJson('codex', loc.cachePluginDir), null, 2)}\n`,
+    `${JSON.stringify(buildHostHooksJson('codex', loc.cachePluginDir, { platform }), null, 2)}\n`,
   );
   return loc;
 }
@@ -880,6 +924,7 @@ export function setupHostBundle(options = {}) {
   if (!SUPPORTED_HOSTS.has(host)) return { ok: false, exitCode: 2, error: `unsupported_host:${host || '(empty)'}` };
   if (options.copy && options.symlink) return { ok: false, exitCode: 2, error: 'conflicting_flags:--copy,--symlink' };
 
+  const platform = String(options.platform || process.platform);
   const pluginRoot = path.resolve(options.pluginRoot || process.cwd());
   const pluginJson = readJsonStrict(path.join(pluginRoot, 'plugin.json'));
   const {
@@ -953,7 +998,7 @@ export function setupHostBundle(options = {}) {
     if (!fs.statSync(src).isFile()) continue;
     if (linkOrCopyFile(src, path.join(hooksDstDir, name), usedCopy)) usedCopy = true;
   }
-  const hooksConfig = buildHostHooksJson(host, bundleDir);
+  const hooksConfig = buildHostHooksJson(host, bundleDir, { platform });
   writeRealFileSync(path.join(hooksDstDir, 'hooks.json'), `${JSON.stringify(hooksConfig, null, 2)}\n`);
 
   // 2. Link/copy sidecars/ and assets/ (omitting 82MB README demo GIF), and write host-adapted rules/AGENTS.md
@@ -990,7 +1035,7 @@ export function setupHostBundle(options = {}) {
     }
     adaptMarkdownTree(path.join(sDst, 'references'), host, bundleDir);
     const rawSkillMd = fs.readFileSync(path.join(sSrc, 'SKILL.md'), 'utf8');
-    const adaptedSkill = adaptSkillMarkdown(rawSkillMd, host, { skillName: sName, bundleDir });
+    const adaptedSkill = adaptSkillMarkdown(rawSkillMd, host, { skillName: sName, bundleDir, platform });
     if (adaptedSkill.reverted) warnings.push(`skill_adapt_reverted_over_19000:${sName}`);
     writeRealFileSync(path.join(sDst, 'SKILL.md'), adaptedSkill.text);
     if (host === 'codex') {
@@ -1039,7 +1084,7 @@ export function setupHostBundle(options = {}) {
     writeRealFileSync(path.join(claudeTargetRoot, 'rules', 'oh-my-agy.md'), adaptedRulesBody);
 
     let launchInfo = null;
-    if (workspace) launchInfo = mergeLaunchJson(path.join(workspace, '.claude', 'launch.json'), bundleDir, workspace);
+    if (workspace) launchInfo = mergeLaunchJson(path.join(workspace, '.claude', 'launch.json'), bundleDir, workspace, { platform });
 
     bundleMeta.targetRoot = claudeTargetRoot;
     writeRealFileSync(path.join(bundleDir, 'host-bundle.json'), `${JSON.stringify(bundleMeta, null, 2)}\n`);
@@ -1116,7 +1161,7 @@ export function setupHostBundle(options = {}) {
   writeRealFileSync(path.join(bundleDir, 'host-bundle.json'), `${JSON.stringify(bundleMeta, null, 2)}\n`);
 
   if (scope === 'user') {
-    materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson });
+    materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson, platform });
     mergeCodexConfigToml(path.join(codexTargetRoot, 'config.toml'), roleDescs, pluginLoc);
   }
   const configTomlPath = path.join(codexTargetRoot, 'config.toml');
@@ -1171,7 +1216,7 @@ function validateHooksConfig(hooksJsonPath, host, errors, { allowForeignHooks = 
           errors.push(`invalid_hook_handler:${ev}[${idx}].hooks[${hIdx}]`);
           continue;
         }
-        const isOmagyHandler = h.command.includes(`--host=${host}`) && h.command.includes('hooks/run.sh');
+        const isOmagyHandler = h.command.includes(`--host=${host}`) && /hooks[\/\\](?:run\.sh|omagy-hook\.mjs)/.test(h.command);
         if (isOmagyHandler) omagyMatchedEvents.add(ev);
         else if (!allowForeignHooks) errors.push(`missing_host_command_flag:${hooksJsonPath}:${ev}[${idx}]`);
       }
@@ -1493,7 +1538,10 @@ export function validateHostBundle(options = {}) {
           const hudCfg = Array.isArray(ldoc?.configurations) ? ldoc.configurations.find((c) => c && c.name === 'oh-my-agy-hud') : null;
           if (!hudCfg) errors.push('missing_launch_hud_entry');
           else {
-            if (hudCfg.runtimeExecutable !== 'sh') errors.push('invalid_launch_runtimeExecutable');
+            const expectedExec = options.platform ? (options.platform === 'win32' ? 'node' : 'sh') : null;
+            if (expectedExec ? hudCfg.runtimeExecutable !== expectedExec : (hudCfg.runtimeExecutable !== 'sh' && hudCfg.runtimeExecutable !== 'node')) {
+              errors.push('invalid_launch_runtimeExecutable');
+            }
             if (!Array.isArray(hudCfg.runtimeArgs) || !hudCfg.runtimeArgs.includes('desktop-serve')) errors.push('invalid_launch_runtimeArgs');
             if (!Number.isInteger(hudCfg.port) || hudCfg.port < 48800 || hudCfg.port > 49799) errors.push(`invalid_launch_port:${hudCfg.port}`);
           }
@@ -1508,7 +1556,11 @@ export function validateHostBundle(options = {}) {
       try {
         bundlePluginManifest = readJsonStrict(codexPluginPath);
         if (!bundlePluginManifest.hooks || !bundlePluginManifest.skills) errors.push('invalid_codex_plugin_paths');
-        if (!bundlePluginManifest.interface?.displayName || !bundlePluginManifest.interface?.logo) errors.push('missing_codex_plugin_interface');
+        const iface = bundlePluginManifest.interface || {};
+        if (!iface.displayName || !iface.logo) errors.push('missing_codex_plugin_interface');
+        const shortDesc = typeof iface.shortDescription === 'string' ? iface.shortDescription : '';
+        if (!shortDesc || shortDesc.length > 30 || /[\r\n]/.test(shortDesc)) errors.push('invalid_codex_plugin_short_description');
+        if (typeof iface.supportURL !== 'string' || !iface.supportURL.trim()) errors.push('missing_codex_plugin_support_url');
       } catch { /* fail open: malformed plugin manifest recorded */ errors.push('invalid_json:.codex-plugin/plugin.json'); }
     }
     if (!fs.existsSync(path.join(bundleDir, 'plugin.json'))) errors.push('missing:plugin.json');
@@ -1541,9 +1593,7 @@ export function validateHostBundle(options = {}) {
         }
         for (const sName of bundleSkillDirs) {
           const dupSkillPath = path.join(codexTarget, 'skills', sName);
-          try {
-            if (fs.lstatSync(dupSkillPath)) errors.push(`duplicate_omagy_user_skill:${sName}`);
-          } catch { /* fail open: legacy user skill absent */ }
+          if (isOmagyOwnedCodexSkill(dupSkillPath)) errors.push(`duplicate_omagy_user_skill:${sName}`);
         }
         const pluginStub = {
           name: bundlePluginManifest?.name || meta?.pluginName || 'oh-my-agy',
