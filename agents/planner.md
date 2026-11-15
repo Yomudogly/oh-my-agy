@@ -30,7 +30,7 @@ You analyze requirements, plan, and hand off; you do not implement production co
 - Use outcome-first, execution-ready plans: define the desired result, success criteria, constraints, evidence, validation path, and stop condition.
 - Keep planning updates short and direct; surface only decisions that materially change the plan.
 - Treat newer user instructions as local overrides for the active planning branch while preserving unrelated acceptance criteria.
-- Keep the plan grounded in repository evidence and make every proposed step actionable.
+- Keep the plan grounded in repository evidence (`coverage-map`, `docs-drift`, `dep-license-diff` when planning refactors, upgrades, or docs work) and make every proposed step actionable, routing specialized lanes explicitly (`devops-engineer` / `$release`, `supply-chain-auditor`, `runtime-qa`, `doc-steward`, `$modernize`, `$threat-model`) without blurring write vs. read-only boundaries.
 </constraints>
 
 <execution_loop>

@@ -9,10 +9,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     name: Selftest & Skill Eval (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
@@ -37,6 +42,10 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      - name: Check POSIX shell script syntax
+        shell: bash
+        run: sh -n hooks/run.sh sidecars/hud/run.sh
+
       - name: Run lifecycle hooks & CLI selftest
         shell: bash
         run: |
@@ -44,9 +53,59 @@ jobs:
           printf '%s\n' "$out"
           printf '%s\n' "$out" | grep -Fq '"selftest":"PASS"'
 
+      - name: Validate skills directory strictly
+        shell: bash
+        run: node hooks/omagy-hook.mjs skill-validate ./skills --strict --json
+
       - name: Run skill routing evaluation ratchet
         shell: bash
         run: sh ./hooks/run.sh skill-eval --min-rank1 95
+
+      - name: Check documentation links and license compliance
+        shell: bash
+        run: |
+          node hooks/omagy-hook.mjs docs-drift . --json
+          node hooks/omagy-hook.mjs dep-license-diff . --json
+
+      - name: Lint project wiki cross-links (when checked into repo)
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const { execFileSync } = require("node:child_process");
+            if (!fs.existsSync("omagy_wiki")) {
+              console.log("omagy_wiki directory not tracked in git checkout; skipping repo wiki-lint (T57 validates wiki-lint hermetically in selftest).");
+              process.exit(0);
+            }
+            const r = JSON.parse(execFileSync(process.execPath, ["hooks/omagy-hook.mjs", "wiki-lint", "./omagy_wiki", ".", "--json"], { encoding: "utf8" }));
+            if (!r.ok || (r.isolatedPages && r.isolatedPages.length)) {
+              console.error(r);
+              process.exit(1);
+            }
+          '
+
+      - name: Verify cross-host Claude & Codex bundles in temp workspace
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const os = require("node:os");
+            const path = require("node:path");
+            const { execFileSync } = require("node:child_process");
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "omagy-ci-host-"));
+            try {
+              const claudeTarget = path.join(tmp, "claude-proj");
+              const codexTarget = path.join(tmp, "codex-home");
+              fs.mkdirSync(claudeTarget, { recursive: true });
+              fs.mkdirSync(codexTarget, { recursive: true });
+              const claudeSetup = JSON.parse(execFileSync(process.execPath, ["hooks/omagy-hook.mjs", "host-setup", "claude", "--scope", "project", "--workspace", claudeTarget, "--json"], { encoding: "utf8" }));
+              execFileSync(process.execPath, ["hooks/omagy-hook.mjs", "host-validate", "claude", claudeSetup.bundleDir, "--workspace", claudeTarget, "--strict", "--json"], { stdio: "inherit" });
+              const codexSetup = JSON.parse(execFileSync(process.execPath, ["hooks/omagy-hook.mjs", "host-setup", "codex", "--scope", "user", "--codex-home", codexTarget, "--json"], { encoding: "utf8" }));
+              execFileSync(process.execPath, ["hooks/omagy-hook.mjs", "host-validate", "codex", codexSetup.bundleDir, "--codex-home", codexTarget, "--strict", "--json"], { stdio: "inherit" });
+            } finally {
+              fs.rmSync(tmp, { recursive: true, force: true });
+            }
+          '
 
       - name: Run HUD sidecar selftest
         shell: bash

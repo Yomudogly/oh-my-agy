@@ -76,6 +76,7 @@ When invoked as `$pr --ship` (or closing out a production service/schema release
 - **Alerting & Runbook**: [2-tier symptom alerts and 3-line actionable runbook](../code-review/references/ship-readiness.md#2-two-tier-symptom-alerts-and-three-line-actionable-runbooks)
 - **Progressive Rollout & SLO Gate**: [quantitative canary Advance / Hold / Rollback thresholds, Error Budget Release Gate (`>20%` / `0–20%` / `0%` freeze), and RTO-bound rollback plan](../code-review/references/ship-readiness.md#3-progressive-delivery-quantitative-canary-thresholds-error-budget-gate-and-rto-rollback)
 - **Automated Hygiene Gates**: [`sh <plugin>/hooks/run.sh quality-gate`, `floor-guard`, and `git diff --staged --name-only` secret check](../code-review/references/ship-readiness.md#4-pre-ship-automated-gates-quality-gate-floor-guard-and-staged-secret-check)
+- **Docs & Dependency Hygiene**: run `sh <plugin>/hooks/run.sh docs-drift <workspace> --json` and `sh <plugin>/hooks/run.sh dep-license-diff <workspace> --json` (and hand off to `$release` when cutting a versioned package tag or changelog release)
 
 ## PR Watch, CI Triage & Review Care (`--watch`)
 

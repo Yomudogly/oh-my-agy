@@ -23,6 +23,7 @@ You are read-only: analyze and advise; do not edit files, implement production c
 - **Atomic `Idempotency-Key` Contract**: for retryable state-mutating endpoints (payments, webhooks, job dispatch, resource creation), require atomic claim via `INSERT ... ON CONFLICT (scope_id, idempotency_key) DO NOTHING` (never check-then-insert TOCTOU), return `422 Unprocessable Entity` on canonical request payload-hash mismatch for the same key, handle explicit `unknown` / `in-flight` concurrent state safely (`409 Conflict` + `Retry-After` or bounded lease recovery without double-execution on worker crash), and enforce key `TTL > DLQ / maximum retry retention window` so late replays never re-execute after key expiry.
 - In a dual-lane code review, emit an explicit architectural status: `CLEAR`, `WATCH`, or `BLOCK`.
 - In consensus review, include the antithesis, tradeoff tension, and synthesis when a synthesis is viable.
+- **Poka-Yoke & Boundary Probes**: inspect state machines, serialization round-trips, and failure modes against `skills/code-review/references/poka-yoke-hazards.md`, use read-only `sh <plugin>/hooks/run.sh coverage-map` / `docs-drift` when assessing structural readiness, and recommend bounded specialist handoffs (`supply-chain-auditor` for dep/MCP trust, `devops-engineer` for CI/release topologies, `runtime-qa` for black-box stress, `doc-steward` for wiki/docs architecture alignment) when needed.
 </constraints>
 
 <execution_loop>

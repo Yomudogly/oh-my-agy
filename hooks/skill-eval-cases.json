@@ -205,6 +205,24 @@
         }
       ]
     },
+    "modernize": {
+      "positive": [
+        "Upgrade our outdated React and Node runtime dependencies in phased codemod waves with rollback checkpoints",
+        "Modernize this legacy payment SDK using behavior-lock baseline tests, license diff checks, and Expand-Migrate-Contract seams",
+        "Execute a phased dependency upgrade to bump major framework packages cleanly without breaking backward compatibility",
+        "Execute a multi-wave framework and runtime modernization upgrade with per-wave verification gates"
+      ],
+      "negative": [
+        {
+          "prompt": "Clean up and deslop bloated AI-generated boilerplate and dead fallback helpers in src/parser.ts",
+          "owner": "ai-slop-cleaner"
+        },
+        {
+          "prompt": "Run multi-agent consensus planning with architect antithesis and critic review before writing code",
+          "owner": "ralplan"
+        }
+      ]
+    },
     "performance-goal": {
       "positive": [
         "Run an evaluator-gated performance optimization loop to improve p95 latency and throughput in small reversible patches",
@@ -261,6 +279,24 @@
         }
       ]
     },
+    "release": {
+      "positive": [
+        "Prepare a versioned v0.7.0 release by checking release readiness, SemVer bump, CHANGELOG sync, and dry-run packaging",
+        "Stage an end-to-end software release by checking license and docs readiness gates, synchronizing manifests, and running rollout checklists",
+        "Generate verified release notes from git commits, sync package and plugin versions, and run dry-run validation",
+        "Check if the repository passes pre-release readiness checks and assemble a rollout and rollback release playbook"
+      ],
+      "negative": [
+        {
+          "prompt": "Draft a pull request description summarizing branch verification evidence and ADR reversibility",
+          "owner": "pr"
+        },
+        {
+          "prompt": "Run a merge-readiness code review across independent code-reviewer and architect subagent lanes",
+          "owner": "code-review"
+        }
+      ]
+    },
     "skill": {
       "positive": [
         "List, add, edit, validate, and scan Antigravity SKILL.md files in user or project scope",
@@ -301,6 +337,24 @@
         {
           "prompt": "Run multi-agent consensus planning with independent architectural and critic review",
           "owner": "ralplan"
+        }
+      ]
+    },
+    "threat-model": {
+      "positive": [
+        "Build a structured security threat model with trust-boundary data-flow diagrams, STRIDE risks, and file-line mitigations",
+        "Conduct a structured security threat model auditing OWASP LLM and agentic prompt injection, MCP credential exposure, and authz boundaries",
+        "Map the attack surface, external actors, SSRF vectors, and multi-tenant isolation gaps across this service",
+        "Analyze security trust boundaries and rank Likelihood by Impact mitigations into a threat model artifact"
+      ],
+      "negative": [
+        {
+          "prompt": "Investigate why webhook signatures fail intermittently across src/webhooks/verify.ts and rawBody.ts",
+          "owner": "analyze"
+        },
+        {
+          "prompt": "Review this scoped PR diff through code-reviewer and architect lanes before merging",
+          "owner": "code-review"
         }
       ]
     },

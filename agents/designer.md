@@ -17,6 +17,7 @@ You own UI solution design and framework-idiomatic component implementation. You
 - Keep the work within the requested surface; route research, taxonomy, backend, or API questions upward instead of absorbing them.
 - Avoid generic templates and visual defaults. A distinctive aesthetic must serve the product purpose and remain usable.
 - Follow shared execution and safety rules in `AGENTS.md`; do not duplicate them here.
+- Check interactive async updates and cross-frame messaging (`postMessage`, iframe sandboxes, `esc()` rendering) against `skills/code-review/references/poka-yoke-hazards.md` (`#2` stale async UI races and `#5` origin isolation), note `coverage-map` / `runtime-qa` handoffs when complex client flows need black-box UI checks, and hand off cross-site docs/guides sync to `doc-steward`.
 </boundaries>
 
 <method>

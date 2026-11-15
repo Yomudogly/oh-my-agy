@@ -42,6 +42,7 @@ import {
   buildTaskDagWaves,
   buildWikiMindMapGraph,
   extractMarkdownToc,
+  fenceUntrustedContext,
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
@@ -83,6 +84,7 @@ export {
   buildTaskDagWaves,
   buildWikiMindMapGraph,
   extractMarkdownToc,
+  fenceUntrustedContext,
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
@@ -206,6 +208,12 @@ const SKILL_GUIDE_META = {
     quickStart: '/performance-goal reduce cold-start latency by 25% using npm run bench',
     howToUse: 'Evaluator-gated optimization loop that records baseline and small reversible patch checkpoints under .omagy/goals/performance/.',
   },
+  modernize: {
+    category: 'Execution & Teams',
+    flags: ['--plan', '--dry-run', '--wave'],
+    quickStart: '/modernize --plan "upgrade React 18 to 19 and ESLint 9 flat config"',
+    howToUse: 'Phased codebase, dependency, framework, and runtime modernization using behavior-lock baselines, dep-license-diff / coverage-map pre-flight, codemod waves, Expand-Migrate-Contract seams, and rollback checkpoints.',
+  },
   'deep-research': {
     category: 'Research & Analysis',
     flags: ['--technical', '--business', '--idea', '--implementation', '--quick', '--loop'],
@@ -247,6 +255,18 @@ const SKILL_GUIDE_META = {
     flags: ['--watch', '--ship'],
     quickStart: '/pr draft a pull request body for this branch',
     howToUse: 'Assembles a review-ready PR description from the .omagy/ paper trail, runs pre-ship readiness gates (--ship), and triages/watches open PRs (--watch) across CI, review threads, and merge state.',
+  },
+  'threat-model': {
+    category: 'Review, QA & Cleanup',
+    flags: [],
+    quickStart: '/threat-model map trust boundaries and MCP supply-chain risks in this repo',
+    howToUse: 'Structured STRIDE and OWASP Agentic/LLM threat modeling with trust-boundary data-flow diagrams, likelihood-impact scoring, mcp-audit/dep-license-diff probes, and file:line mitigations.',
+  },
+  release: {
+    category: 'Review, QA & Cleanup',
+    flags: [],
+    quickStart: '/release prepare v0.7.0 changelog, manifest sync, and dry-run packaging',
+    howToUse: 'End-to-end release engineering workflow covering pre-release quality/license/docs-drift gates, SemVer classification, CHANGELOG sync, dry-run packaging validation, and human-confirmed tag/publish steps.',
   },
   'visual-ralph': {
     category: 'Design & Prototyping',
@@ -365,6 +385,30 @@ const SUBAGENT_GUIDE_META = {
     defaultPrompt: 'Audit recent changes for OWASP Top 10, injection, auth, secret exposure, and path traversal risks',
     whenToUse: 'OWASP Top 10, auth/session boundaries, injection, path traversal, and secret exposure audit on security-sensitive changes.',
   },
+  'supply-chain-auditor': {
+    lane: 'Review & Verification',
+    modelTier: 'pro | inherit',
+    defaultPrompt: 'Audit dependency licenses, lockfile provenance, .mcp.json servers, skills, and GitHub Actions SHA pinning',
+    whenToUse: 'Read-only dependency, SPDX license (dep-license-diff), MCP config (mcp-audit), skill Trojan (skill-validate), and CI action-pinning audit.',
+  },
+  'runtime-qa': {
+    lane: 'Review & Verification',
+    modelTier: 'inherit',
+    defaultPrompt: 'Run black-box edge-case probes, timeout resilience checks, and coverage-map gap sweeps on recent changes',
+    whenToUse: 'Read-only black-box CLI/process/API edge-case probing, coverage-map gap targeting, zero-assertion test audits, and reproducible failure recipes.',
+  },
+  'devops-engineer': {
+    lane: 'Execution & Debugging',
+    modelTier: 'inherit',
+    defaultPrompt: 'Harden CI workflows, container runtime alignment, and dry-run release packaging',
+    whenToUse: 'CI/CD pipelines, Dockerfiles, Node/runtime alignment, dry-run packaging checks, and canary/rollback automation for /release and /modernize.',
+  },
+  'doc-steward': {
+    lane: 'Execution & Debugging',
+    modelTier: 'flash | inherit',
+    defaultPrompt: 'Run docs-drift and wiki-lint to synchronize CLI flags, .env.example keys, and wiki cross-links',
+    whenToUse: 'Docs-drift remediation, wiki-lint cross-link hygiene (0 isolatedPages), README/CLI flag synchronization, and key-only .env.example alignment.',
+  },
   designer: {
     lane: 'Design & Visual',
     modelTier: 'inherit',
@@ -459,6 +503,33 @@ const WORKFLOW_BLUEPRINTS = [
     quickStart: 'Fix the off-by-one pagination bug in src/api/users.ts and run the unit tests',
     artifacts: 'Direct repository changes + verification command output',
   },
+  {
+    id: 'modernize',
+    title: 'Phased Modernization & Upgrade Lane (/modernize)',
+    modeKey: 'modernize',
+    stages: ['Coverage & License Baseline', 'Codemod Waves (--wave)', 'Expand-Migrate-Contract Seams', 'Verify & Rollback Gate'],
+    whenToUse: 'When upgrading frameworks, SDKs, language runtimes, or legacy modules across Antigravity, Claude Code, and OpenAI Codex with behavior-lock regression baselines.',
+    quickStart: '/modernize --plan "upgrade TypeScript and ESLint flat config safely"',
+    artifacts: 'Targeted codemod waves + regression test baselines + rollback checkpoints',
+  },
+  {
+    id: 'threat-model',
+    title: 'Security & Agentic Threat Modeling (/threat-model)',
+    modeKey: 'threat-model',
+    stages: ['Map Trust Boundaries', 'STRIDE + OWASP LLM01-LLM10', 'MCP & License Audits', 'Mitigation Playbook'],
+    whenToUse: 'When evaluating auth boundaries, MCP servers, dependency supply chains, or agent tool permissions across all 3 hosts before shipping.',
+    quickStart: '/threat-model evaluate auth boundaries, .mcp.json servers, and skill inputs',
+    artifacts: 'Trust-boundary DFD, scored risk table, and file:line mitigation checklist',
+  },
+  {
+    id: 'release',
+    title: 'Release Readiness & Sync Workflow (/release)',
+    modeKey: 'release',
+    stages: ['Pre-Release Audit Gates', 'SemVer & Manifest Sync', 'Dry-Run Packaging', 'Human-Gated Tag & Rollout'],
+    whenToUse: 'When preparing a versioned release across CHANGELOG, manifests, docs-drift, and CI packaging with explicit human confirmation before publishing.',
+    quickStart: '/release prepare version bump, changelog sync, and dry-run packaging checks',
+    artifacts: 'Synced plugin manifest/CHANGELOG, dry-run validation receipt, and rollback playbook',
+  },
 ];
 
 export function readJsonSafe(filePath) {
@@ -547,7 +618,7 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
   } else if (/^\.omagy\/plans\/[^/]+\.md$/i.test(omagySubpath)) {
     mime = 'text/plain; charset=utf-8';
     redact = true;
-  } else if (/^\.omagy\/plans\/ralplan-review-[^/]+\.json$/i.test(omagySubpath)) {
+  } else if (/^\.omagy\/plans\/ralplan-(?:review|receipt)-[^/]+\.json$/i.test(omagySubpath)) {
     mime = 'application/json; charset=utf-8';
     redact = true;
   } else if (/^\.omagy\/specs\/(?:[^/]+\.md|autoresearch-[^/]+\/report\.md)$/i.test(omagySubpath)) {
@@ -622,6 +693,71 @@ function statMtimeToken(filePath) {
     return `${st.mtimeMs}:${st.size}`;
   } catch { /* fail open: optional metadata file may not exist yet */
     return 'missing';
+  }
+}
+
+function scrubWorktreePath(wtPath) {
+  const raw = String(wtPath || '').trim();
+  if (!raw) return '';
+  let home = '';
+  try { home = os.homedir(); } catch { /* fail open: no homedir */ }
+  let scrubbed = raw;
+  if (home && scrubbed.startsWith(home)) {
+    scrubbed = '~' + scrubbed.slice(home.length);
+  }
+  scrubbed = scrubbed.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+  return redactSecrets(scrubbed);
+}
+
+function collectGitWorktrees(primaryRoot) {
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: primaryRoot,
+      encoding: 'utf8',
+      timeout: 3000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    let canonRoot = '';
+    try { canonRoot = fs.realpathSync(primaryRoot); } catch { /* fail open: unresolved root */ }
+    const entries = [];
+    let cur = null;
+    const flush = () => {
+      if (!cur || !cur.rawPath) return;
+      let isCurrent = false;
+      try {
+        isCurrent = Boolean(canonRoot && fs.realpathSync(cur.rawPath) === canonRoot);
+      } catch { /* fail open: removed worktree dir */ }
+      entries.push({
+        label: formatWorkspaceName(cur.rawPath) || 'worktree',
+        path: scrubWorktreePath(cur.rawPath),
+        head: cur.head ? cur.head.slice(0, 12) : '',
+        branch: redactSecrets(cur.branch || (cur.detached ? '(detached)' : (cur.bare ? '(bare)' : ''))),
+        isCurrent,
+        detached: Boolean(cur.detached),
+        bare: Boolean(cur.bare),
+        ...(cur.prunable ? { prunable: redactSecrets(cur.prunable) } : {}),
+      });
+      cur = null;
+    };
+    for (const rawLine of String(out || '').split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) { flush(); continue; }
+      if (line.startsWith('worktree ')) {
+        flush();
+        cur = { rawPath: line.slice(9).trim(), head: '', branch: '', detached: false, bare: false, prunable: '' };
+      } else if (cur) {
+        if (line.startsWith('HEAD ')) cur.head = line.slice(5).trim();
+        else if (line.startsWith('branch ')) cur.branch = line.slice(7).trim().replace(/^refs\/heads\//, '');
+        else if (line === 'detached') cur.detached = true;
+        else if (line === 'bare') cur.bare = true;
+        else if (line.startsWith('prunable')) cur.prunable = line.slice(8).trim() || 'prunable';
+      }
+    }
+    flush();
+    return entries;
+  } catch { /* fail open: workspace may not be a git worktree */
+    return [];
   }
 }
 
@@ -1887,6 +2023,13 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   // 4. Ralplan / Hyperplan Consensus, Code Review Gate Board & Drawer Artifact Inventory
   const reviews = { ralplan: null, hyperplan: [], codeReviews: [] };
   const artifacts = { plans: [], specs: [], handoffs: [], ideas: [], asks: [] };
+  const isRalplanReviewArtifact = (p) => /(?:^|\/)(?:ralplan-(?:review|receipt)-|hyperplan-distillation-)[^/]+$/i.test(String(p || ''));
+  const inferRalplanSlug = (p) => {
+    const base = String(p || '').split('/').pop() || '';
+    const m = /^(?:prd|test-spec|ralplan-review|ralplan-receipt)-(.+)\.(?:md|json)$/i.exec(base);
+    return m ? m[1] : '';
+  };
+  let activeRalplanSlug = '';
   const rpRecord = allModeRecords.find((m) => m.mode === 'ralplan')
     || allModeRecords.find((m) => m.mode === 'autopilot' && (m.raw?.state?.ralplan || m.raw?.state?.handoff_artifacts?.ralplan || m.raw?.handoff_artifacts?.ralplan));
   if (rpRecord) {
@@ -1913,6 +2056,11 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
     const rcPath = toCleanRel(ho.receipt_path || rpSub.receipt_path || '');
     const safeRc = rcPath ? resolveSafeArtifactFile(rpRoot, stripScope(rcPath)) : null;
     const rcJson = (safeRc && safeRc.filePath.endsWith('.json')) ? (readJsonSafe(safeRc.filePath) || {}) : {};
+    activeRalplanSlug = String(
+      rpSub.slug || ho.slug || rcJson.slug || rpRecord.raw?.state?.slug
+      || inferRalplanSlug(ho.prd_path || rpSub.prd_path || ho.review_path || rpSub.review_path || ho.review_log_path || rpSub.review_log_path || rcPath)
+      || '',
+    ).trim();
     const combinedArts = [...new Set([
       ...(Array.isArray(ho.planning_artifacts) ? ho.planning_artifacts : []),
       ...(Array.isArray(rpSub.planning_artifacts) ? rpSub.planning_artifacts : []),
@@ -1922,6 +2070,12 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
       ho.review_path, rpSub.review_path, rcJson.review_path,
       ho.review_log_path, rpSub.review_log_path, rcJson.review_log_path,
       rcPath,
+    ].map(toScopedRel).filter(Boolean))];
+    const reviewArts = [...new Set([
+      ho.review_path, rpSub.review_path, rcJson.review_path,
+      ho.review_log_path, rpSub.review_log_path, rcJson.review_log_path,
+      rcPath,
+      ...combinedArts.filter(isRalplanReviewArtifact),
     ].map(toScopedRel).filter(Boolean))];
     const revMdRel = toCleanRel(ho.review_path || rpSub.review_path || rcJson.review_path || ho.review_log_path || rpSub.review_log_path || '');
     const safeRevMd = (revMdRel && revMdRel.endsWith('.md')) ? resolveSafeArtifactFile(rpRoot, stripScope(revMdRel)) : null;
@@ -1967,8 +2121,10 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
       consensusComplete: consensusDone,
       executionAuthorized: execAuth,
       planningArtifacts: combinedArts,
+      reviewArtifacts: reviewArts,
     };
   }
+  const ralplanReviewCandidates = [];
   for (const sc of scopeEntries) {
     const relPrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
     const plansDir = path.join(sc.root, '.omagy', 'plans');
@@ -1982,12 +2138,6 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
           if (pst.isSymbolicLink() || !pst.isFile()) continue;
           const text = readTextSafe(fullPlanPath);
           const planUpdatedAt = new Date(pst.mtimeMs).toISOString();
-          artifacts.plans.push({
-            scope: sc.scope,
-            file: `${relPrefix}.omagy/plans/${name}`,
-            title: extractMarkdownTitle(text, name),
-            updatedAt: planUpdatedAt,
-          });
           if (name.startsWith('hyperplan-distillation-')) {
             const survives = (text.match(/\bSURVIVES\b/g) || []).length;
             const weakened = (text.match(/\bWEAKENED\b/g) || []).length;
@@ -2004,30 +2154,21 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
             const relFile = `${relPrefix}.omagy/plans/${name}`;
             const archMatch = /architect[^\n:]*:\s*`?(APPROVE|CLEAR|WATCH|BLOCK|ITERATE|REJECT)`?/i.exec(text);
             const critMatch = /critic[^\n:]*:\s*`?(APPROVE|ITERATE|REJECT)`?/i.exec(text);
-            if (!reviews.ralplan) {
-              reviews.ralplan = {
-                scope: sc.scope,
-                active: false,
-                phase: 'complete',
-                iteration: 1,
-                architectVerdict: archMatch ? archMatch[1].toUpperCase() : 'recorded',
-                criticVerdict: critMatch ? critMatch[1].toUpperCase() : 'recorded',
-                consensusComplete: Boolean(critMatch && critMatch[1].toUpperCase() === 'APPROVE'),
-                executionAuthorized: false,
-                planningArtifacts: [relFile],
-              };
-            } else if ((reviews.ralplan.scope || '.') === (sc.scope || '.')) {
-              if (!reviews.ralplan.planningArtifacts.includes(relFile)) {
-                reviews.ralplan.planningArtifacts.push(relFile);
-              }
-              if (reviews.ralplan.architectVerdict === 'pending' && archMatch) {
-                reviews.ralplan.architectVerdict = archMatch[1].toUpperCase();
-              }
-              if (reviews.ralplan.criticVerdict === 'pending' && critMatch) {
-                reviews.ralplan.criticVerdict = critMatch[1].toUpperCase();
-                if (reviews.ralplan.criticVerdict === 'APPROVE') reviews.ralplan.consensusComplete = true;
-              }
-            }
+            ralplanReviewCandidates.push({
+              scope: sc.scope,
+              relFile,
+              slug: name.slice('ralplan-review-'.length, -3),
+              mtimeMs: pst.mtimeMs,
+              archVerdict: archMatch ? archMatch[1].toUpperCase() : '',
+              critVerdict: critMatch ? critMatch[1].toUpperCase() : '',
+            });
+          } else {
+            artifacts.plans.push({
+              scope: sc.scope,
+              file: `${relPrefix}.omagy/plans/${name}`,
+              title: extractMarkdownTitle(text, name),
+              updatedAt: planUpdatedAt,
+            });
           }
         }
       }
@@ -2116,6 +2257,48 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
         }
       }
     } catch { /* fail open: ideas directory unavailable */ }
+  }
+  if (ralplanReviewCandidates.length) {
+    ralplanReviewCandidates.sort((a, b) => (b.mtimeMs - a.mtimeMs) || b.relFile.localeCompare(a.relFile));
+    if (!reviews.ralplan) {
+      const latestRev = ralplanReviewCandidates[0];
+      reviews.ralplan = {
+        scope: latestRev.scope,
+        active: false,
+        phase: 'complete',
+        iteration: 1,
+        architectVerdict: latestRev.archVerdict || 'recorded',
+        criticVerdict: latestRev.critVerdict || 'recorded',
+        consensusComplete: latestRev.critVerdict === 'APPROVE',
+        executionAuthorized: false,
+        planningArtifacts: [latestRev.relFile],
+        reviewArtifacts: [latestRev.relFile],
+      };
+    } else {
+      const matchingRevs = ralplanReviewCandidates.filter((c) => (
+        (c.scope || '.') === (reviews.ralplan.scope || '.')
+        && (
+          reviews.ralplan.planningArtifacts.includes(c.relFile)
+          || reviews.ralplan.reviewArtifacts.includes(c.relFile)
+          || (activeRalplanSlug && c.slug === activeRalplanSlug)
+        )
+      ));
+      for (const mr of matchingRevs) {
+        if (!reviews.ralplan.planningArtifacts.includes(mr.relFile)) {
+          reviews.ralplan.planningArtifacts.push(mr.relFile);
+        }
+        if (!reviews.ralplan.reviewArtifacts.includes(mr.relFile)) {
+          reviews.ralplan.reviewArtifacts.push(mr.relFile);
+        }
+        if (reviews.ralplan.architectVerdict === 'pending' && mr.archVerdict) {
+          reviews.ralplan.architectVerdict = mr.archVerdict;
+        }
+        if (reviews.ralplan.criticVerdict === 'pending' && mr.critVerdict) {
+          reviews.ralplan.criticVerdict = mr.critVerdict;
+          if (reviews.ralplan.criticVerdict === 'APPROVE') reviews.ralplan.consensusComplete = true;
+        }
+      }
+    }
   }
 
   // 4b. Deep Research reports (.omagy/artifacts/research/*.md across scopes, including eval-integrity Verdict)
@@ -2506,6 +2689,9 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   const forensics = getCachedForensics(primaryRoot, latestRouting?.transcriptPath || '');
   const notifications = readNotificationBooleans(primaryRoot);
 
+  // 9.7 Git Worktree Inventory (scrubbed, fail-open [])
+  const worktrees = collectGitWorktrees(primaryRoot);
+
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
 
@@ -2543,6 +2729,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
     designSystem,
     forensics,
     notifications,
+    worktrees,
     wiki,
     wikiLog,
     qualityGates: qg.gates,
@@ -3266,6 +3453,7 @@ async function runSelftest() {
     const origSrcIndex = [
       'export function parseRows(rows) { return rows; }',
       '// shortcut: 500 rows max with token ghp_1234567890abcdefghij123456, upgrade to streaming parser',
+      '',
     ].join('\n');
     fs.writeFileSync(path.join(ws, 'src', 'index.js'), origSrcIndex);
 
@@ -3290,7 +3478,7 @@ async function runSelftest() {
     const snap = buildHudSnapshot([wsFileUrl], baseNowMs);
 
     // Verify 5,000ms TTL memoization & .git/index + transcript mtime:size invalidation on codeHealth
-    fs.writeFileSync(path.join(ws, 'src', 'index.js'), `${origSrcIndex}\ntry { parseRows([]); } ${'ca' + 'tch'} {}\n`);
+    fs.writeFileSync(path.join(ws, 'src', 'index.js'), `${origSrcIndex}try { parseRows([]); } ${'ca' + 'tch'} {}\n`);
     const cachedSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 2000);
     const expiredSnap = buildHudSnapshot([wsFileUrl], baseNowMs + 6000);
     fs.writeFileSync(path.join(ws, 'src', 'index.js'), origSrcIndex);
@@ -4674,6 +4862,8 @@ async function runSelftest() {
     fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'prd-h26.md'), '# H26 PRD\n', 'utf8');
     fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'test-spec-h26.md'), '# H26 Test Spec\n', 'utf8');
     fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'ralplan-review-h26.md'), '# Review\n- Architect: CLEAR\n- Critic: APPROVE\n', 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'ralplan-review-older.md'), '# Old Review\n- Architect: BLOCK\n- Critic: REJECT\n', 'utf8');
+    fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'hyperplan-distillation-h26.md'), '# Hyperplan\nSURVIVES\n', 'utf8');
     fs.writeFileSync(path.join(h26StateWs, '.omagy', 'plans', 'ralplan-receipt-h26.json'), JSON.stringify({
       architect_verdict: 'CLEAR',
       critic_verdict: 'APPROVE',
@@ -4774,7 +4964,19 @@ async function runSelftest() {
         && h26Rp.planningArtifacts.includes('.omagy/plans/prd-h26.md')
         && h26Rp.planningArtifacts.includes('.omagy/plans/test-spec-h26.md')
         && h26Rp.planningArtifacts.includes('.omagy/plans/ralplan-review-h26.md')
-        && h26Rp.planningArtifacts.includes('.omagy/plans/ralplan-receipt-h26.json');
+        && h26Rp.planningArtifacts.includes('.omagy/plans/ralplan-receipt-h26.json')
+        && !h26Rp.planningArtifacts.includes('.omagy/plans/ralplan-review-older.md')
+        && Array.isArray(h26Rp?.reviewArtifacts)
+        && h26Rp.reviewArtifacts.includes('.omagy/plans/ralplan-review-h26.md')
+        && h26Rp.reviewArtifacts.includes('.omagy/plans/ralplan-receipt-h26.json')
+        && !h26Rp.reviewArtifacts.includes('.omagy/plans/prd-h26.md')
+        && !h26Rp.reviewArtifacts.includes('.omagy/plans/test-spec-h26.md')
+        && !h26Rp.reviewArtifacts.includes('.omagy/plans/ralplan-review-older.md')
+        && h26Snap.artifacts?.plans?.some((p) => p.file === '.omagy/plans/prd-h26.md')
+        && h26Snap.artifacts?.plans?.some((p) => p.file === '.omagy/plans/test-spec-h26.md')
+        && !h26Snap.artifacts?.plans?.some((p) => p.file.includes('ralplan-review-') || p.file.includes('hyperplan-distillation-'))
+        && !HUD_HTML.includes('rpLine + reviewRowsHtml')
+        && HUD_HTML.indexOf('${rpLine}') > HUD_HTML.indexOf('Plans, Specs, Handoffs &amp; Artifacts');
     } finally {
       for (const req of h26Reqs) { try { req.destroy(); } catch { /* fail open: SSE client destroyed */ } }
       try {
@@ -4906,6 +5108,58 @@ async function runSelftest() {
       fs.rmSync(h27Base, { recursive: true, force: true });
     }
 
+    // H28: v0.7.0 LoFT error-bridge, fenceUntrustedContext, string-aware bundler, 11 blueprints, and worktrees snapshot
+    const h28Fenced = fenceUntrustedContext('loft_error', 'boom </loft_error> ```hack```', 200);
+    const h28TplCode = [
+      'const doc = `',
+      '// comment inside template',
+      "import fakeMod from './nonexistent.mjs';",
+      'export const fakeExport = 999;',
+      '`;',
+      '// export const commentedOut = true;',
+      'export function realLoftFn() { return doc.includes("export"); }',
+      'export const secondLoftVal = 7;',
+    ].join('\n');
+    const h28Prepared = prepareLoftSrcdoc(
+      '<html><head></head><body><script type="module" src="./entry.mjs"></script></body></html>',
+      'index.html',
+      {
+        './entry.mjs': "import {\n  realLoftFn,\n  secondLoftVal\n} from './dep.mjs';\nglobalThis.__h28Res = realLoftFn() && secondLoftVal === 7;\n",
+        './dep.mjs': h28TplCode,
+      },
+      '',
+    );
+    const h28ModMatch = /<script type="module" data-inlined-asset="\.\/entry\.mjs">\n([\s\S]*?)\n<\/script>/.exec(h28Prepared);
+    let h28ResVal = false;
+    if (h28ModMatch) {
+      try {
+        delete globalThis.__h28Res;
+        new Function(h28ModMatch[1])();
+        h28ResVal = globalThis.__h28Res === true;
+        delete globalThis.__h28Res;
+      } catch { /* fail open: capture H28 eval error */ }
+    }
+    const h28WfIds = (snap.catalog?.workflows || []).map((w) => w.id);
+    const h28WtList = Array.isArray(snap.worktrees) ? snap.worktrees : null;
+    const h28RepoWt = collectGitWorktrees(PLUGIN_ROOT);
+    const h28NoUserLeak = h28RepoWt.every((w) => !/^\/(?:Users|home)\/[^/]+/.test(String(w.path || '')));
+    const h28Ok = h28Fenced.startsWith('<loft_error>')
+      && !h28Fenced.includes('</loft_error>\n')
+      && h28Fenced.includes('&lt;/loft_error&gt;')
+      && HUD_HTML.includes('function fenceUntrustedContext(')
+      && h28ResVal
+      && !h28Prepared.includes('/* unresolved local module ./nonexistent.mjs */')
+      && h28Prepared.includes('id="omagy-loft-error-bridge"')
+      && h28Prepared.includes('"omagy-loft-error"')
+      && HUD_HTML.includes("event.source === loftFrame.contentWindow")
+      && HUD_HTML.includes('data-quick-prompt')
+      && HUD_HTML.includes('Dispatch Fix')
+      && HUD_HTML.includes('Record Winner')
+      && h28WfIds.length === 11
+      && ['modernize', 'threat-model', 'release'].every((id) => h28WfIds.includes(id))
+      && h28WtList !== null
+      && h28NoUserLeak;
+
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
     const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
@@ -4922,7 +5176,7 @@ async function runSelftest() {
       && !HUD_HTML.includes('copySubagentFromInput')
       && snap.statusLine.includes('autopilot:ultragoal')
       && snap.statusLine.includes('ultragoal:1/1')
-      && snap.catalog?.skills?.length === 20
+      && snap.catalog?.skills?.length === 23
       && Boolean(deepInterviewSkill && deepInterviewSkill.flags.includes('--ideate'))
       && Boolean(deepResearchSkill && deepResearchSkill.flags.includes('--technical') && deepResearchSkill.flags.includes('--quick') && deepResearchSkill.flags.includes('--loop') && deepResearchSkill.quickStart.includes('/deep-research'))
       && Boolean(analyzeSkill && analyzeSkill.flags.includes('--audit'))
@@ -4939,7 +5193,7 @@ async function runSelftest() {
       && Boolean(fg && typeof fg.deletedTests === 'number' && typeof fg.removedAssertions === 'number' && typeof fg.untrackedBlockers === 'number' && typeof fg.suppressions === 'number' && typeof fg.emptyCatches === 'number' && typeof fg.protectedBlocksModified === 'number' && typeof fg.total === 'number')
       && floorCacheOk
       && Boolean(se && se.ok === true && se.rank1Pct >= 95 && se.minRank1 === 95 && se.collisionErrors === 0 && se.negativeSurvivalPct === 100)
-      && snap.catalog?.subagents?.length === 14
+      && snap.catalog?.subagents?.length === 18
       && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
       && Boolean(architectAgent && architectAgent.cliModel === 'pro')
       && snap.catalog?.workflows?.length >= 6
@@ -5004,7 +5258,8 @@ async function runSelftest() {
       && h24Ok
       && h25Ok
       && h26Ok
-      && h27Ok;
+      && h27Ok
+      && h28Ok;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',

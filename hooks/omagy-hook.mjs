@@ -44,8 +44,9 @@ hardenWindowsExeSearch();
 
 export const SKILLS = [
   'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'cancel', 'code-review',
-  'deep-interview', 'deep-research', 'doctor', 'hud', 'loft', 'performance-goal',
-  'pr', 'ralplan', 'skill', 'team', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
+  'deep-interview', 'deep-research', 'doctor', 'hud', 'loft', 'modernize',
+  'performance-goal', 'pr', 'ralplan', 'release', 'skill', 'team',
+  'threat-model', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
 ];
 // Antigravity built-in slash commands: `/name` belongs to Antigravity, only `$name` routes to us.
 const AGY_SLASH = new Set(['goal', 'compact', 'schedule', 'browser', 'plan', 'grill-me', 'teamwork', 'teamwork-preview', 'learn', 'boost', 'plugin', 'automation']);
@@ -403,9 +404,11 @@ export function activeStates(roots, modes, convId = '') {
 // ---------- wiki & working agreements summary (expiry filtering & secret redaction) ----------
 export function redactSecrets(text) {
   return String(text || '')
-    .replace(/\bsk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_KEY]')
-    .replace(/\b(?:(?:gh[pousr]|github_pat)_[A-Za-z0-9_-]{16,}|(?:glpat|xox[baprs])-[A-Za-z0-9_-]{16,})\b/g, '[REDACTED_TOKEN]')
-    .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
+    .replace(/\b(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_live_[0-9A-Za-z]{20,}|AIza[0-9A-Za-z_-]{35}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})\b/g, '[REDACTED_KEY]')
+    .replace(/\b(?:(?:gh[pousr]|github_pat|pypi)_[A-Za-z0-9_-]{16,}|(?:glpat|xox[baprs]|pypi)-[A-Za-z0-9_-]{16,}|npm_[0-9A-Za-z]{36})\b/g, '[REDACTED_TOKEN]')
+    .replace(/\bA(?:KIA|SIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
+    .replace(/-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----|-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g, '[REDACTED_PEM_KEY]')
+    .replace(/\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss):\/\/[^/\s:@]{0,64}:)(?!\$|\{\{|\[REDACTED|<)[^/\s@]{3,}(@)/gi, '$1[REDACTED_SECRET]$2')
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '[REDACTED_JWT]')
     .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|client[-_]?secret|secret|password)=['"]?)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}(['"]?)/gi, '$1[REDACTED_SECRET]$2')
     .replace(/(\bAuthorization\s*:\s*Bearer\s+)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED_TOKEN]')
@@ -484,9 +487,9 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
     candidates.add(m[1]);
   }
   for (const rawRoot of roots) {
-    const root = path.resolve(rawRoot);
+    const root = canonicalizePath(rawRoot);
     for (const token of candidates) {
-      const resolved = path.isAbsolute(token) ? path.resolve(token) : path.resolve(root, token);
+      const resolved = path.isAbsolute(token) ? canonicalizePath(token) : path.resolve(root, token);
       if (!resolved.startsWith(root + path.sep)) continue;
       let dir = resolved;
       try {
@@ -2993,7 +2996,8 @@ export function preInvocation(payload) {
       if (wikiMsg) { messages.push(wikiMsg); wikiInjected = true; }
     }
   }
-  const subdir = discoverSubdirAgents(roots, cleanText, record.seenAgents || []);
+  const seenReads = (readJson(runtimeFile(conv, 'seen'))?.readFiles || []).slice(-8).join('\n');
+  const subdir = discoverSubdirAgents(roots, seenReads ? `${cleanText}\n${seenReads}` : cleanText, record.seenAgents || []);
   messages.push(...subdir.messages);
   if (!isSubagent && !mapInjected && process.env.OMAGY_MAP !== '0') {
     candMap = buildCodebaseMap(roots);

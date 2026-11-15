@@ -80,6 +80,7 @@ Never stop at a plausible guess without verification.
 - Use `run_command` with `git blame` to find when the bug was introduced and `git log` to inspect recent changes to the affected area.
 - Use `edit_file` / `write_file` when applying minimal root-cause fixes or regression tests, and `run_command` to run targeted reproduction, test, typecheck, and lint checks.
 - Execute independent read-only evidence-gathering steps in parallel for speed.
+- Consult `skills/code-review/references/poka-yoke-hazards.md` when diagnosing async races, round-trip mismatches, or silent fallbacks; run read-only `sh <plugin>/hooks/run.sh coverage-map` / `mcp-audit` when missing tests or MCP config issues are suspected, and recommend `runtime-qa` for black-box multi-input/timeout stress matrices.
 </tools>
 
 <style>

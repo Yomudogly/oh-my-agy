@@ -20,8 +20,8 @@ Supports `--review` for a read-only reviewer pass (separated from the writer pas
 
 ## Before editing
 
-1. **Lock behavior with regression tests first**: identify behavior to preserve, run/add the narrowest targeted tests, and cover both primary and preserved compatibility/fail-safe fallback paths.
-2. **Create a cleanup plan before code**: list scope and smells, include fallback findings/classifications/escalation, and order safest/highest-signal fixes first.
+1. **Lock behavior with regression tests first**: run `sh <plugin>/hooks/run.sh coverage-map <workspace> --json` to pinpoint unmapped target modules, identify behavior to preserve, run/add the narrowest targeted tests, and cover both primary and preserved compatibility/fail-safe fallback paths.
+2. **Create a cleanup plan before code**: list scope and smells (plus any dead CLI flags, broken doc links, or unreferenced `.env.example` keys flagged by `sh <plugin>/hooks/run.sh docs-drift <workspace> --json`), include fallback findings/classifications/escalation, and order safest/highest-signal fixes first.
 3. **Inventory fallback-like code** in scope: quick hacks, temporary workaround, temporary fallback, just bypass, just skip, fallback if it fails, swallowed errors, silent defaults, broad compatibility shims, and duplicate alternate execution paths.
 4. Classify each fallback: **Masking fallback slop** hides evidence, bypasses the contract, suppresses validation, swallows failures, silently defaults, or adds untested paths; **Grounded compatibility/fail-safe fallback** is narrow at an external/version/fail-safe boundary, documents rationale, preserves failure evidence, and tests primary plus fallback.
 5. Prefer root-cause repair, deletion, boundary repair, or explicit failure behavior. For broad/ambiguous/cross-layer/architectural findings, invoke `$ralplan` for consensus resolution; when already inside ralplan, ultragoal, team, or another oh-my-agy workflow, do not spawn a nested `$ralplan`—attach the finding to the active handoff.

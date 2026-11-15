@@ -7,14 +7,16 @@ import { computeDesktopHudPort, desktopHudRegistryFile, parseCodexVersion } from
 
 const SUPPORTED_HOSTS = new Set(['claude', 'codex']);
 const PURE_READ_ROLES = new Set(['researcher', 'vision']);
-const WRITE_ROLES = new Set(['executor', 'debugger', 'designer', 'test-engineer']);
+const WRITE_ROLES = new Set(['executor', 'debugger', 'designer', 'test-engineer', 'devops-engineer', 'doc-steward']);
 const ALL_ROLES = [
-  'architect', 'code-reviewer', 'critic', 'debugger', 'designer', 'executor', 'explore',
-  'planner', 'researcher', 'security-reviewer', 'test-engineer', 'tracer', 'verifier', 'vision',
+  'architect', 'code-reviewer', 'critic', 'debugger', 'designer', 'devops-engineer', 'doc-steward',
+  'executor', 'explore', 'planner', 'researcher', 'runtime-qa', 'security-reviewer',
+  'supply-chain-auditor', 'test-engineer', 'tracer', 'verifier', 'vision',
 ];
 export const EXPLICIT_ONLY_SKILLS = new Set([
   'autopilot', 'ultragoal', 'ultraqa', 'team', 'cancel',
   'performance-goal', 'ai-slop-cleaner', 'loft', 'pr', 'code-review', 'visual-ralph',
+  'modernize', 'release',
 ]);
 export const CLAUDE_ROLE_TOOLS = {
   pureRead: {
@@ -682,7 +684,7 @@ function prepareCodexAgentsMd(agentsMdPath, pluginRoot, bundleDir = '') {
 
   const compactFallback = [
     '# oh-my-agy Operating Contract (Codex Adapter)',
-    '- Lanes: `$autopilot`, `$deep-interview`, `$ralplan`, `$ultragoal`, `$team`, `$code-review`, `$ultraqa`, `$analyze`. Read the matching `SKILL.md` before executing a skill.',
+    '- Lanes: `$autopilot`, `$deep-interview`, `$ralplan`, `$ultragoal`, `$team`, `$code-review`, `$ultraqa`, `$analyze`, `$modernize`, `$threat-model`, `$release`. Read the matching `SKILL.md` before executing a skill.',
     '- Subagents: Defined under `.codex/agents/*.toml` (read-only vs workspace-write). Never exceed task scope or touch unrelated user files.',
     '- Durable state: Store `.omagy/` state with refreshed `updated_at` and leave `omagy-ignore-start .. omagy-ignore-end` blocks unchanged.',
   ].join('\n');
@@ -1393,7 +1395,11 @@ export function validateHostBundle(options = {}) {
   } catch { /* fail open: missing hooks dir recorded */ errors.push('missing:hooks'); }
   validateHooksConfig(path.join(hooksDir, 'hooks.json'), host, errors);
 
-  for (const rel of ['hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs', 'sidecars/hud/run.sh', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs']) {
+  for (const rel of [
+    'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs',
+    'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-audit.mjs',
+    'sidecars/hud/run.sh', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs',
+  ]) {
     try {
       if (!fs.statSync(path.join(bundleDir, rel)).isFile()) errors.push(`not_a_file:${rel}`);
     } catch { /* fail open: missing or broken entry script */
@@ -1425,7 +1431,7 @@ export function validateHostBundle(options = {}) {
       }
       if (lst.isDirectory()) bundleSkillDirs.push(entName);
     }
-    if (bundleSkillDirs.length !== 20) errors.push(`unexpected_skill_count:${bundleSkillDirs.length}!=20`);
+    if (bundleSkillDirs.length !== 23) errors.push(`unexpected_skill_count:${bundleSkillDirs.length}!=23`);
     for (const sName of bundleSkillDirs) {
       const sDir = path.join(skillsDir, sName);
       assertNoEscapingSymlinks(sDir, sDir, errors);
@@ -1541,7 +1547,7 @@ export function validateHostBundle(options = {}) {
         }
         const pluginStub = {
           name: bundlePluginManifest?.name || meta?.pluginName || 'oh-my-agy',
-          version: bundlePluginManifest?.version || meta?.version || '0.6.0',
+          version: bundlePluginManifest?.version || meta?.version || '0.7.0',
         };
         const loc = getCodexPluginLocations(codexTarget, pluginStub);
         const mktJsonPath = path.join(loc.mktAgentsDir, 'marketplace.json');

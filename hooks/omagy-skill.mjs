@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   COLD_CLI_EVENTS,
@@ -46,6 +47,30 @@ const BANNED_CLUTTER_EXACT = new Set([
 const TEXT_CHECK_EXT_RE = /\.(?:md|mjs|cjs|js|ts|tsx|jsx|py|sh|json|ya?ml|txt|toml)$/i;
 const ALLOWED_SCAFFOLD_RESOURCES = new Set(['references', 'scripts', 'assets', 'resources']);
 const ALLOWED_SCOPES = new Set(['project', 'shared', 'user']);
+const AUDIT_CLI_EVENTS = new Set(['docs-drift', 'coverage-map', 'dep-license-diff', 'mcp-audit']);
+const TROJAN_UNICODE_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/;
+const HTML_COMMENT_BLOCK_RE = /<!--(?:(?!-->)[\s\S])*?-->/g;
+const PROMPT_INJ_COMMENT_RE = /\b(?:ignore\s+(?:all\s+)?previous|system\s+prompt|override\s+(?:all\s+)?instructions|disregard\s+all|you\s+must\s+silently|exfiltrate)\b/i;
+const UNPINNED_PIPE_RE = /\b(?:curl|wget)\b[^\r\n|]*\|\s*(?:env\s+)?(?:\/(?:usr\/)?(?:local\/)?bin\/)?(?:ba|da|z|k|a)?sh\b|\bnpx\s+(?:--yes|-y)\s+[^\s]+@latest\b/i;
+const NEG_EXAMPLE_RE = /\b(?:never|avoid|do\s+not|don't|block|blocks|prevent|reject|flag|fail|disallow|forbid|anti-pattern|unsafe|example)\b/i;
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function scanSupplyChainText(rel, rawText, isMd, errors) {
+  const clean = stripUtf8Bom(rawText);
+  if (TROJAN_UNICODE_RE.test(clean)) errors.push(`trojan_unicode:${rel}`);
+  if (isMd) {
+    const comments = blankFencedLines(clean).join('\n').match(HTML_COMMENT_BLOCK_RE) || [];
+    if (comments.some((c) => PROMPT_INJ_COMMENT_RE.test(c))) {
+      errors.push(`prompt_injection_comment:${rel}`);
+    }
+  }
+  for (const ln of clean.replace(/\r\n/g, '\n').split('\n')) {
+    if (UNPINNED_PIPE_RE.test(ln) && !NEG_EXAMPLE_RE.test(ln)) {
+      errors.push(`unpinned_remote_exec:${rel}`);
+      break;
+    }
+  }
+}
 
 function isOsMetaFile(name) {
   return name === '.DS_Store' || name === 'Thumbs.db';
@@ -303,6 +328,25 @@ async function validateSingleSkillDir(skillDir, options = {}) {
       }
 
       if (st.isFile()) {
+        if (st.size > 5 * 1024 * 1024) errors.push(`asset_exceeds_5mb:${rel}`);
+        if (name.toLowerCase().endsWith('.png')) {
+          try {
+            const fd = fs.openSync(full, 'r');
+            const hdr = Buffer.alloc(8);
+            const nRead = fs.readSync(fd, hdr, 0, 8, 0);
+            fs.closeSync(fd);
+            if (nRead < 8 || !hdr.equals(PNG_SIG)) errors.push(`invalid_png_header:${rel}`);
+          } catch { /* fail open: unreadable png header flagged */
+            errors.push(`invalid_png_header:${rel}`);
+          }
+        }
+        if ((relPrefix === 'scripts' || relPrefix.startsWith('scripts/')) && /\.(?:c|m)?js$/i.test(name)) {
+          try {
+            execFileSync(process.execPath, ['--check', full], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 });
+          } catch { /* fail open: syntax check failure recorded */
+            errors.push(`script_syntax_error:${rel}`);
+          }
+        }
         if (name.toLowerCase().endsWith('.md')) mdFiles.push({ full, rel });
         const inReferences = relPrefix === 'references' || relPrefix.startsWith('references/');
         if (inReferences || TEXT_CHECK_EXT_RE.test(name)) {
@@ -322,6 +366,7 @@ async function validateSingleSkillDir(skillDir, options = {}) {
           if (hasUnresolvedTodoPlaceholder(rawText)) {
             errors.push(`unresolved_todo:${rel}`);
           }
+          scanSupplyChainText(rel, rawText, name.toLowerCase().endsWith('.md'), errors);
           if (inReferences) {
             const refBytes = Buffer.byteLength(rawText, 'utf8');
             const refLines = rawText.replace(/\r\n/g, '\n').split('\n').length;
@@ -1521,6 +1566,13 @@ export async function runNonLifecycleCli(event, rawArgs = []) {
     const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const defaultRoot = event === 'skill-eval' ? pluginRoot : process.cwd();
     const code = handleColdCliCommand(event, rawArgs, defaultRoot);
+    process.exitCode = code;
+    return code;
+  }
+  if (AUDIT_CLI_EVENTS.has(event)) {
+    const { runAuditCli } = await import('./omagy-audit.mjs');
+    const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const code = await runAuditCli(event, rawArgs, pluginRoot);
     process.exitCode = code;
     return code;
   }

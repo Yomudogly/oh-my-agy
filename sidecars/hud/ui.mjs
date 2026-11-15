@@ -274,6 +274,34 @@ export function renderSafeMarkdown(md) {
   return out.join('\n');
 }
 
+export function fenceUntrustedContext(tag, text, maxLen = 1200) {
+  const safeTag = String(tag || 'untrusted_context')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]/g, '_')
+    .replace(/^_+|_+$/g, '') || 'untrusted_context';
+  const capNum = Number(maxLen);
+  const cap = Number.isFinite(capNum) && capNum > 0 ? Math.min(Math.floor(capNum), 16000) : 1200;
+  const escChar = String.fromCharCode(27);
+  const ansiRe = new RegExp(escChar + '\\[[0-9;?]*[ -/]*[@-~]', 'g');
+  const raw = String(text ?? '').replace(ansiRe, '');
+  let clean = '';
+  for (const ch of raw) {
+    const code = ch.charCodeAt(0);
+    if (ch === '\n' || ch === '\r' || ch === '\t' || (code >= 0x20 && code !== 0x7f)) {
+      clean += ch;
+    }
+  }
+  clean = clean.trim();
+  if (clean.length > cap) {
+    clean = clean.slice(0, cap).trimEnd() + '... [truncated]';
+  }
+  const closeTagRe = new RegExp('<\\s*/\\s*' + safeTag + '\\s*>', 'gi');
+  const fencedBody = clean
+    .replace(closeTagRe, '&lt;/' + safeTag + '&gt;')
+    .replace(/```/g, '` ` `');
+  return `<${safeTag}>\n${fencedBody}\n</${safeTag}>`;
+}
+
 export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap = {}, cssVarsText = '') {
   const normAssetKey = (baseDir, spec) => {
     const cleanSpec = String(spec || '').trim().split(/[?#]/)[0];
@@ -302,6 +330,117 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
     const moduleBodies = new Map();
     const visiting = new Set();
 
+    const maskModuleCommentsAndStrings = (src) => {
+      const s = String(src || '');
+      const literals = [];
+      let out = '';
+      let i = 0;
+      const n = s.length;
+      const isRegexStartContext = () => {
+        for (let k = out.length - 1; k >= 0; k -= 1) {
+          const ch = out[k];
+          if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') continue;
+          if ('=(,[!&|?:;{}~^+-*%<>'.includes(ch)) return true;
+          if (/[A-Za-z0-9_$]/.test(ch)) {
+            let start = k;
+            while (start > 0 && /[A-Za-z0-9_$]/.test(out[start - 1])) start -= 1;
+            const word = out.slice(start, k + 1);
+            return word === 'return' || word === 'throw' || word === 'case' || word === 'yield' || word === 'await' || word === 'typeof' || word === 'void' || word === 'delete' || word === 'in' || word === 'of';
+          }
+          return false;
+        }
+        return true;
+      };
+      const pushMasked = (rawLit) => {
+        const idx = literals.length;
+        literals.push(rawLit);
+        return '\u0000MODSTR_' + idx + '\u0000';
+      };
+      while (i < n) {
+        const ch = s[i];
+        const next = s[i + 1] || '';
+        if (ch === '/' && next === '/') {
+          i += 2;
+          while (i < n && s[i] !== '\n') i += 1;
+          out += ' ';
+          continue;
+        }
+        if (ch === '/' && next === '*') {
+          i += 2;
+          out += ' ';
+          while (i < n && !(s[i] === '*' && s[i + 1] === '/')) {
+            if (s[i] === '\n') out += '\n';
+            i += 1;
+          }
+          if (i < n) i += 2;
+          continue;
+        }
+        if (ch === "'" || ch === '"') {
+          const quote = ch;
+          const start = i;
+          i += 1;
+          while (i < n && s[i] !== quote) {
+            if (s[i] === '\\' && i + 1 < n) i += 2;
+            else if (s[i] === '\n') break;
+            else i += 1;
+          }
+          if (i < n && s[i] === quote) i += 1;
+          out += pushMasked(s.slice(start, i));
+          continue;
+        }
+        if (ch === '`') {
+          const start = i;
+          i += 1;
+          let exprDepth = 0;
+          while (i < n) {
+            const c = s[i];
+            if (c === '\\' && i + 1 < n) { i += 2; continue; }
+            if (c === '`' && exprDepth === 0) { i += 1; break; }
+            if (c === '$' && s[i + 1] === '{') { exprDepth += 1; i += 2; continue; }
+            if (exprDepth > 0 && c === '{') { exprDepth += 1; i += 1; continue; }
+            if (exprDepth > 0 && c === '}') { exprDepth -= 1; i += 1; continue; }
+            i += 1;
+          }
+          out += pushMasked(s.slice(start, i));
+          continue;
+        }
+        if (ch === '/' && isRegexStartContext()) {
+          const start = i;
+          i += 1;
+          let inClass = false;
+          while (i < n) {
+            const c = s[i];
+            if (c === '\\' && i + 1 < n) { i += 2; continue; }
+            if (c === '\n') break;
+            if (c === '[' && !inClass) inClass = true;
+            else if (c === ']' && inClass) inClass = false;
+            else if (c === '/' && !inClass) { i += 1; while (i < n && /[a-z]/i.test(s[i])) i += 1; break; }
+            i += 1;
+          }
+          out += pushMasked(s.slice(start, i));
+          continue;
+        }
+        out += ch;
+        i += 1;
+      }
+      return { masked: out, literals };
+    };
+
+    const unmaskLiterals = (text, literals) => String(text || '').replace(/\u0000MODSTR_(\d+)\u0000/g, (full, idStr) => {
+      const idx = Number(idStr);
+      return Number.isInteger(idx) && idx >= 0 && idx < literals.length ? literals[idx] : full;
+    });
+
+    const extractSpecFromToken = (tokenOrSpec, literals) => {
+      const m = /^\u0000MODSTR_(\d+)\u0000$/.exec(String(tokenOrSpec || '').trim());
+      if (!m) return '';
+      const rawLit = literals[Number(m[1])] || '';
+      if ((rawLit.startsWith("'") && rawLit.endsWith("'")) || (rawLit.startsWith('"') && rawLit.endsWith('"'))) {
+        return rawLit.slice(1, -1);
+      }
+      return '';
+    };
+
     const compileDepModule = (assetKey) => {
       if (moduleBodies.has(assetKey)) return `__omagy_mod_${moduleOrder.indexOf(assetKey)}`;
       if (visiting.has(assetKey)) return '{}';
@@ -309,7 +448,8 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
       if (rawMod === null) return null;
       visiting.add(assetKey);
       const modDir = dirOfKey(assetKey);
-      let body = rewriteImports(rawMod, modDir);
+      const { masked, literals } = maskModuleCommentsAndStrings(rawMod);
+      let body = rewriteMaskedImports(masked, literals, modDir);
       const exportedPairs = [];
       let hasDefault = false;
 
@@ -345,6 +485,7 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
         return '';
       });
 
+      body = unmaskLiterals(body, literals);
       visiting.delete(assetKey);
       const idx = moduleOrder.length;
       moduleOrder.push(assetKey);
@@ -353,9 +494,11 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
       return varName;
     };
 
-    function rewriteImports(code, baseDir) {
-      let next = String(code || '');
-      next = next.replace(/^\s*import\s+([^'"]*?)\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?/gm, (full, clause, spec) => {
+    function rewriteMaskedImports(maskedCode, literals, baseDir) {
+      let next = String(maskedCode || '');
+      next = next.replace(/^\s*import\s+((?:[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}\u0000]+\}))?|\*\s+as\s+[A-Za-z_$][\w$]*|\{[^}\u0000]+\}))\s+from\s+(\u0000MODSTR_\d+\u0000)\s*;?/gm, (full, clause, tok) => {
+        const spec = extractSpecFromToken(tok, literals);
+        if (!/^\.\.?\//.test(spec)) return full;
         const key = normAssetKey(baseDir, spec);
         const modVar = key ? compileDepModule(key) : null;
         if (!modVar) return `/* unresolved local module ${spec} */`;
@@ -377,7 +520,9 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
         }
         return full;
       });
-      next = next.replace(/^\s*import\s+['"](\.\.?\/[^'"]+)['"]\s*;?/gm, (_full, spec) => {
+      next = next.replace(/^\s*import\s+(\u0000MODSTR_\d+\u0000)\s*;?/gm, (full, tok) => {
+        const spec = extractSpecFromToken(tok, literals);
+        if (!/^\.\.?\//.test(spec)) return full;
         const key = normAssetKey(baseDir, spec);
         const modVar = key ? compileDepModule(key) : null;
         return modVar ? `${modVar};` : `/* unresolved side-effect module ${spec} */`;
@@ -385,7 +530,8 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
       return next;
     }
 
-    const entryTransformed = rewriteImports(sourceCode, currentDir);
+    const entryMask = maskModuleCommentsAndStrings(sourceCode);
+    const entryTransformed = unmaskLiterals(rewriteMaskedImports(entryMask.masked, entryMask.literals, currentDir), entryMask.literals);
     const prelude = moduleOrder.map((k) => moduleBodies.get(k)).join('\n');
     return prelude ? `${prelude}\n${entryTransformed}` : entryTransformed;
   };
@@ -445,11 +591,32 @@ export function prepareLoftSrcdoc(rawHtml, entrySubPath = 'index.html', assetMap
     return full;
   });
 
+  const openScriptTag = '<scr' + 'ipt';
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:">`;
   const themeStyle = cssVarsText
     ? `<style id="omagy-hud-theme-vars">:root { ${safeInlineCss(cssVarsText)} }</style>`
     : '';
-  const injectedHead = `${cspMeta}\n${themeStyle}`;
+  const loftErrorBridge = [
+    openScriptTag + ' id="omagy-loft-error-bridge">',
+    '(function(){',
+    'var sent=0;',
+    'function postErr(msg,src,line,col,stack){',
+    'if(sent>=6)return;sent+=1;',
+    'try{if(window.parent&&window.parent!==window){',
+    'window.parent.postMessage({type:"omagy-loft-error",entry:' + JSON.stringify(String(entrySubPath || 'index.html')) + ',message:String(msg||"Runtime error").slice(0,500),source:String(src||"").slice(0,240),line:Number(line)||0,col:Number(col)||0,stack:String(stack||"").slice(0,900)},"*");',
+    '}}catch(_){}',
+    '}',
+    'window.addEventListener("error",function(e){',
+    'postErr(e&&(e.message||(e.error&&e.error.message))||"Script error",e&&e.filename,e&&e.lineno,e&&e.colno,e&&e.error&&e.error.stack);',
+    '});',
+    'window.addEventListener("unhandledrejection",function(e){',
+    'var r=e&&e.reason;',
+    'postErr(r&&(r.message||String(r))||"Unhandled promise rejection","",0,0,r&&r.stack);',
+    '});',
+    '})();',
+    closeScriptTag,
+  ].join('');
+  const injectedHead = `${cspMeta}\n${themeStyle}\n${loftErrorBridge}`;
 
   if (/<head\b[^>]*>/i.test(html)) {
     html = html.replace(/<head\b[^>]*>/i, (m) => `${m}\n${injectedHead}`);
@@ -917,6 +1084,9 @@ export function buildCommandPaletteItems(snapshot = {}) {
   for (const p of Array.isArray(snapshot?.reviews?.ralplan?.planningArtifacts) ? snapshot.reviews.ralplan.planningArtifacts : []) {
     addArt(p, p.split('/').pop(), 'ralplan');
   }
+  for (const h of Array.isArray(snapshot?.reviews?.hyperplan) ? snapshot.reviews.hyperplan : []) {
+    addArt(h?.file, h?.file?.split('/').pop(), 'hyperplan');
+  }
   for (const c of Array.isArray(snapshot?.reviews?.codeReviews) ? snapshot.reviews.codeReviews : []) {
     addArt(c?.file, c?.file?.split('/').pop(), 'review');
   }
@@ -966,6 +1136,7 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
     buildSkillCommandWithFlags.toString(),
     buildSubagentInvokeSnippet.toString(),
     renderSafeMarkdown.toString(),
+    fenceUntrustedContext.toString(),
     prepareLoftSrcdoc.toString(),
     formatWorkspaceName.toString(),
     formatScopeLabel.toString(),
@@ -2691,6 +2862,14 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
       border: 1px solid var(--hud-border);
       border-radius: 8px;
       background: var(--hud-card);
+    }
+    .loft-error-banner {
+      border: 1px solid var(--hud-danger, #ef4444);
+      border-radius: 8px;
+      background: var(--hud-card);
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      font-size: 12px;
     }
 
     /* Consolidated layout & typography helpers */

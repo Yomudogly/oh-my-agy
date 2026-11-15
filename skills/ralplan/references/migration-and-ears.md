@@ -1,6 +1,6 @@
 # Strangler Migration Planning, EARS Requirements & Plan Receipts (`$ralplan --migrate`)
 
-Reference playbook for [`skills/ralplan/SKILL.md`](../SKILL.md). Load this reference when `$ralplan --migrate` is invoked (or when a consensus plan involves legacy module replacement, database schema evolution, public API versioning, or major SDK/runtime upgrades), and apply its EARS acceptance grammar and `plan-hash` receipt gate across consensus plans.
+Reference playbook for [`skills/ralplan/SKILL.md`](../SKILL.md). Load this reference when `$ralplan --migrate` is invoked (or when a consensus plan involves legacy module replacement, database schema evolution, public API versioning, or major SDK/runtime upgrades), and apply its EARS acceptance grammar and `plan-hash` receipt gate across consensus plans. Pair with **`$modernize`** for phased execution waves, codemods, and Expand-Migrate-Contract seams (checking new dependencies via `sh <plugin>/hooks/run.sh dep-license-diff`), and with **`$threat-model`** whenever the migration introduces new trust boundaries, auth flows, or MCP/agent surfaces.
 
 ## 1. Four-Stage Strangler Migration Sequence (`--migrate`)
 

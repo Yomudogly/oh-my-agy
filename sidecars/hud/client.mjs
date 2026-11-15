@@ -235,6 +235,13 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
     window.addEventListener('beforeunload', closeEventStream);
 
     window.addEventListener('message', (event) => {
+      const loftFrame = document.getElementById('loft-sandbox-frame');
+      if (loftFrame && event.source && event.source === loftFrame.contentWindow) {
+        if (event.data?.type === 'omagy-loft-error') {
+          handleLoftRuntimeError(event.data);
+        }
+        return;
+      }
       if (!event.source || (event.source !== window.parent && event.source !== window.top && event.source !== window)) return;
       if (event.data?.type === 'theme-change' && event.data.payload?.cssVariables) {
         for (const [k, v] of Object.entries(event.data.payload.cssVariables)) {
@@ -1030,6 +1037,46 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       }
     }
 
+    function handleLoftRuntimeError(payload) {
+      if (!currentLoftState) return;
+      const errObj = {
+        entry: String(payload?.entry || currentLoftState.activeEntry || 'index.html').slice(0, 120),
+        message: String(payload?.message || 'Runtime error').slice(0, 500),
+        line: Number(payload?.line) || 0,
+        col: Number(payload?.col) || 0,
+        stack: String(payload?.stack || '').slice(0, 900),
+      };
+      currentLoftState.lastError = errObj;
+      renderLoftErrorBanner();
+    }
+
+    function renderLoftErrorBanner() {
+      const el = document.getElementById('loft-error-banner');
+      if (!el || !currentLoftState) return;
+      const err = currentLoftState.lastError;
+      if (!err) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      const loc = err.line > 0 ? (err.entry + ':' + err.line + (err.col > 0 ? ':' + err.col : '')) : err.entry;
+      const rawErrSummary = 'Entry: ' + loc + '\\nError: ' + err.message + (err.stack ? '\\nStack:\\n' + err.stack : '');
+      const fixPrompt = 'Fix the runtime error reported by the LoFT sandbox preview for '
+        + fenceUntrustedContext('loft_slug', currentLoftState.item.slug || '', 120)
+        + ':\\n'
+        + fenceUntrustedContext('loft_error', rawErrSummary, 1000);
+      el.innerHTML = \`
+        <div class="row-between-sm">
+          <div>
+            <span class="badge badge-danger">LoFT Runtime Error</span>
+            <span class="mono-xs">\${esc(loc)}</span>
+          </div>
+          <button type="button" class="action-btn" data-quick-prompt="\${esc(fixPrompt)}">Dispatch Fix</button>
+        </div>
+        <div class="mt-xs wrap-anywhere">\${esc(err.message)}</div>\`;
+      el.style.display = 'block';
+    }
+
     function renderLoftFrame() {
       if (!currentLoftState) return;
       const { item, activeEntry, htmlCache, assetMap, verdictMarkdown, viewVerdict } = currentLoftState;
@@ -1040,9 +1087,17 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       }
       const rawHtml = htmlCache[activeEntry] || '';
       const prepared = prepareLoftSrcdoc(rawHtml, activeEntry, assetMap, collectActiveThemeCssVars());
+      const winnerPrompt = 'Record LoFT prototype winner for '
+        + fenceUntrustedContext('loft_winner', JSON.stringify({ slug: item.slug || '', variant: activeEntry || 'index.html', path: item.relPath || '' }), 400)
+        + '. Summarize the selected variant in the LoFT artifact/arena note.';
       bodyEl.innerHTML = \`
-        <div class="muted fs-12 mb-sm">Opaque-origin sandbox (<code>sandbox="allow-scripts"</code> &middot; local assets inlined &middot; external scripts stripped)</div>
+        <div id="loft-error-banner" class="loft-error-banner" style="display:none;" role="alert"></div>
+        <div class="muted fs-12 mb-sm row-between-sm">
+          <span>Opaque-origin sandbox (<code>sandbox="allow-scripts"</code> &middot; local assets inlined &middot; external scripts stripped)</span>
+          <button type="button" class="action-btn" data-quick-prompt="\${esc(winnerPrompt)}">Record Winner</button>
+        </div>
         <iframe id="loft-sandbox-frame" class="loft-iframe md-reveal" sandbox="allow-scripts" referrerpolicy="no-referrer" title="\${esc(item.title || item.slug)}"></iframe>\`;
+      renderLoftErrorBanner();
       const frame = document.getElementById('loft-sandbox-frame');
       if (frame) frame.srcdoc = prepared;
     }
@@ -1050,6 +1105,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
     window.selectLoftEntry = async function(entrySub) {
       if (!currentLoftState) return;
       currentLoftState.viewVerdict = false;
+      currentLoftState.lastError = null;
       currentLoftState.activeEntry = entrySub;
       if (!Object.prototype.hasOwnProperty.call(currentLoftState.htmlCache, entrySub)) {
         const fullRel = currentLoftState.baseDir + '/' + entrySub;
@@ -1837,6 +1893,12 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
 
     document.addEventListener('click', (event) => {
       const target = event.target instanceof Element ? event.target : null;
+      const quickPromptBtn = target ? target.closest('button[data-quick-prompt]') : null;
+      if (quickPromptBtn) {
+        const promptText = quickPromptBtn.getAttribute('data-quick-prompt') || '';
+        if (promptText) postDispatch(quickPromptBtn, { mode: 'active-chat', prompt: promptText });
+        return;
+      }
       const summary = target ? target.closest('details.hud-details > summary') : null;
       if (!summary) return;
       const details = summary.parentElement;
@@ -2662,23 +2724,33 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       ]);
       const recentArtifacts = artGroups.slice(0, 10);
 
+      const rpReviewFiles = rp
+        ? (Array.isArray(rp.reviewArtifacts)
+            ? rp.reviewArtifacts
+            : (Array.isArray(rp.planningArtifacts)
+                ? rp.planningArtifacts.filter((p) => /(?:^|[/])(?:ralplan-(?:review|receipt)-|hyperplan-distillation-)[^/]+$/i.test(String(p || '')))
+                : []))
+        : [];
+      const rpArtsHtml = rpReviewFiles.length
+        ? rpReviewFiles.map((filePath) => {
+            const shortRel = formatShortRelPath(filePath);
+            const fileBase = String(filePath || '').split('/').pop() || shortRel;
+            const btnText = /\.json$/i.test(fileBase) ? 'Receipt' : 'Consensus Review';
+            return \`<button type="button" class="badge pointer" data-file="\${esc(filePath)}" data-label="\${esc(fileBase)}" data-kind="ralplan" title="\${esc(shortRel)}" onclick="openArtifactEntry(this)">\${esc(btnText)}</button>\`;
+          }).join('')
+        : '';
+      const rpLine = rp ? \`
+        <div class="health-item mt-0 mb-sm row-wrap-sm">
+          <span class="badge badge-active tabular">Ralplan Iter \${esc(rp.iteration)}</span>
+          <span class="badge">Architect: \${esc(rp.architectVerdict)}</span>
+          <span class="badge">Critic: \${esc(rp.criticVerdict)}</span>
+          <span class="badge \${rp.consensusComplete ? 'badge-live' : ''}">Consensus: \${rp.consensusComplete ? 'COMPLETE' : 'PENDING'}</span>
+          \${rpArtsHtml}
+        </div>\` : '';
+
       let revResHtml = '';
-      if (rp || combinedReviews.length || resList.length) {
-        const activeRevTab = overviewReviewTab || ((!rp && recentReviews.length === 0 && recentResearches.length > 0) ? 'research' : 'reviews');
-        const rpArtsHtml = rp && Array.isArray(rp.planningArtifacts) && rp.planningArtifacts.length
-          ? rp.planningArtifacts.map((filePath) => {
-              const label = formatShortRelPath(filePath);
-              return \`<button type="button" class="badge pointer" data-file="\${esc(filePath)}" data-label="\${esc(label)}" data-kind="ralplan" onclick="openArtifactEntry(this)">\${esc(label)}</button>\`;
-            }).join('')
-          : '';
-        const rpLine = rp ? \`
-          <div class="health-item mt-0 mb-sm row-wrap-sm">
-            <span class="badge badge-active tabular">Ralplan Iter \${esc(rp.iteration)}</span>
-            <span class="badge">Architect: \${esc(rp.architectVerdict)}</span>
-            <span class="badge">Critic: \${esc(rp.criticVerdict)}</span>
-            <span class="badge \${rp.consensusComplete ? 'badge-live' : ''}">Consensus: \${rp.consensusComplete ? 'COMPLETE' : 'PENDING'}</span>
-            \${rpArtsHtml}
-          </div>\` : '';
+      if (combinedReviews.length || resList.length) {
+        const activeRevTab = overviewReviewTab || ((recentReviews.length === 0 && recentResearches.length > 0) ? 'research' : 'reviews');
         const reviewRowsHtml = recentReviews.map((item) => item._revKind === 'hyperplan' ? renderHyperplanReviewRow(item) : renderCodeReviewRow(item)).join('');
         const researchRowsHtml = recentResearches.map((r) => \`
           <div class="list-row-card">
@@ -2694,9 +2766,8 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
             <button type="button" class="action-btn" data-file="\${esc(r.file)}" data-title="\${esc(r.title)}" onclick="openMarkdownDrawer(this.dataset.file, this.dataset.title, 'research')">Open Report</button>
           </div>\`).join('');
 
-        const reviewsPaneHtml = (rpLine || reviewRowsHtml)
-          ? (rpLine + reviewRowsHtml)
-          : '<div class="muted fs-12">No recent reviews recorded yet.</div>';
+        const reviewsPaneHtml = reviewRowsHtml
+          || '<div class="muted fs-12">No recent reviews recorded yet.</div>';
         const researchPaneHtml = researchRowsHtml
           || '<div class="muted fs-12">No deep research reports recorded yet.</div>';
 
@@ -2713,7 +2784,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           </div>\`;
       }
 
-      const artifactsCardHtml = recentArtifacts.length ? \`
+      const artifactsCardHtml = (recentArtifacts.length || rp) ? \`
         <div class="card">
           <details class="hud-details card-details" data-hud-key="ov-artifacts">
             <summary class="tabular">
@@ -2721,6 +2792,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
               <span class="badge tabular">\${recentArtifacts.length}\${artGroups.length > 10 ? ' / ' + artGroups.length : ''}</span>
             </summary>
             <div class="mt-md">
+              \${rpLine}
               \${recentArtifacts.map((item) => \`
                 <div class="artifact-row">
                   <div class="flex-1-min0">

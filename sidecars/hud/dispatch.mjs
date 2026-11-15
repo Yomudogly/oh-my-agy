@@ -10,11 +10,12 @@ import { redactSecrets } from '../../hooks/omagy-hook.mjs';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const CLAUDE_MODEL_MAP = { flash_lite: 'haiku', flash: 'haiku', pro: 'opus' };
-const CODEX_WRITE_ROLES = new Set(['executor', 'debugger', 'designer', 'test-engineer']);
+const CODEX_WRITE_ROLES = new Set(['executor', 'debugger', 'designer', 'test-engineer', 'devops-engineer', 'doc-steward']);
 const OMAGY_SKILL_SLUGS = new Set([
   'ai-slop-cleaner', 'analyze', 'ask', 'autopilot', 'cancel', 'code-review',
-  'deep-interview', 'deep-research', 'doctor', 'hud', 'loft', 'performance-goal',
-  'pr', 'ralplan', 'skill', 'team', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
+  'deep-interview', 'deep-research', 'doctor', 'hud', 'loft', 'modernize',
+  'performance-goal', 'pr', 'ralplan', 'release', 'skill', 'team',
+  'threat-model', 'ultragoal', 'ultraqa', 'visual-ralph', 'wiki',
 ]);
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const WS_MAX_UPGRADE_BYTES = 32 * 1024;
@@ -230,7 +231,7 @@ export async function dispatchViaCodexAppServer(wsUrl, opts = {}) {
     const runProtocolHandshake = async () => {
       try {
         await sendRpc('initialize', {
-          clientInfo: { name: 'oh-my-agy-hud', version: String(opts.version || '0.6.0') },
+          clientInfo: { name: 'oh-my-agy-hud', version: String(opts.version || '0.7.0') },
           capabilities: { experimentalApi: true },
         });
         await sendRpc('initialized', {}, true);
@@ -504,7 +505,7 @@ export async function dispatchDesktopHostAction(ctx, payload = {}, options = {})
         workspaceRoot,
         threadId: (mode === 'active-chat' || mode === 'subagent-active') ? (payload?.conversationId || options.threadId || '') : '',
         fallbackToNewThread: mode === 'active-chat',
-        version: options.version || '0.6.0',
+        version: options.version || '0.7.0',
         wsConnect: options.wsConnect,
       });
       if (wsRes.ok) {

@@ -14,6 +14,8 @@ import {
   redactSecrets, scanRepoCodeHygiene, stateRoot, stripCodeStrings, stripUtf8Bom,
   transformOutsideCodeSpans, validateCompletionEvidence,
 } from './omagy-hook.mjs';
+import { lintWikiPages, scanInitDeepCandidates, walkWikiMd } from './omagy-audit.mjs';
+export { lintWikiPages, scanInitDeepCandidates };
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const UNTRACKED_MAX_FILES = 200;
@@ -71,7 +73,7 @@ function extractThresholds(line) {
 }
 
 export function runFloorGuard(cwd = process.cwd(), baseRef = '', options = {}) {
-  const summary = { silencedCheckers: 0, unfinishedWork: 0, emptyCatches: 0, protectedBlocksModified: 0, testsMadeEasier: 0, deletedTests: 0, removedAssertions: 0, loosenedThresholds: 0, rulesRemoved: 0, untrackedBlockers: 0, total: 0 };
+  const summary = { silencedCheckers: 0, unfinishedWork: 0, emptyCatches: 0, protectedBlocksModified: 0, testsMadeEasier: 0, deletedTests: 0, removedAssertions: 0, loosenedThresholds: 0, rulesRemoved: 0, secretsInDiff: 0, untrackedBlockers: 0, total: 0 };
   const findings = [];
   const repoDir = path.resolve(String(cwd || process.cwd()));
   const fail2 = (error, baseSha = '') => ({ ok: false, exitCode: 2, baseSha, findings, summary, error });
@@ -87,7 +89,7 @@ export function runFloorGuard(cwd = process.cwd(), baseRef = '', options = {}) {
   catch (err) { return fail2(`Unable to resolve git base (${cleanRef || 'HEAD'}): ${errMsg(err)}`); }
   if (!baseSha) return fail2('Resolved empty git base SHA.');
 
-  const catMap = { 'silenced-checker': 'silencedCheckers', 'unfinished-work': 'unfinishedWork', 'empty-catch': 'emptyCatches', 'protected-block-modified': 'protectedBlocksModified', 'test-made-easier': 'testsMadeEasier', 'test-deleted': 'deletedTests', 'assertion-removed': 'removedAssertions', 'threshold-loosened': 'loosenedThresholds', 'rule-removed': 'rulesRemoved' };
+  const catMap = { 'silenced-checker': 'silencedCheckers', 'unfinished-work': 'unfinishedWork', 'empty-catch': 'emptyCatches', 'protected-block-modified': 'protectedBlocksModified', 'test-made-easier': 'testsMadeEasier', 'test-deleted': 'deletedTests', 'assertion-removed': 'removedAssertions', 'threshold-loosened': 'loosenedThresholds', 'rule-removed': 'rulesRemoved', 'secret-in-diff': 'secretsInDiff' };
   const record = (category, file, line, message, snippet, untracked = false) => {
     findings.push({ category, file, line: Number(line) || 1, message, snippet: redactSecrets(String(snippet || '').trim()).slice(0, 160) });
     if (catMap[category]) summary[catMap[category]] += 1;
@@ -135,6 +137,16 @@ export function runFloorGuard(cwd = process.cwd(), baseRef = '', options = {}) {
         if (plainRm > addB.length) {
           const smp = delB.find((b) => !/\[(v\d+)\]/i.test(b.content)) || delB[0];
           for (let k = 0; k < plainRm - addB.length; k += 1) record('rule-removed', relFile, smp?.oldLine || 1, `Removed constraint bullet from '${relFile}'.`, smp?.content || relFile);
+        }
+      }
+    }
+    if (entry.status !== 'deleted' && !TEST_FILE_NAME_RE.test(relFile) && !/\.md$/i.test(relFile)) {
+      for (const hunk of entry.hunks) {
+        const removedSet = new Set(hunk.lines.filter((l) => l.type === 'del').map((l) => l.content));
+        for (const l of hunk.lines) {
+          if (l.type === 'add' && !removedSet.has(l.content) && !/\[REDACTED/i.test(l.content) && redactSecrets(l.content) !== l.content) {
+            record('secret-in-diff', relFile, l.newLine || 1, `Added unredacted secret or credential in '${relFile}'.`, l.content);
+          }
         }
       }
     }
@@ -711,6 +723,10 @@ const LOOKOUT_NEG_RE = new RegExp(`\\b(?:${BASE_NEG}|blocks?|prevent(?:s|ed|ing)
 const TIMELINE_NEG_RE = new RegExp(`\\b(?:${BASE_NEG}|no\\s+fake|anti-pattern)\\b`, 'i');
 const LOOKOUT_RULES = [
   ['rm-root-or-home', /\brm\s+(?:-[A-Za-z]*[rf][A-Za-z]*\s+|--(?:recursive|force)\s+){1,4}(?:\/(?:\s|$|\*|[;|&)])|~(?:\/|\s|$|[;|&)])|\$HOME\b|\$\{HOME\})/g],
+  ['rm-dot-or-git-env', /\brm\s+(?:-[A-Za-z]*[rf][A-Za-z]*\s+|--(?:recursive|force)\s+){1,4}(?:\.(?=\s|$|[;|&)])|(?:\.\/)?\.(?:git|env)\b)/g],
+  ['chmod-777', /\bchmod\s+(?:-[A-Za-z]+\s+)*0?777\b/g],
+  ['curl-pipe-sh', /\b(?:curl|wget)\b[^\r\n|]*\|\s*(?:env\s+)?(?:\/(?:usr\/)?(?:local\/)?bin\/)?(?:ba|da|z|k|a)?sh\b/g],
+  ['npm-publish-live', /\bnpm\s+publish\b(?![^\r\n;|&]*--dry-run\b)/g],
   ['git-reset-hard', /\bgit\s+reset\s+--hard\b/g], ['git-clean-force', /\bgit\s+clean\s+(?:-[A-Za-z]*f|--force\b)/g],
   ['git-push-force', /\bgit\s+push\b[^\r\n;|&]*(?:--force(?!-with-lease|-if-includes)\b|\s-[A-Za-z]*f\b)/g],
   ['sql-drop', /\bDROP\s+(?:TABLE|DATABASE|SCHEMA)\b/gi], ['sql-truncate', /\bTRUNCATE\s+TABLE\b/gi],
@@ -996,62 +1012,6 @@ export function verifyPlanHash(mode, planPath, receiptPath = '', meta = {}) {
   return { ok: matches, exitCode: matches ? 0 : 1, planHash, specHash, combinedHash, timelineViolations, matches, receiptPath: absReceipt };
 }
 
-export function scanInitDeepCandidates(rootDir = process.cwd()) {
-  if (!strArg(rootDir)) return { ok: false, exitCode: 2, root: '', commitCount: 0, candidates: [], error: 'missing_root_dir' };
-  const absRoot = path.resolve(rootDir);
-  if (!isDir(absRoot)) return { ok: false, exitCode: 2, root: absRoot, commitCount: 0, candidates: [], error: 'missing_root_dir' };
-
-  const stats = new Map(); let files = 0;
-  const walk = (dir, parts) => {
-    if (files >= 4000 || parts.length > 6) return;
-    for (const e of listEntries(dir)) {
-      if (files >= 4000) break;
-      if (e.isDirectory()) { if (!e.name.startsWith('.') && !SKIP_SCAN_DIRS.has(e.name)) walk(path.join(dir, e.name), [...parts, e.name]); }
-      else if (e.isFile() && parts.length >= 1 && CODE_EXTENSIONS.has(path.extname(e.name).toLowerCase())) {
-        try {
-          const full = path.join(dir, e.name);
-          if (fs.statSync(full).size > 524288) continue;
-          const loc = fs.readFileSync(full, 'utf8').split(/\r?\n/).filter((l) => l.trim()).length;
-          files += 1;
-          for (let d = 1; d <= Math.min(3, parts.length); d += 1) { const k = parts.slice(0, d).join('/'); const r = stats.get(k) || { codeFiles: 0, loc: 0 }; r.codeFiles += 1; r.loc += loc; stats.set(k, r); }
-        } catch { /* fail open: unreadable code file */ }
-      }
-    }
-  };
-  walk(absRoot, []);
-
-  let commitCount = 0; let sampled = 0; const touches = new Map();
-  try {
-    commitCount = Number(gitOut(absRoot, ['rev-list', '--count', 'HEAD']).trim()) || 0;
-    if (commitCount > 0) for (const blk of gitOut(absRoot, ['-c', 'core.quotepath=false', 'log', '-n', '100', '--pretty=format:__C__', '--name-only']).split('__C__').slice(1)) {
-      sampled += 1; const hit = new Set();
-      for (const f of blk.split(/\r?\n/)) {
-        const s = f.trim().split('/').filter(Boolean);
-        if (s.length >= 2 && !s[0].startsWith('.') && !SKIP_SCAN_DIRS.has(s[0])) for (let d = 1; d <= Math.min(3, s.length - 1); d += 1) hit.add(s.slice(0, d).join('/'));
-      }
-      for (const d of hit) touches.set(d, (touches.get(d) || 0) + 1);
-    }
-  } catch { /* fail open: non-git directory has 0 churn */ }
-
-  const candidates = [];
-  for (const [dir, info] of stats) {
-    const churnPct = sampled > 0 ? Math.round(((touches.get(dir) || 0) / sampled) * 1000) / 10 : 0;
-    const reasons = [];
-    if (info.codeFiles >= 8 && info.loc >= 500) reasons.push('density');
-    if (commitCount >= 30 && churnPct >= 15 && info.codeFiles >= 1) reasons.push('churn');
-    if (reasons.length) candidates.push({ dir, codeFiles: info.codeFiles, loc: info.loc, churnPct, reasons, hasAgentsMd: isFile(path.join(absRoot, dir, 'AGENTS.md')) });
-  }
-  candidates.sort((a, b) => (b.loc + b.churnPct * 20) - (a.loc + a.churnPct * 20) || a.dir.localeCompare(b.dir));
-  return { ok: true, exitCode: 0, root: absRoot, commitCount, candidates };
-}
-
-function walkWikiMd(absWiki, skipIndex = false) {
-  const out = [];
-  const walk = (d) => { for (const e of listEntries(d)) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (e.isFile() && e.name.endsWith('.md') && (!skipIndex || e.name !== 'index.md')) out.push(f); } };
-  walk(absWiki);
-  return out;
-}
-
 function tokenizeWikiText(text) {
   const s = String(text || '').toLowerCase(); const out = []; let m;
   const aRe = /[a-z0-9]+(?:-[a-z0-9]+)*/g;
@@ -1117,53 +1077,6 @@ export function queryWikiPages(wikiDir, query) {
   }
   results.sort((a, b) => b.score - a.score || a.slug.localeCompare(b.slug));
   return { ok: true, exitCode: 0, query: rawQ, wikiDir: absWiki, results };
-}
-
-export function lintWikiPages(wikiDir, repoRoot = '') {
-  const rawWiki = strArg(wikiDir);
-  if (!rawWiki) return { ok: false, exitCode: 2, wikiDir: '', pagesScanned: 0, brokenWikiLinks: [], brokenFileRefs: [], error: 'missing_wiki_dir' };
-  const absWiki = path.resolve(rawWiki);
-  if (!isDir(absWiki)) return { ok: false, exitCode: 2, wikiDir: absWiki, pagesScanned: 0, brokenWikiLinks: [], brokenFileRefs: [], error: 'missing_wiki_dir' };
-
-  const absRepo = strArg(repoRoot) ? path.resolve(String(repoRoot)) : path.dirname(absWiki);
-  const mdFiles = walkWikiMd(absWiki, false);
-  const validSlugs = new Set(mdFiles.flatMap((f) => [path.basename(f, '.md'), toPosix(path.relative(absWiki, f)).replace(/\.md$/i, '')]));
-  const brokenWikiLinks = []; const brokenFileRefs = []; const lineCache = new Map();
-  const fileRefRe = /(?<![A-Za-z0-9_/:.@$<>-])((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z][A-Za-z0-9]*):(\d+)(?:-(\d+))?\b/g;
-
-  for (const full of mdFiles) {
-    const relPage = toPosix(path.relative(absWiki, full));
-    const raw = readUtf8(full).replace(/\r\n/g, '\n');
-    const fm = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(raw);
-    const lines = blankFencedLines(fm ? `${'\n'.repeat(fm[0].split('\n').length - 1)}${raw.slice(fm[0].length)}` : raw);
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      if (!line.trim()) continue;
-      const noCode = line.replace(/`+[^`]*`+/g, (m) => ' '.repeat(m.length));
-      const wlRe = /\[\[([^\]|#\r\n]+)(?:[|#][^\]]*)?\]\]/g;
-      let wm;
-      while ((wm = wlRe.exec(noCode)) !== null) {
-        const t = wm[1].trim().replace(/\.md$/i, '');
-        if (t && !/[<>]/.test(t) && !validSlugs.has(t) && !validSlugs.has(path.basename(t))) brokenWikiLinks.push({ page: relPage, line: i + 1, target: t, raw: wm[0] });
-      }
-      fileRefRe.lastIndex = 0; let fr;
-      while ((fr = fileRefRe.exec(line)) !== null) {
-        const rf = fr[1];
-        if (rf.includes('..') || /[*<>{}$]/.test(rf)) continue;
-        const start = Number(fr[2]); const end = fr[3] ? Number(fr[3]) : start;
-        const cand = path.resolve(absRepo, rf);
-        if (cand !== absRepo && !cand.startsWith(absRepo + path.sep)) continue;
-        if (!isFile(cand)) brokenFileRefs.push({ page: relPage, line: i + 1, ref: fr[0], file: rf, refLine: start, reason: 'missing_file' });
-        else {
-          if (!lineCache.has(cand)) lineCache.set(cand, readUtf8(cand).split(/\r?\n/).length);
-          const tot = lineCache.get(cand);
-          if (start < 1 || start > tot || end < start || end > tot) brokenFileRefs.push({ page: relPage, line: i + 1, ref: fr[0], file: rf, refLine: start, reason: 'line_out_of_range' });
-        }
-      }
-    }
-  }
-  const ok = !brokenWikiLinks.length && !brokenFileRefs.length;
-  return { ok, exitCode: ok ? 0 : 1, wikiDir: absWiki, pagesScanned: mdFiles.length, brokenWikiLinks, brokenFileRefs };
 }
 
 export function scanSessionTranscripts(targetPath = process.cwd()) {

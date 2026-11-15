@@ -54,7 +54,7 @@ Choose the lane before acting:
 - **`$ralplan`** for Planner -> Architect -> Critic consensus planning, or **`$ralplan --light`** for lightweight single-lane planning without a deep interview.
 - **`$ultragoal`** for durable multi-goal execution with a ledger and resume semantics.
 - **`$team`** when an approved plan needs coordinated parallel execution across multiple subagent lanes.
-- **`$code-review`**, **`$ultraqa`**, **`$deep-research`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$hud --handoff`** as bounded helpers inside the chosen lane. They do not compete with it.
+- **`$code-review`**, **`$ultraqa`**, **`$deep-research`**, **`$ai-slop-cleaner`**, **`$loft`**, **`$pr`**, **`$hud --handoff`**, **`$modernize`**, **`$threat-model`**, **`$release`** as bounded helpers inside the chosen lane. They do not compete with it.
 - Stages may run on their own when their input contract is satisfied. `$deep-interview` is not `$ralplan --interview`.
 - `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `$swarm` are deprecated and unsupported. Do not route there.
 
@@ -76,11 +76,15 @@ This plugin ships role agents under `agents/`. Invoke them with `invoke_subagent
 | `verifier` | independent completion evidence |
 | `code-reviewer`, `security-reviewer` | independent review lanes |
 | `designer`, `vision` | UI/UX work, screenshot/mockup analysis, visual verdicts |
+| `supply-chain-auditor` | read-only dependency, license, MCP server, skill, and CI audits |
+| `devops-engineer` | CI/CD pipelines, Dockerfiles, runtime alignment, dry-run packaging |
+| `runtime-qa` | read-only black-box CLI/process/API probing and coverage gaps |
+| `doc-steward` | docs drift, wiki-lint cross-link hygiene, CLI/README/.env sync |
 
 Routing rules:
 - Mixed routing is deliberate: `explore -> researcher` (map local repo usage first, then confirm upstream docs or evaluate package/SDK migration options).
 - Specialists report boundary crossings upward instead of silently absorbing adjacent work.
-- **Assignment-scoped role overlays**: read-only/advisory roles (`explore`, `researcher`, `planner`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `test-engineer`, `designer`) own code edits and must verify with targeted tests/builds (`verifier` runs independent read-only/test verification).
+- **Assignment-scoped role overlays**: read-only/advisory roles (`explore`, `researcher`, `planner`, `architect`, `critic`, `tracer`, `code-reviewer`, `security-reviewer`, `supply-chain-auditor`, `runtime-qa`, `vision`) never edit production files or require build/test execution unless explicitly assigned; implementation roles (`executor`, `debugger`, `test-engineer`, `designer`, `devops-engineer`, `doc-steward`) own code edits and must verify with targeted tests/builds (`verifier` runs independent read-only/test verification).
 - When external evidence materially affects the answer, route to the relevant specialist first. Do not answer from recall alone.
 - If a plugin role agent is not available in this session, invoke the built-in `self` subagent (or `research` for read-only roles). Paste the role's `agents/<role>.md` body at the top of the prompt. Never fake an independent lane by role-playing it in the main lane; if subagent dispatch is refused or exhausted on a required review/verification gate (`architect`, `critic`, `verifier`, `code-reviewer`, `security-reviewer`), fail closed and report the refusal.
 

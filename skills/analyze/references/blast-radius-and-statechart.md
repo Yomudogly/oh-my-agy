@@ -26,8 +26,8 @@ Classify every discovered dependent into four concrete buckets, tagging each row
    - Top-level user or runtime surfaces reached upstream from direct callers (HTTP/GraphQL endpoints, CLI flags/subcommands, lifecycle hooks `SessionStart`/`PreInvocation`/`PreToolUse`/`Stop`, scheduled jobs, or UI screens).
 3. **Shared State / Schema Coupling**:
    - Persisted state files (`.omagy/state/*-state.json`, `.omagy/ultragoal/goals.json`, `.omagy/evidence/*.json`), database tables, cache keys, environment variables, or wire payloads coupled to the target.
-4. **Missing Regression Coverage**:
-   - Locate existing unit/integration/selftest assertions covering each direct caller and entrypoint, then isolate **untested caller branches or failure paths** that could break silently.
+4. **Missing Regression Coverage & Doc Drift**:
+   - Run `sh <plugin>/hooks/run.sh coverage-map <workspace> --json` and locate existing unit/integration/selftest assertions covering each direct caller and entrypoint, then isolate **untested caller branches or failure paths** that could break silently; run `sh <plugin>/hooks/run.sh docs-drift <workspace> --json` when public CLI flags or environment variables are in the blast radius.
 
 ### `--blast-radius` Output Contract
 Include these two structured blocks inside the `$analyze` synthesis:
