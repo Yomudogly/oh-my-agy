@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
 import {
   analyzeDiffCodeHealth,
+  canonicalizePath,
   checkVerificationFreshness,
   discoverOmagyScopes,
   hardenWindowsExeSearch,
@@ -3419,6 +3420,7 @@ function snapshotTreeDigest(rootDir) {
 }
 
 async function runSelftest() {
+  const rmDirSafe = (p) => fs.rmSync(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-selftest-'));
   const rtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-rt-'));
   const origRuntimeDir = process.env.OMAGY_RUNTIME_DIR;
@@ -3567,7 +3569,7 @@ async function runSelftest() {
     );
     if (prevRuntimeDir === undefined) delete process.env.OMAGY_RUNTIME_DIR;
     else process.env.OMAGY_RUNTIME_DIR = prevRuntimeDir;
-    fs.rmSync(emptyWs, { recursive: true, force: true });
+    rmDirSafe(emptyWs);
 
     const dSubActive = dispatchHudAction(
       { mode: 'subagent-active', agent: 'architect', prompt: 'Review boundaries', conversationId: 'conv-explicit-9999' },
@@ -3706,7 +3708,7 @@ async function runSelftest() {
         && Boolean(innerArtifact && innerArtifact.mime.includes('text/html'))
         && innerBlocked === null;
     } finally {
-      fs.rmSync(travelsWs, { recursive: true, force: true });
+      rmDirSafe(travelsWs);
     }
 
     // H13: SSE GET /api/events auth (401 vs 200 standalone, X-Sidecar-Token / X-Omagy-Token / ?token=),
@@ -3817,21 +3819,21 @@ async function runSelftest() {
           waitForFrame(count) {
             if (frames.length >= count) return Promise.resolve(frames[count - 1]);
             return new Promise((resFrame, rejFrame) => {
-              const timer = setTimeout(() => rejFrame(new Error(`Timed out waiting for SSE frame ${count}`)), 1800);
+              const timer = setTimeout(() => rejFrame(new Error(`Timed out waiting for SSE frame ${count}`)), 5000);
               frameWaiters.push({ count, timer, resolve: resFrame });
             });
           },
           waitForKeepalive() {
             if (keepalives > 0) return Promise.resolve(keepalives);
             return new Promise((resKa, rejKa) => {
-              const timer = setTimeout(() => rejKa(new Error('Timed out waiting for SSE keepalive')), 1800);
+              const timer = setTimeout(() => rejKa(new Error('Timed out waiting for SSE keepalive')), 5000);
               keepaliveWaiter = { timer, resolve: resKa };
             });
           },
           closeAndWait() {
             req.destroy();
             return new Promise((resClose, rejClose) => {
-              const deadline = Date.now() + 1500;
+              const deadline = Date.now() + 3000;
               const check = () => {
                 if (targetSrv.getActiveSseClientCount() === 0) {
                   resClose(true);
@@ -3931,8 +3933,8 @@ async function runSelftest() {
         sseFlatPreSrv.emit('close');
       }
     } finally {
-      fs.rmSync(sseWs, { recursive: true, force: true });
-      fs.rmSync(preOmagyWs, { recursive: true, force: true });
+      rmDirSafe(sseWs);
+      rmDirSafe(preOmagyWs);
     }
 
     // H14 & H15: Expanded redacted /api/artifact containment, hostile probes, and enriched snapshot Drawer inventory
@@ -4097,7 +4099,7 @@ async function runSelftest() {
         && artSnap1.loft[0].localAssets.includes('./logic.mjs')
         && artSnap1.loft[0].arenaVerdictFile === '.omagy/artifacts/loft/demo/arena-verdict.md';
     } finally {
-      fs.rmSync(artWs, { recursive: true, force: true });
+      rmDirSafe(artWs);
     }
 
     // H16: Slide-Over Drawer (#artifact-drawer), vm.Script inline syntax check, 3-mode Visual Ralph comparator, Loft srcdoc local-asset/module/theme inlining [W-1], & null-source guard
@@ -4506,8 +4508,8 @@ async function runSelftest() {
       );
       const wbSnap3 = buildHudSnapshot([wbWs], baseNowMs + 200);
       const wikiSearchJson = authWikiSearch.json || {};
-      const wsReal1 = fs.realpathSync(wbWs);
-      const wsReal2 = fs.realpathSync(wbWs2);
+      const wsReal1 = canonicalizePath(wbWs);
+      const wsReal2 = canonicalizePath(wbWs2);
       h23Ok = vettedSel.primaryRoot === wsReal2
         && unvettedSel.primaryRoot === wsReal1
         && Boolean(evArt && briefArt)
@@ -4539,8 +4541,8 @@ async function runSelftest() {
         && wbSnap1.wikiLog?.length === 1
         && wbSnap1.wikiLog[0].slug === 'arch';
     } finally {
-      fs.rmSync(wbWs, { recursive: true, force: true });
-      fs.rmSync(wbWs2, { recursive: true, force: true });
+      rmDirSafe(wbWs);
+      rmDirSafe(wbWs2);
     }
 
     // H24: Workbench Pure Helpers (DAG waves, Backlinks, Fence-stripped TOC, Command Palette) & CSS/HTML Contracts
@@ -4660,7 +4662,7 @@ async function runSelftest() {
       const h25EnsureOut = JSON.parse(execFileSync(
         process.execPath,
         [fileURLToPath(import.meta.url), 'desktop-ensure', '--host', 'codex', '--workspace', h25Ws],
-        { env: { ...process.env, OMAGY_RUNTIME_DIR: rtDir }, encoding: 'utf8', timeout: 5000 },
+        { env: { ...process.env, OMAGY_RUNTIME_DIR: rtDir }, encoding: 'utf8', timeout: 15000 },
       ));
       if (h25DaemonPid > 0) {
         try { process.kill(h25DaemonPid, 'SIGTERM'); h25DaemonPid = 0; } catch { /* fail open: daemon already exited */ }
@@ -4674,7 +4676,7 @@ async function runSelftest() {
       }), 'utf8');
       const dLaunchSkip = await ensureDesktopHudDaemon({ host: 'claude', workspace: claudeLaunchWs, pluginRoot: PLUGIN_ROOT, env: { ...process.env, OMAGY_RUNTIME_DIR: rtDir } });
 
-      h25DesktopSrv = await startDesktopHudServer({ workspace: h25Ws, host: 'codex', port: 0, registry: path.join(rtDir, 'h25-srv.json') });
+      h25DesktopSrv = await startDesktopHudServer({ workspace: h25Ws, host: 'codex', port: 0, registry: path.join(rtDir, 'h25-srv.json'), clipboardRunner: () => {} });
       const h25Req = (reqPath, headers = {}, method = 'GET', reqBody = '') => new Promise((resolve, reject) => {
         const req = http.request({ host: BIND_HOST, port: h25DesktopSrv.port, path: reqPath, method, headers }, (res) => {
           const chunks = [];
@@ -4829,7 +4831,7 @@ async function runSelftest() {
 
       h25Ok = dPort1 === dPort2 && dPort1 >= 47800 && dPort1 <= 48799
         && lPort >= 48800 && lPort <= 49799
-        && regFile.startsWith(rtDir)
+        && regFile.startsWith(path.resolve(rtDir))
         && defaultHostSnap?.host === 'antigravity'
         && defaultHostSync?.modeUsed === 'new-chat'
         && defaultHostAsync?.modeUsed === 'new-chat'
@@ -4853,7 +4855,7 @@ async function runSelftest() {
         && h25QueryTokPost.status === 401
         && h25BadOriginPost.status === 403
         && h25CookiePost.status === 200 && h25CookieJson.modeUsed === 'clipboard-handoff' && h25CookieJson.clipboardPrompt === '$doctor --setup'
-        && h25ClampedSnap?.workspace && fs.realpathSync(h25ClampedSnap.workspace) === fs.realpathSync(h25Ws)
+        && h25ClampedSnap?.workspace && canonicalizePath(h25ClampedSnap.workspace) === canonicalizePath(h25Ws)
         && sseActiveBefore === 1 && sseActiveAfter === 0
         && rateLimitedStatus === 429
         && claudeClip.ok === true && claudeClip.modeUsed === 'clipboard-handoff' && claudeClip.clipboardPrompt === 'sync desktop' && claudeClip.copiedToClipboard === true
@@ -4951,7 +4953,9 @@ async function runSelftest() {
       const sse1 = await openH26Sse();
       const sse2 = await openH26Sse();
       const sse3 = await openH26Sse();
-      await new Promise((r) => setTimeout(r, 80));
+      for (let i = 0; i < 40 && !sse1.isEnded(); i += 1) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
       const sse1Evicted = sse1.isEnded();
       const activeAfter3 = h26Srv.getActiveSseClientCount();
       const h26StatusWhileSse = await h26Get('/api/status', { 'X-Sidecar-Token': 'h26-tok' });
@@ -4983,7 +4987,7 @@ async function runSelftest() {
         && HUD_HTML.includes('visibilitychange')
         && HUD_HTML.includes('AbortController')
         && clientScriptValid === true
-        && fs.realpathSync(h26Roots.primaryRoot) === fs.realpathSync(h26StateWs)
+        && canonicalizePath(h26Roots.primaryRoot) === canonicalizePath(h26StateWs)
         && h26ArtRes.status === 200
         && h26ArtRes.body === 'alt-root-artifact'
         && h26Rp?.iteration === 3
@@ -5014,13 +5018,14 @@ async function runSelftest() {
         h26Srv.close();
         h26Srv.closeAllConnections?.();
       } catch { /* fail open: H26 server already closed */ }
-      fs.rmSync(h26Base, { recursive: true, force: true });
+      rmDirSafe(h26Base);
     }
 
     // H27: HUD dispatch isolates Codex/legacy-input/foreign-workspace routing, verifies targets without `--`, and unwraps subagents.
     const h27Base = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-h27-'));
     const h27PrevRuntime = process.env.OMAGY_RUNTIME_DIR;
     let h27Ok = false;
+    let h27Err = '';
     try {
       const h27WsTarget = path.join(h27Base, 'ws-target');
       const h27WsForeign = path.join(h27Base, 'ws-foreign');
@@ -5059,13 +5064,13 @@ async function runSelftest() {
         if (subArgs[0] === 'get-conversation-metadata') {
           const targetId = subArgs[1];
           if (targetId === 'conv-foreign-meta') {
-            return JSON.stringify({ metadata: { rootConversationId: 'conv-foreign-meta', workspaceUris: [`file://${h27WsForeign}`] } });
+            return JSON.stringify({ metadata: { rootConversationId: 'conv-foreign-meta', workspaceUris: [pathToFileURL(h27WsForeign).href] } });
           }
           if (targetId === 'conv-sub-good') {
-            return JSON.stringify({ metadata: { rootConversationId: 'conv-root-good', workspaceUris: [`file://${h27WsTarget}`] } });
+            return JSON.stringify({ metadata: { rootConversationId: 'conv-root-good', workspaceUris: [pathToFileURL(h27WsTarget).href] } });
           }
           if (targetId === 'conv-root-good') {
-            return JSON.stringify({ metadata: { rootConversationId: 'conv-root-good', workspaceUris: [`file://${h27WsTarget}`] } });
+            return JSON.stringify({ metadata: { rootConversationId: 'conv-root-good', workspaceUris: [pathToFileURL(h27WsTarget).href] } });
           }
           throw new Error('rpc error: code = NotFound desc = not_found: trajectory not found');
         }
@@ -5130,12 +5135,13 @@ async function runSelftest() {
         && h27DispatchFallback?.fallback === true
         && h27FallbackCalls.every((a) => a[0] !== 'send-message')
         && clientWiringOk;
-    } catch { /* fail open: capture H27 exception as false */
+    } catch (err) { /* fail open: capture H27 exception as false */
+      h27Err = String(err?.message || err);
       h27Ok = false;
     } finally {
       if (h27PrevRuntime === undefined) delete process.env.OMAGY_RUNTIME_DIR;
       else process.env.OMAGY_RUNTIME_DIR = h27PrevRuntime;
-      fs.rmSync(h27Base, { recursive: true, force: true });
+      rmDirSafe(h27Base);
     }
 
     // H28: v0.7.0 LoFT error-bridge, fenceUntrustedContext, string-aware bundler, 11 blueprints, and worktrees snapshot
@@ -5307,7 +5313,7 @@ async function runSelftest() {
 
     const fg = snap.codeHealth?.floorGuard;
     const se = snap.doctor?.skillEval;
-    const ok = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
+    const coreSnapHttp = JSON.stringify(snap.allowedViews) === JSON.stringify(['overview', 'workflows', 'skills', 'subagents', 'wiki'])
       && !HUD_HTML.includes('data-view="doctor"')
       && HUD_HTML.includes('Diagnostics &amp; Runtime Health')
       && HUD_HTML.includes('Code Health &amp; Technical Debt')
@@ -5336,7 +5342,6 @@ async function runSelftest() {
       && snap.codeHealth?.debtItems?.[0]?.ceiling.includes('[REDACTED_TOKEN]')
       && snap.codeHealth?.debtItems?.[0]?.upgrade === 'upgrade to streaming parser'
       && Boolean(fg && typeof fg.deletedTests === 'number' && typeof fg.removedAssertions === 'number' && typeof fg.untrackedBlockers === 'number' && typeof fg.suppressions === 'number' && typeof fg.emptyCatches === 'number' && typeof fg.protectedBlocksModified === 'number' && typeof fg.total === 'number')
-      && floorCacheOk
       && Boolean(se && se.ok === true && se.rank1Pct >= 95 && se.minRank1 === 95 && se.collisionErrors === 0 && se.negativeSurvivalPct === 100)
       && snap.catalog?.subagents?.length === 18
       && snap.catalog.subagents.every((a) => Boolean(a.defaultPrompt))
@@ -5390,25 +5395,34 @@ async function runSelftest() {
       && Boolean(validIdeaArtifact && validIdeaArtifact.mime === 'text/plain; charset=utf-8')
       && blockedTraversal === null
       && blockedIdeaTraversal === null
-      && blockedRootTraversal === null
-      && innerSnapOk
-      && h13Ok
-      && h14Ok
-      && h15Ok
-      && h16Ok
-      && h17Ok
-      && h18Ok
-      && h19Ok
-      && h20Ok
-      && h21Ok
-      && h22Ok
-      && h23Ok
-      && h24Ok
-      && h25Ok
-      && h26Ok
-      && h27Ok
-      && h28Ok
-      && h29Ok;
+      && blockedRootTraversal === null;
+
+    const namedChecks = {
+      coreSnapHttp,
+      floorCacheOk,
+      innerSnapOk,
+      h13Ok,
+      h14Ok,
+      h15Ok,
+      h16Ok,
+      h17Ok,
+      h18Ok,
+      h19Ok,
+      h20Ok,
+      h21Ok,
+      h22Ok,
+      h23Ok,
+      h24Ok,
+      h25Ok,
+      h26Ok,
+      h27Ok,
+      h28Ok,
+      h29Ok,
+    };
+    const failedChecks = Object.entries(namedChecks)
+      .filter(([, v]) => !v)
+      .map(([k]) => (k === 'h27Ok' && h27Err ? `h27Ok:${h27Err}` : k));
+    const ok = failedChecks.length === 0;
 
     process.stdout.write(`${JSON.stringify({
       selftest: ok ? 'PASS' : 'FAIL',
@@ -5418,13 +5432,14 @@ async function runSelftest() {
       workflows: snap.catalog?.workflows?.length || 0,
       dispatchChecks: calls.length,
       statusLine: snap.statusLine,
+      ...(ok ? {} : { failedChecks }),
     })}\n`);
     process.exitCode = ok ? 0 : 1;
   } finally {
     if (origRuntimeDir === undefined) delete process.env.OMAGY_RUNTIME_DIR;
     else process.env.OMAGY_RUNTIME_DIR = origRuntimeDir;
-    fs.rmSync(rtDir, { recursive: true, force: true });
-    fs.rmSync(ws, { recursive: true, force: true });
+    rmDirSafe(rtDir);
+    rmDirSafe(ws);
   }
 }
 

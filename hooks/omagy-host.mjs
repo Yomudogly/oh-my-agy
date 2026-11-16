@@ -627,7 +627,7 @@ export function hasClaudeLaunchHud(workspace) {
   return arr.some((c) => c && c.name === 'oh-my-agy-hud');
 }
 
-function probeHudHealth(port, token, timeoutMs = 250) {
+function probeHudHealth(port, token, timeoutMs = 1500) {
   return new Promise((resolve) => {
     const req = http.get(
       { host: '127.0.0.1', port, path: '/api/status', headers: token ? { 'X-Sidecar-Token': token } : {}, timeout: timeoutMs },
@@ -704,9 +704,9 @@ export async function ensureDesktopHudDaemon({ host, workspace = process.cwd(), 
   cp.unref();
 
   let ready = null;
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < 75; i += 1) {
     const reg = readHudStartupResult(regFile);
-    if (reg && (await probeHudHealth(reg.port, reg.token, 120))) {
+    if (reg && (await probeHudHealth(reg.port, reg.token, 1500))) {
       ready = reg;
       break;
     }
@@ -714,6 +714,10 @@ export async function ensureDesktopHudDaemon({ host, workspace = process.cwd(), 
   }
   if (!ready) {
     try { if (cp.pid) process.kill(cp.pid, 'SIGTERM'); } catch { /* fail open: daemon already exited */ }
+    try {
+      const stale = readJsonSafe(regFile);
+      if (stale && cp.pid && Number(stale.pid) === Number(cp.pid)) fs.unlinkSync(regFile);
+    } catch { /* fail open: ignore missing or locked registry file */ }
     return {
       started: false,
       reused: false,

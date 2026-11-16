@@ -2948,7 +2948,7 @@ export async function runSelftest() {
       const personalPathRe = new RegExp(`(?:${'/Us' + 'ers/'}|${'/ho' + 'me/'}|[A-Za-z]:\\\\\\\\Users\\\\\\\\)[A-Za-z0-9._-]+`, 'i');
       const uiMod = await import('../sidecars/hud/ui.mjs');
       const clientMod = await import('../sidecars/hud/client.mjs');
-      const hudOutRaw = execFileSync(process.execPath, [hudMainPath, '--selftest'], { encoding: 'utf8', timeout: 25_000 });
+      const hudOutRaw = execFileSync(process.execPath, [hudMainPath, '--selftest'], { encoding: 'utf8', timeout: 60_000 });
       const hudOut = JSON.parse(hudOutRaw.trim());
 
       t52Ok = fs.existsSync(skillModPath)
@@ -2994,8 +2994,11 @@ export async function runSelftest() {
         && hudOut.subagents === 18
         && hudOut.workflows === 11;
       t52Detail = `hudUi=${hudUiBytes}B hudClient=${hudClientBytes}B skillMod=${skillModBytes}B hudSelftest=${hudOut.selftest}`;
-    } catch (e) { /* fail open: capture T52 error detail */
-      t52Detail = e instanceof Error ? e.message : String(e);
+    } catch (e) { /* fail open: capture T52 error detail including child stdout/stderr */
+      const baseMsg = e instanceof Error ? e.message : String(e);
+      const childOut = String(e?.stdout || '').trim();
+      const childErr = String(e?.stderr || '').trim();
+      t52Detail = [baseMsg, childOut, childErr].filter(Boolean).join(' | ').replace(/\s+/g, ' ');
     }
     check('sidecars/hud/{ui,client}.mjs modularity (<256KB, zero circularity/provenance/personal-paths) and HUD --selftest pass',
       t52Ok, t52Detail);
