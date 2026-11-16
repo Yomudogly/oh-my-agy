@@ -34,8 +34,10 @@ function readJsonSafe(filePath) {
 }
 
 function canonWsPath(ws) {
-  const abs = path.resolve(String(ws || process.cwd()));
-  try { return fs.realpathSync(abs); } catch { /* fail open: unresolved path */ return abs; }
+  const realpathFn = fs.realpathSync.native || fs.realpathSync;
+  const normDrive = (s) => (process.platform === 'win32' ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
+  const abs = normDrive(path.resolve(String(ws || process.cwd())));
+  try { return normDrive(realpathFn(abs)); } catch { /* fail open: unresolved path */ return abs; }
 }
 
 /** Extract explicit `--host=<name>` or `--host <name>` from CLI args. */

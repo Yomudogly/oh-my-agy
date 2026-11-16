@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { redactSecrets } from '../../hooks/omagy-hook.mjs';
+import { canonicalizePath, redactSecrets } from '../../hooks/omagy-hook.mjs';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const CLAUDE_MODEL_MAP = { flash_lite: 'haiku', flash: 'haiku', pro: 'opus' };
@@ -559,12 +559,7 @@ function normalizeWorkspaceKey(input) {
       fsPath = raw.replace(/^file:\/\//, '');
     }
   }
-  const resolved = path.resolve(fsPath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch { /* fail open: fallback to path.resolve for uncreated workspace directory */
-    return resolved;
-  }
+  return canonicalizePath(fsPath);
 }
 
 /**

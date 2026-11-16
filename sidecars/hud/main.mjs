@@ -640,7 +640,7 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
   if (!mime) return null;
 
   try {
-    const rootReal = fs.realpathSync(resolveStateRoot(workspaceRoot));
+    const rootReal = canonicalizePath(resolveStateRoot(workspaceRoot));
     const matchedScope = discoverOmagyScopes(rootReal, 3, 150).find((s) => s.scope === scopePrefix);
     if (!matchedScope) return null;
 
@@ -655,8 +655,8 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
     const st = fs.lstatSync(cur);
     if (st.isSymbolicLink() || !st.isFile()) return null;
 
-    const candidateReal = fs.realpathSync(cur);
-    const scopeOmagyReal = fs.realpathSync(matchedScope.omagyDir);
+    const candidateReal = canonicalizePath(cur);
+    const scopeOmagyReal = canonicalizePath(matchedScope.omagyDir);
     const allowedSubroots = [
       path.join(scopeOmagyReal, 'artifacts') + path.sep,
       path.join(scopeOmagyReal, 'plans') + path.sep,
@@ -1358,7 +1358,7 @@ export function resolveSafeSkillDoc(pluginRoot = PLUGIN_ROOT, skillKey = '', ref
     if (!fs.existsSync(skillsDir) || fs.lstatSync(skillsDir).isSymbolicLink() || !fs.statSync(skillsDir).isDirectory()) {
       return null;
     }
-    const skillsRootReal = fs.realpathSync(skillsDir);
+    const skillsRootReal = canonicalizePath(skillsDir);
 
     let skillDir = path.join(skillsDir, cleanSkill);
     const isValidSkillDir = (dirCandidate) => (
@@ -1400,7 +1400,7 @@ export function resolveSafeSkillDoc(pluginRoot = PLUGIN_ROOT, skillKey = '', ref
       return null;
     }
 
-    const candidateReal = fs.realpathSync(candidate);
+    const candidateReal = canonicalizePath(candidate);
     if (!candidateReal.startsWith(`${skillsRootReal}${path.sep}`)) return null;
 
     const skillDirName = path.basename(skillDir);
@@ -1790,12 +1790,8 @@ export function resolveWorkspaceRoots(rawWorkspaces = [], fallbackWorkspaceRoot 
   if (rawPref) {
     const prefFs = uriToFsPath(rawPref) || (path.isAbsolute(rawPref) ? rawPref : '');
     if (prefFs) {
-      let prefReal = path.resolve(prefFs);
-      try { prefReal = fs.realpathSync(prefReal); } catch { /* fail open: fallback to path.resolve */ }
-      const matched = roots.find((r) => {
-        if (r === prefFs || path.resolve(r) === prefReal) return true;
-        try { return fs.realpathSync(r) === prefReal; } catch { /* fail open: ignore non-realpathable root */ return false; }
-      });
+      const prefReal = canonicalizePath(prefFs);
+      const matched = roots.find((r) => r === prefFs || canonicalizePath(r) === prefReal);
       if (matched) primaryRoot = matched;
     }
   }
@@ -2843,10 +2839,8 @@ function verifySameUidLoopbackPeer(req, options = {}) {
 
 function isPathInsideBase(candidate, baseRoot) {
   if (!candidate || !baseRoot) return false;
-  let realCand = path.resolve(candidate);
-  let realBase = path.resolve(baseRoot);
-  try { realCand = fs.realpathSync(realCand); } catch { /* fail open: non-existent candidate */ }
-  try { realBase = fs.realpathSync(realBase); } catch { /* fail open: non-existent base */ }
+  const realCand = canonicalizePath(candidate);
+  const realBase = canonicalizePath(baseRoot);
   return realCand === realBase || realCand.startsWith(realBase + path.sep);
 }
 
@@ -5449,7 +5443,7 @@ function sameModulePath(a, b) {
   if (ra === rb) return true;
   if (process.platform === 'win32' && ra.toLowerCase() === rb.toLowerCase()) return true;
   try {
-    return fs.realpathSync(ra) === fs.realpathSync(rb);
+    return canonicalizePath(ra) === canonicalizePath(rb);
   } catch { /* fail open: non-existent argv[1] cannot match module path */
     return false;
   }
