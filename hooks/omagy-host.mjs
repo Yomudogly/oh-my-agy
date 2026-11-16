@@ -650,7 +650,7 @@ function readHudStartupResult(regFile) {
     const st = fs.lstatSync(regFile);
     if (!st.isFile()) return null;
     if (typeof process.getuid === 'function' && st.uid !== process.getuid()) return null;
-    if ((st.mode & 0o077) !== 0) return null;
+    if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) return null;
   } catch { /* fail open: missing or unreadable HUD registry file */
     return null;
   }
@@ -698,12 +698,13 @@ export async function ensureDesktopHudDaemon({ host, workspace = process.cwd(), 
   const cp = spawn(process.execPath, [serverScript, 'desktop-serve', '--workspace', ws, '--host', host, '--port', String(port), '--registry', regFile], {
     detached: true,
     stdio: 'ignore',
+    windowsHide: true,
     env: { ...env, OMAGY_RUNTIME_DIR: path.dirname(regFile) },
   });
   cp.unref();
 
   let ready = null;
-  for (let i = 0; i < 15; i += 1) {
+  for (let i = 0; i < 30; i += 1) {
     const reg = readHudStartupResult(regFile);
     if (reg && (await probeHudHealth(reg.port, reg.token, 120))) {
       ready = reg;

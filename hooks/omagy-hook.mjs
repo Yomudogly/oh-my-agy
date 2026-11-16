@@ -179,7 +179,9 @@ export function nonPlaceholderText(value) {
     && !/^(?:todo|tbd|placeholder|pending|not run)[.!]?$/i.test(value.trim());
 }
 export function canonicalizePath(p, depth = 0) {
-  const abs = path.resolve(String(p || ''));
+  const normDrive = (s) => (process.platform === 'win32' ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
+  const realpathFn = fs.realpathSync.native || fs.realpathSync;
+  const abs = normDrive(path.resolve(String(p || '')));
   if (depth > 8) return abs;
   let cur = abs;
   const tail = [];
@@ -190,7 +192,7 @@ export function canonicalizePath(p, depth = 0) {
         const linkTarget = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
         return canonicalizePath(path.join(linkTarget, ...tail), depth + 1);
       }
-      return path.join(fs.realpathSync(cur), ...tail);
+      return normDrive(path.join(realpathFn(cur), ...tail));
     } catch { /* ignore */ }
     const parent = path.dirname(cur);
     if (parent === cur) break;
@@ -503,17 +505,19 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
   if (!text || typeof text !== 'string' || !roots.length) return { messages: [], seen: seenList };
   const seen = new Set(Array.isArray(seenList) ? seenList : []);
   const messages = [];
-  const tokenRe = /(?:file:\/\/)?([A-Za-z0-9_./-]+\/[A-Za-z0-9_.-]+)/g;
+  const tokenRe = /(?:file:\/\/)?((?:\/?[A-Za-z]:[/\\])?[A-Za-z0-9_.~/-]+[/\\][A-Za-z0-9_.~\\/-]*)/g;
   const candidates = new Set();
   let m;
   while ((m = tokenRe.exec(text)) !== null) {
     if (candidates.size >= 24) break;
-    candidates.add(m[1]);
+    const cleaned = m[1].replace(/^\/([A-Za-z]:[/\\])/, '$1').replace(/\.+$/, '');
+    if (cleaned) candidates.add(cleaned);
   }
   for (const rawRoot of roots) {
     const root = canonicalizePath(rawRoot);
     for (const token of candidates) {
-      const resolved = path.isAbsolute(token) ? canonicalizePath(token) : path.resolve(root, token);
+      const sepNorm = process.platform === 'win32' ? token.replace(/\//g, '\\') : token.replace(/\\/g, '/');
+      const resolved = path.isAbsolute(sepNorm) ? canonicalizePath(sepNorm) : canonicalizePath(path.resolve(root, sepNorm));
       if (!resolved.startsWith(root + path.sep)) continue;
       let dir = resolved;
       try {
@@ -533,7 +537,7 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
           try { if (!hasSymlinkSegment(root, agentsFile)) raw = fs.readFileSync(agentsFile, 'utf8').trim(); } catch { /* fail open: unreadable subdir AGENTS.md */ raw = ''; }
           if (raw) {
             seen.add(agentsFile);
-            const rel = path.relative(root, agentsFile);
+            const rel = path.relative(root, agentsFile).replace(/\\/g, '/');
             const snippet = redactSecrets(raw.split('\n').slice(0, 30).join('\n')).slice(0, 1500);
             messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
           }
@@ -550,7 +554,7 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
           const idxLines = filterAndRedactWikiLines(idxRaw, 15, nowMs);
           if (agLines.length || idxLines.length) {
             seen.add(childWikiDir);
-            const relWiki = path.relative(root, childWikiDir);
+            const relWiki = path.relative(root, childWikiDir).replace(/\\/g, '/');
             const parts = [`[oh-my-agy] Child-project Wiki (${relWiki}):`, ...agLines, ...idxLines];
             messages.push(parts.join('\n').slice(0, 1500));
           }

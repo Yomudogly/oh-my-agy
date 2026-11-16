@@ -2,8 +2,15 @@
 # Locate a Node.js >= 18 binary and run the oh-my-agy hook. Antigravity's hook shell may not
 # inherit nvm/homebrew PATH entries, so probe common locations without external dirname/sort/cat.
 # Override with OMAGY_NODE=/absolute/path/to/node.
-case "$0" in
-  */*) DIR="${0%/*}" ;;
+_s0="$0"
+while :; do
+  case "$_s0" in
+    *\\*) _s0="${_s0%%\\*}/${_s0#*\\}" ;;
+    *) break ;;
+  esac
+done
+case "$_s0" in
+  */*) DIR="${_s0%/*}" ;;
   *) DIR="." ;;
 esac
 DIR=$(cd "${DIR:-.}" && pwd)

@@ -4833,7 +4833,7 @@ async function runSelftest() {
         && defaultHostSnap?.host === 'antigravity'
         && defaultHostSync?.modeUsed === 'new-chat'
         && defaultHostAsync?.modeUsed === 'new-chat'
-        && dDaemon1.started === true && regMode === 0o600
+        && dDaemon1.started === true && (process.platform === 'win32' || regMode === 0o600)
         && !dDaemon1.url.includes('token') && !dDaemon1.message.includes('token')
         && dDaemon2.reused === true && dDaemon2.port === dDaemon1.port
         && h25EnsureOut.ok === true && h25EnsureOut.reused === true && h25EnsureOut.port === dDaemon1.port && h25EnsureOut.url === dDaemon1.url && !h25EnsureOut.url.includes('token')

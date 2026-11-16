@@ -1,8 +1,15 @@
 #!/bin/sh
 # Locate a Node.js >= 18 binary and run the oh-my-agy HUD sidecar.
 # Antigravity's sidecar runner may not inherit nvm/homebrew PATH entries on macOS/Linux/Windows.
-case "$0" in
-  */*) DIR="${0%/*}" ;;
+_s0="$0"
+while :; do
+  case "$_s0" in
+    *\\*) _s0="${_s0%%\\*}/${_s0#*\\}" ;;
+    *) break ;;
+  esac
+done
+case "$_s0" in
+  */*) DIR="${_s0%/*}" ;;
   *) DIR="." ;;
 esac
 DIR=$(cd "${DIR:-.}" && pwd)

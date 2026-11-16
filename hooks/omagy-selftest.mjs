@@ -1311,11 +1311,13 @@ export async function runSelftest() {
       }));
       userSkillsCwdEvalOk = evalFromUserCwd.ok === true && evalFromUserCwd.skillCount === 23;
     } catch { /* fail open: flags stay false and fail T8 check */ }
+    const backslashSubdirOk = discoverSubdirAgents([ws], 'check packages\\core\\index.ts', []).messages.some((m) => m.includes('packages/core/AGENTS.md'));
     check('hooks/run.sh and sidecars/hud/run.sh use pure POSIX expansion without dirname or sort -V',
       !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
       && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
-      && minimalPathOk && runShFailModesOk && symlinkMainOk && userSkillsCwdEvalOk,
-      `minPath=${minimalPathOk} noNode=${runShFailModesOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk}`);
+      && hooksRunSh.includes('*\\\\*)') && hudRunSh.includes('*\\\\*)')
+      && minimalPathOk && runShFailModesOk && symlinkMainOk && userSkillsCwdEvalOk && backslashSubdirOk,
+      `minPath=${minimalPathOk} noNode=${runShFailModesOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk} bsSubdir=${backslashSubdirOk}`);
 
     // T9 (T-DR-1): buildResearchMatrix across technical, business, idea, and implementation lenses
     const rmTech = buildResearchMatrix('Vector Indexing', '--technical');
@@ -3263,9 +3265,11 @@ export async function runSelftest() {
         && !fs.lstatSync(path.join(symUpgradeBundle, 'rules', 'AGENTS.md')).isSymbolicLink()
         && !fs.existsSync(path.join(symUpgradeBundle, 'assets', 'sidecar-hud.gif'))
         && readFixture(path.join(pluginRoot, 'rules', 'AGENTS.md')) === repoAgentsBefore;
+      const t54ShBin = process.platform === 'win32' ? 'sh' : '/bin/sh';
+      const t54RunSh = path.join(pluginRoot, 'hooks', 'run.sh');
       const xVal = validateHostBundle({ host: 'codex', dir: codexBundle, workspace: codexProj, codexHome, scope: 'user', pluginRoot, strict: true });
-      const codexCliValOut = JSON.parse(execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
-        'host-validate', 'codex', codexBundle, '--codex-home', codexHome, '--strict', '--json',
+      const codexCliValOut = JSON.parse(execFileSync(t54ShBin, [
+        t54RunSh, 'host-validate', 'codex', codexBundle, '--codex-home', codexHome, '--strict', '--json',
       ], { encoding: 'utf8' }));
       const codexSystemSkillPreserved = fs.existsSync(path.join(codexHome, 'skills', '.system', 'keep.md'))
         && fs.existsSync(path.join(codexHome, 'skills', 'custom-user-skill', 'SKILL.md'))
@@ -3297,15 +3301,15 @@ export async function runSelftest() {
           PostToolUse: [{ hooks: [{ type: 'command', command: 'echo custom-post-hook' }] }],
         },
       }, null, 2), 'utf8');
-      const codexZeroSetupOut = JSON.parse(execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
-        'host-setup', 'codex', '--codex-home', codexDefaultHome, '--json',
+      const codexZeroSetupOut = JSON.parse(execFileSync(t54ShBin, [
+        t54RunSh, 'host-setup', 'codex', '--codex-home', codexDefaultHome, '--json',
       ], { encoding: 'utf8' }));
       // Re-run setup once to ensure idempotent native plugin install and foreign hook preservation
-      execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
-        'host-setup', 'codex', '--codex-home', codexDefaultHome, '--json',
+      execFileSync(t54ShBin, [
+        t54RunSh, 'host-setup', 'codex', '--codex-home', codexDefaultHome, '--json',
       ], { encoding: 'utf8' });
-      const codexZeroValOut = JSON.parse(execFileSync(path.join(pluginRoot, 'hooks', 'run.sh'), [
-        'host-validate', 'codex', '--codex-home', codexDefaultHome, '--strict', '--json',
+      const codexZeroValOut = JSON.parse(execFileSync(t54ShBin, [
+        t54RunSh, 'host-validate', 'codex', '--codex-home', codexDefaultHome, '--strict', '--json',
       ], { encoding: 'utf8' }));
       const codexDefaultHooksDoc = JSON.parse(readFixture(path.join(codexDefaultHome, 'hooks.json')));
       const codexDefaultHooksOk = codexZeroSetupOut.ok === true && codexZeroSetupOut.mode === 'copy' && codexZeroValOut.ok === true
@@ -3341,8 +3345,8 @@ export async function runSelftest() {
       // Negative validations: unsafe --dir, conflicting flags, unknown CLI flag, unwired hook event, symlink in copy mode, tampered pluginRoot
       const unsafeDirRes = setupHostBundle({ host: 'claude', dir: os.tmpdir(), workspace: claudeProj, pluginRoot });
       const unsafeSubDirRes = setupHostBundle({ host: 'claude', dir: path.join(pluginRoot, 'tmp-unsafe-bundle'), workspace: claudeProj, pluginRoot });
-      const badFlagCli = spawnSync(path.join(pluginRoot, 'hooks', 'run.sh'), ['host-validate', 'codex', codexBundle, '--bogus-flag'], { encoding: 'utf8', timeout: 5000 });
-      const conflictFlagCli = spawnSync(path.join(pluginRoot, 'hooks', 'run.sh'), ['host-setup', 'codex', '--copy', '--symlink'], { encoding: 'utf8', timeout: 5000 });
+      const badFlagCli = spawnSync(t54ShBin, [t54RunSh, 'host-validate', 'codex', codexBundle, '--bogus-flag'], { encoding: 'utf8', timeout: 5000 });
+      const conflictFlagCli = spawnSync(t54ShBin, [t54RunSh, 'host-setup', 'codex', '--copy', '--symlink'], { encoding: 'utf8', timeout: 5000 });
       const symProj = path.join(t54Root, 'sym-proj');
       fs.mkdirSync(path.join(symProj, '.claude'), { recursive: true });
       const outsideLaunchTarget = path.join(t54Root, 'outside-launch.json');
@@ -3388,14 +3392,14 @@ export async function runSelftest() {
       const rootTamperVal = validateHostBundle({ host: 'claude', dir: claudeBundle, workspace: claudeProj, pluginRoot, strict: true });
 
       const repoHooksAfter = readFixture(path.join(pluginRoot, 'hooks.json'));
-      t54Ok = cRes.ok === true && cRes.mode === 'symlink' && cCopyRes.ok === true && cCopyRes.mode === 'copy' && cVal.ok === true
+      t54Ok = cRes.ok === true && (process.platform === 'win32' ? ['symlink', 'copy'].includes(cRes.mode) : cRes.mode === 'symlink') && cCopyRes.ok === true && cCopyRes.mode === 'copy' && cVal.ok === true
         && !hooksDirStat.isSymbolicLink() && hooksDirStat.isDirectory()
         && (process.platform === 'win32' ? (hookMjsStat.isSymbolicLink() || hookMjsStat.isFile()) : hookMjsStat.isSymbolicLink())
         && !copyHookStat.isSymbolicLink() && copyHookStat.isFile()
         && launchDoc.configurations.some((c) => c.name === 'existing-app' && c.port === 3000)
-        && Boolean(hudCfg && hudCfg.runtimeExecutable === 'sh' && Array.isArray(hudCfg.runtimeArgs) && hudCfg.runtimeArgs.includes('desktop-serve') && hudCfg.runtimeArgs.includes('--registry') && hudCfg.port >= 48800 && hudCfg.port <= 49799)
+        && Boolean(hudCfg && hudCfg.runtimeExecutable === (process.platform === 'win32' ? 'node' : 'sh') && Array.isArray(hudCfg.runtimeArgs) && hudCfg.runtimeArgs.includes('desktop-serve') && hudCfg.runtimeArgs.includes('--registry') && hudCfg.port >= 48800 && hudCfg.port <= 49799)
         && claudeAgentsValid
-        && xRes.ok === true && xRes.mode === 'symlink' && xCopyRes.ok === true && xCopyRes.mode === 'copy' && xCopyVal.ok === true && xUpgradeOk && codexCopyMdCount === 18
+        && xRes.ok === true && (process.platform === 'win32' ? ['symlink', 'copy'].includes(xRes.mode) : xRes.mode === 'symlink') && xCopyRes.ok === true && xCopyRes.mode === 'copy' && xCopyVal.ok === true && xUpgradeOk && codexCopyMdCount === 18
         && xVal.ok === true && codexCliValOut.ok === true
         && xProjRes.ok === true && xProjVal.ok === true && fs.existsSync(path.join(codexProjectWs, '.codex', 'hooks.json')) && fs.readdirSync(path.join(codexProjectWs, '.codex', 'skills')).length === 23
         && codexSystemSkillPreserved && codexTargetSkills.length === 23 && codexDefaultHooksOk && codexProseClean
@@ -3407,7 +3411,7 @@ export async function runSelftest() {
         && !/^\s*multi_agent\s*=/m.test(codexCfg)
         && xDepFlagVal.ok === false && xDepFlagVal.errors.includes('config_deprecated_features_multi_agent')
         && codexCfg.includes('[marketplaces.oh-my-agy-local]') && codexCfg.includes('[plugins."oh-my-agy@oh-my-agy-local"]')
-        && codexHooksJson.includes(path.join(xRes.cachePluginDir, 'hooks', 'run.sh'))
+        && codexHooksJson.includes(JSON.stringify(process.platform === 'win32' ? path.win32.join(xRes.cachePluginDir, 'hooks', 'omagy-hook.mjs') : path.join(xRes.cachePluginDir, 'hooks', 'run.sh')).slice(1, -1))
         && codexAgentsMdSize > 0 && codexAgentsMdSize <= 32768
         && codexTomlCount === 18 && openaiYamlCount === 23
         && typeof bundleMeta.codexVersion === 'string' && bundleMeta.codexVersion.length > 0
