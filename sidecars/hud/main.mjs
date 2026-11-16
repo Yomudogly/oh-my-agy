@@ -27,7 +27,6 @@ import {
 } from '../../hooks/omagy-hook.mjs';
 import {
   evaluateSkillRouting,
-  manageShadowCheckpoint,
   queryWikiPages,
   runFloorGuard,
   scanSessionTranscripts,
@@ -676,7 +675,6 @@ export function resolveSafeArtifactFile(workspaceRoot, relPath) {
 
 const codeHealthCache = new Map();
 const worktreeCache = new Map();
-const checkpointCache = new Map();
 const designSystemCache = new Map();
 const forensicsCache = new Map();
 let skillEvalCache = { key: '', value: null };
@@ -952,41 +950,6 @@ export function getCachedCodeHealth(primaryRoot, nowMs = Date.now(), transcriptP
   };
 
   setBoundedCache(codeHealthCache, rootKey, { gitSig, computedAtMs: nowMs, value });
-  return value;
-}
-
-function getCachedCheckpoints(primaryRoot, nowMs = Date.now()) {
-  const rootKey = path.resolve(primaryRoot);
-  const gitSig = readGitMetadataSignature(rootKey);
-  if (gitSig === 'nogit') {
-    return { available: false, count: 0, items: [] };
-  }
-  const cached = checkpointCache.get(rootKey);
-  if (
-    cached
-    && cached.gitSig === gitSig
-    && nowMs >= cached.computedAtMs
-    && (nowMs - cached.computedAtMs) < CODE_HEALTH_TTL_MS
-  ) {
-    return cached.value;
-  }
-  let value = { available: false, count: 0, items: [] };
-  try {
-    const res = manageShadowCheckpoint('list', rootKey);
-    const items = Array.isArray(res?.checkpoints) ? res.checkpoints : [];
-    value = {
-      available: Boolean(res?.ok),
-      count: items.length,
-      items: items.slice(0, 12).map((cp) => ({
-        id: String(cp.id || ''),
-        commitSha: String(cp.commitSha || ''),
-        headSha: String(cp.headSha || ''),
-        createdAt: String(cp.createdAt || ''),
-        label: redactSecrets(String(cp.label || 'snapshot')),
-      })),
-    };
-  } catch { /* fail open: shadow checkpoint listing unavailable */ }
-  setBoundedCache(checkpointCache, rootKey, { gitSig, computedAtMs: nowMs, value });
   return value;
 }
 
@@ -2737,8 +2700,7 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   // 9.5 Code Health & Technical Debt (5s + git/transcript-mtime cached symbol reuse, openCallers, shortcut: debt, floorGuard, and verificationFreshness)
   const codeHealth = getCachedCodeHealth(primaryRoot, nowMs, latestRouting?.transcriptPath || '');
 
-  // 9.6 Shadow Checkpoints, Design System Governance, Session Forensics, & Notification Channel Booleans
-  const checkpoints = getCachedCheckpoints(primaryRoot, nowMs);
+  // 9.6 Design System Governance, Session Forensics, & Notification Channel Booleans
   const designSystem = getCachedDesignSystem(primaryRoot);
   const forensics = getCachedForensics(primaryRoot, latestRouting?.transcriptPath || '');
   const notifications = readNotificationBooleans(primaryRoot);
@@ -2779,7 +2741,6 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
     visualRalph,
     loft,
     codeHealth,
-    checkpoints,
     designSystem,
     forensics,
     notifications,
@@ -4275,7 +4236,7 @@ async function runSelftest() {
       && !/<img\b/i.test(renderedMd)
       && !/<script\b/i.test(renderedMd)
       && renderedMd.includes('<table class="hud-table md-table">')
-      && HUD_HTML.includes('customization://oh-my-agy')
+      && !HUD_HTML.includes('Plugin Settings')
       && !HUD_HTML.includes('plugin://')
       && HUD_HTML.includes('@media (prefers-color-scheme: light)')
       && HUD_HTML.includes('var(--background,')
@@ -4574,7 +4535,7 @@ async function runSelftest() {
         && wbSnap1.notifications?.webhook === true
         && wbSnap1.notifications?.webhookUrl === undefined
         && !JSON.stringify(wbSnap1.notifications).includes('xoxb-')
-        && Boolean(wbSnap1.checkpoints && typeof wbSnap1.checkpoints.count === 'number')
+        && wbSnap1.checkpoints === undefined
         && wbSnap1.wikiLog?.length === 1
         && wbSnap1.wikiLog[0].slug === 'arch';
     } finally {
@@ -4883,7 +4844,8 @@ async function runSelftest() {
         && h25Iframe.status === 403 && !h25Iframe.body.includes(h25DesktopSrv.token)
         && h25Good.status === 200 && !h25Good.body.includes('<meta name="omagy-hud-token"') && !h25Good.body.includes(h25DesktopSrv.token)
         && rawSetCookie.includes('HttpOnly') && rawSetCookie.includes('SameSite=Strict')
-        && h25Good.body.includes('customization://oh-my-agy')
+        && !h25Good.body.includes('Plugin Settings')
+        && !h25Good.body.includes('Shadow Checkpoints')
         && h25Good.body.includes('<html lang="en" data-host="codex">')
         && h25Good.body.includes('--hud-bg: var(--background, #212121)')
         && h25CookieGet.status === 200
@@ -5403,6 +5365,9 @@ async function runSelftest() {
       && ideaHttpRes.headers['X-Content-Type-Options'] === 'nosniff'
       && ideaHttpRes.headers['Content-Security-Policy'] === "sandbox; default-src 'none'; style-src 'unsafe-inline'"
       && HUD_HTML.includes('event.source !== window.parent')
+      && !HUD_HTML.includes('Shadow Checkpoints')
+      && HUD_HTML.includes('data-hud-key="ov-failure-clusters"')
+      && HUD_HTML.includes('<span class="summary-label">Top Failure Clusters</span>')
       && statusHttpRes.status === 200
       && beforeStatusDigest === afterStatusDigest
       && snap.research?.length === 1

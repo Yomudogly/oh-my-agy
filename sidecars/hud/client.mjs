@@ -2528,7 +2528,6 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           \${cancelControlHtml}
           <button type="button" class="action-btn" onclick="runQuickCommand(this, '/hud --handoff', 'active-chat')">Create Handoff</button>
           <button type="button" class="action-btn" onclick="runQuickCommand(this, '/doctor', 'active-chat')">Run /doctor</button>
-          \${(!data.host || data.host === 'antigravity') ? '<a class="action-btn" href="customization://oh-my-agy" title="Open oh-my-agy settings">Plugin Settings</a>' : ''}
         </div>\`;
 
       const qgRows = (data.qualityGates || []).map((g) => \`<li><code>\${esc(g.stage)}</code> &rarr; <code>\${esc(g.skill)}</code> (\${esc(g.mode)}, \${esc(g.model)})</li>\`).join('');
@@ -2995,28 +2994,6 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           \${debtItemsHtml}
         </div>\`;
 
-      const cpData = data.checkpoints || {};
-      const cpItems = Array.isArray(cpData.items) ? cpData.items : [];
-      const cpOpen = Boolean(persistedDetailsState['ov-checkpoints']);
-      const checkpointsHtml = \`
-        <details class="hud-details card-details" data-hud-key="ov-checkpoints" \${cpOpen ? 'open' : ''}>
-          <summary class="tabular">
-            <span class="summary-label">Shadow Checkpoints</span>
-            <span class="badge tabular">\${Number(cpData.count || 0)}</span>
-          </summary>
-          <div class="mt-sm">
-            \${cpItems.length ? cpItems.map((cp) => \`
-              <div class="health-item fs-12">
-                <div class="row-wrap-sm">
-                  <code>\${esc(String(cp.id || cp.commitSha || '').slice(0, 12))}</code>
-                  \${cp.commitSha ? \`<span class="badge tabular">\${esc(String(cp.commitSha).slice(0, 7))}</span>\` : ''}
-                  \${cp.createdAt ? \`<span class="muted tabular">\${esc(formatShortTime(cp.createdAt))}</span>\` : ''}
-                </div>
-                <div class="muted mt-xxs">\${esc(cp.label || 'snapshot')}</div>
-              </div>\`).join('') : '<div class="muted fs-12">No shadow checkpoints recorded in workspace.</div>'}
-          </div>
-        </details>\`;
-
       const ds = data.designSystem;
       let designSystemHtml = '';
       if (ds && ds.exists) {
@@ -3058,6 +3035,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         ['command', 'Command'],
       ];
       const fxClusters = Array.isArray(fx.topFailureClusters) ? fx.topFailureClusters : [];
+      const fxClustersOpen = Boolean(persistedDetailsState['ov-failure-clusters']);
       const forensicsNotifHtml = \`
         <div class="card">
           <div class="row-between-top mb-sm">
@@ -3090,12 +3068,19 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
             </div>
           </div>
           \${fxClusters.length ? \`
-            <div class="health-section-title">Top Failure Clusters</div>
-            \${fxClusters.map((c) => \`
-              <div class="health-item fs-12">
-                <div class="row-wrap-sm"><code>\${esc(c.tool)}</code><span class="badge tabular">\${Number(c.count || 0)}x</span></div>
-                <div class="muted mt-xxs">\${esc(c.signature)}</div>
-              </div>\`).join('')}\` : ''}
+            <details class="hud-details" data-hud-key="ov-failure-clusters" \${fxClustersOpen ? 'open' : ''}>
+              <summary class="tabular">
+                <span class="summary-label">Top Failure Clusters</span>
+                <span class="badge tabular">\${fxClusters.length}</span>
+              </summary>
+              <div class="mt-xs">
+                \${fxClusters.map((c) => \`
+                  <div class="health-item fs-12">
+                    <div class="row-wrap-sm"><code>\${esc(c.tool)}</code><span class="badge tabular">\${Number(c.count || 0)}x</span></div>
+                    <div class="muted mt-xxs">\${esc(c.signature)}</div>
+                  </div>\`).join('')}
+              </div>
+            </details>\` : ''}
           <div class="row-wrap-sm mt-sm">
             <span class="muted fs-12">Notifications:</span>
             \${notifChannels.map(([key, label]) => \`<span class="badge \${notif[key] ? 'badge-live' : ''}">\${label}: \${notif[key] ? 'ON' : 'OFF'}</span>\`).join('')}
@@ -3186,7 +3171,6 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         \${benchHtml}
         \${vrLoftHtml}
         \${codeHealthHtml}
-        \${checkpointsHtml}
         \${designSystemHtml}
         \${forensicsNotifHtml}
         \${doctorHtml}

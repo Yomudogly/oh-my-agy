@@ -2967,7 +2967,9 @@ export async function runSelftest() {
         && !/\bfrom\s+['"]\.\/(?:main|ui)\.mjs['"]/.test(hudClientTxt)
         && !/allow-same-origin/i.test(uiMod.HUD_HTML)
         && !uiMod.HUD_HTML.includes('plugin://')
-        && uiMod.HUD_HTML.includes('customization://oh-my-agy')
+        && !uiMod.HUD_HTML.includes('Plugin Settings')
+        && !uiMod.HUD_HTML.includes('Shadow Checkpoints')
+        && uiMod.HUD_HTML.includes('data-hud-key="ov-failure-clusters"')
         && uiMod.HUD_HTML.includes('!event.source || (event.source !== window.parent')
         && typeof uiMod.renderHudHtml === 'function'
         && typeof clientMod.renderHudClientScript === 'function'
