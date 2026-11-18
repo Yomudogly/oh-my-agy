@@ -540,7 +540,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           }
           finishDispatchFeedback(copied ? 'ok' : 'err', copied ? 'Copied Prompt' : 'Copy Failed', 1800);
         } else if (data.fallback) {
-          finishDispatchFeedback('ok', 'New Chat', 1600);
+          finishDispatchFeedback('ok', 'Sent', 1600);
         } else if (data.modeUsed === 'active-chat' || data.modeUsed === 'subagent-active') {
           finishDispatchFeedback('ok', 'Sent', 1500);
         } else {
@@ -3214,8 +3214,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         const val = getPromptValue(inputKey, formatDefaultSkillPrompt(wf.quickStart, data.host));
         const wfActionsHtml = isCodex
           ? \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy workflow prompt for Codex">Copy</button>\`
-          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
-                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this command">New Chat</button>
+          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or copy prompt to clipboard if none is active)">Run in Chat</button>
                 <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>\`;
         return \`
           <div class="card wf-card">
@@ -3281,8 +3280,7 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         const skillActionsHtml = isCodex
           ? \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy skill prompt for Codex">Copy</button>
                 <button type="button" class="action-btn" data-skill="\${esc(s.dir || s.name)}" data-skill-name="\${esc(s.name)}" onclick="openSkillMarkdownDrawer(this.dataset.skill, '', this.dataset.skillName)" title="Preview \${esc(s.file || ('skills/' + s.name + '/SKILL.md'))}">Preview</button>\`
-          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or start a new chat if none is active)">Run in Chat</button>
-                <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'new-chat')" title="Start a new chat conversation with this skill command">New Chat</button>
+          : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" onclick="runFromInput(this, this.dataset.inputId, 'active-chat')" title="Send into the active chat conversation (or copy prompt to clipboard if none is active)">Run in Chat</button>
                 <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" onclick="copyFromInput(this, this.dataset.inputId)" title="Copy command to clipboard">Copy</button>
                 <button type="button" class="action-btn" data-skill="\${esc(s.dir || s.name)}" data-skill-name="\${esc(s.name)}" onclick="openSkillMarkdownDrawer(this.dataset.skill, '', this.dataset.skillName)" title="Preview \${esc(s.file || ('skills/' + s.name + '/SKILL.md'))}">Preview</button>\`;
         return \`
@@ -3369,7 +3367,6 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
         const subagentActionsHtml = isCodex
           ? \`<button type="button" class="action-btn action-btn-primary" data-agent="\${esc(a.name)}" onclick="copySubagentSnippet(this, this.dataset.agent)" title="Copy Codex subagent invocation prompt">Copy</button>\`
           : \`<button type="button" class="action-btn action-btn-primary" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(activeTier)}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-active')" title="Send into the active chat so the leader agent calls invoke_subagent">Dispatch into Active Chat</button>
-              <button type="button" class="action-btn" data-input-id="\${esc(inputId)}" data-agent="\${esc(a.name)}" data-model="\${esc(activeTier)}" onclick="invokeSubagentFromInput(this, this.dataset.inputId, this.dataset.agent, this.dataset.model, 'subagent-standalone')" title="Open a standalone specialist chat with --profile=\${esc(a.name)}">Launch Standalone Chat</button>
               <button type="button" class="action-btn" data-agent="\${esc(a.name)}" onclick="copySubagentSnippet(this, this.dataset.agent)" title="Copy invoke_subagent call snippet">Copy Snippet</button>\`;
         return \`
         <div class="card">

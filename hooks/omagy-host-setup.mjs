@@ -1601,7 +1601,7 @@ export function validateHostBundle(options = {}) {
         }
         const pluginStub = {
           name: bundlePluginManifest?.name || meta?.pluginName || 'oh-my-agy',
-          version: bundlePluginManifest?.version || meta?.version || '0.8.0',
+          version: bundlePluginManifest?.version || meta?.version || '0.8.1',
         };
         const loc = getCodexPluginLocations(codexTarget, pluginStub);
         const mktJsonPath = path.join(loc.mktAgentsDir, 'marketplace.json');

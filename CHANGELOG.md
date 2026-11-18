@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.1 — 2026-11-17
+### HUD Launcher Cleanup & Clipboard Fallback (`sidecars/hud/{client,main}.mjs`)
+- **Removed Sidecar-Project Launcher Buttons**: Removed the `New Chat` button from HUD `Workflows` and `Skills` cards and the `Launch Standalone Chat` button from `Subagents` cards (`sidecars/hud/client.mjs`), keeping `Run in Chat` + `Copy` (plus `Preview` on `Skills`) and `Dispatch into Active Chat` + `Copy Snippet` so prompts stay inside the currently opened project.
+- **Eliminated `agentapi new-conversation` Fallback on Antigravity**: Updated `dispatchHudAction` (`sidecars/hud/main.mjs`) to reject `new-chat` and `subagent-standalone` on Antigravity (`400`) and fall back to `clipboard-handoff` (`copyToSystemClipboard`) when no active project conversation is reachable, with updated HUD selftests (`H3`–`H8`, `H25`, `H27`) and synced docs (`README.md`, `HOW_TO_USE.md`, `skills/hud/SKILL.md`).
+
 ## 0.8.0 — 2026-11-15
 ### Security, Runtime Hardening & Audit Expansion (`39` CLI Subcommands, `96/96` Selftest, HUD `H1`–`H29`)
 - **Fail-Closed Runtime Isolation & `tmpdir-audit` CLI (`39` total subcommands)**: Switched `defaultRuntimeDir()` (`hooks/omagy-host.mjs`) to `0o700` UID-scoped `$TMPDIR/oh-my-agy-<uid>/` (via `ensureSecureRuntimeDir()` with sticky-bit/symlink/mode checks) while keeping read-only same-UID HUD fallback in `readLatestRouting`; added `tmpdir-audit [dir] [--json]` in `hooks/omagy-audit.mjs` + `hooks/omagy-skill.mjs`, `skill-validate --scope project|shared|user|all`, `--help`/`-h`/`--` CLI flag handling, `--source-spec` hashing in `plan-hash`, `#anchor` verification in `docs-drift`, bounded 512 KiB JSONL rotation (`appendJsonlRecord`) + bounded tail reads (`readJsonlRecords`), and accurate `summarizeTranscriptMetrics` cache/error counts.

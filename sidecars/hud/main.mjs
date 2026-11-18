@@ -56,6 +56,7 @@ import {
   selectCurrentMode,
 } from './ui.mjs';
 import {
+  copyToSystemClipboard,
   dispatchDesktopHostAction,
   inferRoutingRecordHost,
   isRoutingHostCompatible,
@@ -1596,6 +1597,26 @@ export function dispatchHudAction(payload = {}, options = {}) {
   const reqCheck = validateDispatchRequest(payload, options);
   if (!reqCheck.ok) return reqCheck;
   const { mode, rawPrompt, workspaceRoot, agentName, cliModel } = reqCheck;
+  if (mode === 'new-chat' || mode === 'subagent-standalone') {
+    return { ok: false, status: 400, error: `Unsupported Antigravity dispatch mode: ${mode}` };
+  }
+
+  const handoffToClipboard = (promptText, extra = {}) => {
+    const clip = copyToSystemClipboard(promptText, options);
+    return {
+      ok: true,
+      status: 200,
+      modeUsed: 'clipboard-handoff',
+      requestedMode: mode,
+      fallback: true,
+      clipboardPrompt: promptText,
+      clipboardText: promptText,
+      copiedToClipboard: Boolean(clip.copied),
+      clipboardCopied: Boolean(clip.copied),
+      clipboardMethod: clip.method,
+      ...extra,
+    };
+  };
 
   const { bin, prefixArgs } = resolveAgentApiBinary();
   const runner = typeof options.runner === 'function'
@@ -1609,12 +1630,6 @@ export function dispatchHudAction(payload = {}, options = {}) {
   };
 
   try {
-    if (mode === 'new-chat') {
-      const title = makeDispatchTitle('HUD', rawPrompt);
-      const res = invokeAgentApi(['new-conversation', `--title=${title}`, '--', rawPrompt]);
-      return { ok: true, status: 200, modeUsed: 'new-chat', fallback: false, ...res };
-    }
-
     const explicitConvId = String(payload?.conversationId || '').trim();
     const resolveTargetConv = () => {
       const targetWs = uriToFsPath(workspaceRoot) || String(workspaceRoot || '').trim();
@@ -1637,66 +1652,36 @@ export function dispatchHudAction(payload = {}, options = {}) {
         try {
           const res = invokeAgentApi(['send-message', `--title=${title}`, '--', convId, rawPrompt]);
           return { ok: true, status: 200, modeUsed: 'active-chat', conversationId: convId, fallback: false, ...res };
-        } catch { /* fail open: fall through to new-conversation when active conversation is closed */
-          // Fall through to new-conversation if send-message fails on a closed/stale conversation.
+        } catch { /* fail open: fall through to clipboard handoff when active conversation is closed */
+          // Fall through to clipboard handoff if send-message fails on a closed/stale conversation.
         }
       }
-      const res = invokeAgentApi(['new-conversation', `--title=${title}`, '--', rawPrompt]);
-      return { ok: true, status: 200, modeUsed: 'new-chat', fallback: true, ...res };
+      return handoffToClipboard(rawPrompt);
     }
 
-    if (mode === 'subagent-active') {
-      const modelLabel = cliModel || 'inherit';
-      const delegationPrompt = `Use invoke_subagent with TypeName="${agentName}" and Model="${modelLabel}" to complete this task: ${rawPrompt}`;
-      const title = makeDispatchTitle(agentName, rawPrompt);
-      const convId = resolveTargetConv();
-      if (convId) {
-        try {
-          const res = invokeAgentApi(['send-message', `--title=${title}`, '--', convId, delegationPrompt]);
-          return {
-            ok: true,
-            status: 200,
-            modeUsed: 'subagent-active',
-            conversationId: convId,
-            agent: agentName,
-            model: modelLabel,
-            fallback: false,
-            ...res,
-          };
-        } catch { /* fail open: fall through to standalone specialist chat when active conversation is unreachable */
-          // Fall through to standalone specialist conversation if active conversation is unreachable.
-        }
-      }
-      const stArgs = ['new-conversation', `--profile=${agentName}`];
-      if (cliModel) stArgs.push(`--model=${cliModel}`);
-      stArgs.push(`--title=${title}`, '--', rawPrompt);
-      const res = invokeAgentApi(stArgs);
-      return {
-        ok: true,
-        status: 200,
-        modeUsed: 'subagent-standalone',
-        agent: agentName,
-        model: modelLabel,
-        fallback: true,
-        ...res,
-      };
-    }
-
-    // mode === 'subagent-standalone'
+    // mode === 'subagent-active'
+    const modelLabel = cliModel || 'inherit';
+    const delegationPrompt = `Use invoke_subagent with TypeName="${agentName}" and Model="${modelLabel}" to complete this task: ${rawPrompt}`;
     const title = makeDispatchTitle(agentName, rawPrompt);
-    const stArgs = ['new-conversation', `--profile=${agentName}`];
-    if (cliModel) stArgs.push(`--model=${cliModel}`);
-    stArgs.push(`--title=${title}`, '--', rawPrompt);
-    const res = invokeAgentApi(stArgs);
-    return {
-      ok: true,
-      status: 200,
-      modeUsed: 'subagent-standalone',
-      agent: agentName,
-      model: cliModel || 'inherit',
-      fallback: false,
-      ...res,
-    };
+    const convId = resolveTargetConv();
+    if (convId) {
+      try {
+        const res = invokeAgentApi(['send-message', `--title=${title}`, '--', convId, delegationPrompt]);
+        return {
+          ok: true,
+          status: 200,
+          modeUsed: 'subagent-active',
+          conversationId: convId,
+          agent: agentName,
+          model: modelLabel,
+          fallback: false,
+          ...res,
+        };
+      } catch { /* fail open: fall through to clipboard handoff when active conversation is unreachable */
+        // Fall through to clipboard handoff if active conversation is unreachable.
+      }
+    }
+    return handoffToClipboard(delegationPrompt, { agent: agentName, model: modelLabel });
   } catch (err) { /* fail open: return 500 JSON when agentapi execution throws */
     return {
       ok: false,
@@ -3559,7 +3544,11 @@ async function runSelftest() {
     process.env.OMAGY_RUNTIME_DIR = path.join(emptyWs, 'no-runtime');
     const dFallback = dispatchHudAction(
       { mode: 'active-chat', prompt: '/deep-research --technical "vector index"' },
-      { workspaceRoot: emptyWs, runner: mockRunner }
+      { workspaceRoot: emptyWs, runner: mockRunner, clipboardRunner: () => {} }
+    );
+    const dSubFallback = dispatchHudAction(
+      { mode: 'subagent-active', agent: 'architect', prompt: 'Review boundaries' },
+      { workspaceRoot: emptyWs, runner: mockRunner, clipboardRunner: () => {} }
     );
     if (prevRuntimeDir === undefined) delete process.env.OMAGY_RUNTIME_DIR;
     else process.env.OMAGY_RUNTIME_DIR = prevRuntimeDir;
@@ -3573,8 +3562,12 @@ async function runSelftest() {
       { mode: 'subagent-standalone', agent: 'architect', prompt: 'Review boundaries' },
       { workspaceRoot: ws, runner: mockRunner }
     );
+    const dNewChatRejected = dispatchHudAction(
+      { mode: 'new-chat', prompt: '/hud' },
+      { workspaceRoot: ws, runner: mockRunner }
+    );
     const dBadAgent = dispatchHudAction(
-      { mode: 'subagent-standalone', agent: 'evil;rm', prompt: 'test' },
+      { mode: 'subagent-active', agent: 'evil;rm', prompt: 'test' },
       { workspaceRoot: ws, runner: mockRunner }
     );
     const dBadMode = dispatchHudAction(
@@ -3618,13 +3611,13 @@ async function runSelftest() {
       if (reqListeners.end) reqListeners.end();
     });
 
-    const unauthRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' });
-    const emptyTokDispatchRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' }, emptyTokenSrv);
+    const unauthRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'active-chat', prompt: '/hud', conversationId: 'conv-explicit-9999' });
+    const emptyTokDispatchRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'active-chat', prompt: '/hud', conversationId: 'conv-explicit-9999' }, emptyTokenSrv);
     const defaultTokStatusRes = await invokeHttp('GET', `/api/status?workspaces=${encodeURIComponent(JSON.stringify([wsFileUrl]))}`, {}, undefined, defaultTokenSrv);
     const defaultTokArtifactRes = await invokeHttp('GET', `/api/artifact?workspace=${encodeURIComponent(wsFileUrl)}&rel=${encodeURIComponent('.omagy/artifacts/ideas/demo-idea.md')}`, {}, undefined, defaultTokenSrv);
-    const defaultTokDispatchRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'new-chat', prompt: '/hud' }, defaultTokenSrv);
-    const badCtRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'text/plain', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
-    const authRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json', 'x-sidecar-token': 'test-secret-token' }, { mode: 'new-chat', prompt: '/hud' });
+    const defaultTokDispatchRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json' }, { mode: 'active-chat', prompt: '/hud', conversationId: 'conv-explicit-9999' }, defaultTokenSrv);
+    const badCtRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'text/plain', 'x-sidecar-token': 'test-secret-token' }, { mode: 'active-chat', prompt: '/hud', conversationId: 'conv-explicit-9999' });
+    const authRes = await invokeHttp('POST', '/api/dispatch', { 'content-type': 'application/json', 'x-sidecar-token': 'test-secret-token' }, { mode: 'active-chat', prompt: '/hud', conversationId: 'conv-explicit-9999' });
     const authJson = authRes.json;
 
     const unauthArtifactRes = await invokeHttp(
@@ -4639,8 +4632,8 @@ async function runSelftest() {
         process.env.CLAUDE_PROJECT_DIR = h25Ws;
         process.env.CODEX_DESKTOP = '1';
         defaultHostSnap = buildHudSnapshot([h25Ws]);
-        defaultHostSync = dispatchHudAction({ mode: 'new-chat', prompt: 'hello default' }, { runner: () => 'ok' });
-        defaultHostAsync = await dispatchHudActionAsync({ mode: 'new-chat', prompt: 'hello default async' }, { runner: () => 'ok' });
+        defaultHostSync = dispatchHudAction({ mode: 'active-chat', prompt: 'hello default', conversationId: 'conv-default-9999' }, { runner: () => 'ok' });
+        defaultHostAsync = await dispatchHudActionAsync({ mode: 'active-chat', prompt: 'hello default async', conversationId: 'conv-default-9999' }, { runner: () => 'ok' });
       } finally {
         if (prevClaudeEnv === undefined) delete process.env.CLAUDE_PROJECT_DIR;
         else process.env.CLAUDE_PROJECT_DIR = prevClaudeEnv;
@@ -4827,8 +4820,8 @@ async function runSelftest() {
         && lPort >= 48800 && lPort <= 49799
         && regFile.startsWith(path.resolve(rtDir))
         && defaultHostSnap?.host === 'antigravity'
-        && defaultHostSync?.modeUsed === 'new-chat'
-        && defaultHostAsync?.modeUsed === 'new-chat'
+        && defaultHostSync?.modeUsed === 'active-chat'
+        && defaultHostAsync?.modeUsed === 'active-chat'
         && dDaemon1.started === true && (process.platform === 'win32' || regMode === 0o600)
         && !dDaemon1.url.includes('token') && !dDaemon1.message.includes('token')
         && dDaemon2.reused === true && dDaemon2.port === dDaemon1.port
@@ -5096,7 +5089,7 @@ async function runSelftest() {
       };
       const h27DispatchFallback = dispatchHudAction(
         { mode: 'active-chat', prompt: '/doctor', conversationId: 'conv-codex-stale', workspace: h27WsTarget },
-        { runner: h27FailRunner },
+        { runner: h27FailRunner, clipboardRunner: () => {} },
       );
 
       const metaCallsNoDash = h27Calls
@@ -5125,9 +5118,10 @@ async function runSelftest() {
         && h27DispatchGood?.conversationId === 'conv-root-good'
         && h27DispatchGood?.fallback === false
         && h27DispatchFallback?.ok === true
-        && h27DispatchFallback?.modeUsed === 'new-chat'
+        && h27DispatchFallback?.modeUsed === 'clipboard-handoff'
+        && h27DispatchFallback?.copiedToClipboard === true
         && h27DispatchFallback?.fallback === true
-        && h27FallbackCalls.every((a) => a[0] !== 'send-message')
+        && h27FallbackCalls.every((a) => a[0] !== 'send-message' && a[0] !== 'new-conversation')
         && clientWiringOk;
     } catch (err) { /* fail open: capture H27 exception as false */
       h27Err = String(err?.message || err);
@@ -5343,9 +5337,9 @@ async function runSelftest() {
       && snap.catalog?.workflows?.length >= 6
       && Boolean(autopilotWf && autopilotWf.active === true && autopilotWf.currentPhase === 'ultragoal')
       && Boolean(dActive.ok && dActive.modeUsed === 'active-chat' && !dActive.fallback && dActive.args.includes('send-message') && dActive.args.includes('--'))
-      && Boolean(dFallback.ok && dFallback.modeUsed === 'new-chat' && dFallback.fallback === true && dFallback.args.includes('new-conversation'))
+      && Boolean(dFallback.ok && dFallback.modeUsed === 'clipboard-handoff' && dFallback.fallback === true && dFallback.copiedToClipboard === true && dFallback.clipboardPrompt.includes('/deep-research'))
       && Boolean(dSubActive.ok && dSubActive.modeUsed === 'subagent-active' && dSubActive.args.some((x) => x.includes('invoke_subagent')))
-      && Boolean(dSubStandalone.ok && dSubStandalone.modeUsed === 'subagent-standalone' && dSubStandalone.args.includes('--profile=architect') && dSubStandalone.args.includes('--model=pro'))
+      && Boolean(dSubFallback.ok && dSubFallback.modeUsed === 'clipboard-handoff' && dSubFallback.fallback === true && dSubFallback.agent === 'architect' && dSubFallback.model === 'pro' && dSubFallback.clipboardPrompt.includes('invoke_subagent') && !dSubStandalone.ok && dSubStandalone.status === 400 && !dNewChatRejected.ok && dNewChatRejected.status === 400)
       && Boolean(!dBadAgent.ok && dBadAgent.status === 400)
       && Boolean(!dBadMode.ok && dBadMode.status === 400)
       && unauthRes.status === 401
@@ -5365,6 +5359,10 @@ async function runSelftest() {
       && ideaHttpRes.headers['Content-Security-Policy'] === "sandbox; default-src 'none'; style-src 'unsafe-inline'"
       && HUD_HTML.includes('event.source !== window.parent')
       && !HUD_HTML.includes('Shadow Checkpoints')
+      && !HUD_HTML.includes('>New Chat<')
+      && !HUD_HTML.includes('Launch Standalone Chat')
+      && !HUD_HTML.includes("runFromInput(this, this.dataset.inputId, 'new-chat')")
+      && !HUD_HTML.includes("'subagent-standalone'")
       && HUD_HTML.includes('data-hud-key="ov-failure-clusters"')
       && HUD_HTML.includes('<span class="summary-label">Top Failure Clusters</span>')
       && statusHttpRes.status === 200
