@@ -3393,9 +3393,26 @@ export async function runSelftest() {
             && fs.existsSync(path.join(codexCacheSkillsDir, d, 'agents', 'openai.yaml')))
         : [];
       const codexProjectWs = path.join(t54Root, 'codex-proj-scope');
-      fs.mkdirSync(codexProjectWs, { recursive: true });
+      fs.mkdirSync(path.join(codexProjectWs, '.codex'), { recursive: true });
+      fs.writeFileSync(path.join(codexProjectWs, '.codex', 'config.toml'), '[mcp_servers.custom_proj]\ncommand = "node"\nargs = ["custom.js"]\n', 'utf8');
       const xProjRes = setupHostBundle({ host: 'codex', workspace: codexProjectWs, scope: 'project', pluginRoot });
       const xProjVal = validateHostBundle({ host: 'codex', workspace: codexProjectWs, scope: 'project', pluginRoot, strict: true });
+      const xProjCfg = readFixture(path.join(codexProjectWs, '.codex', 'config.toml'));
+      const xCacheMcpDoc = JSON.parse(readFixture(path.join(xRes.cachePluginDir, '.mcp.json')));
+      const xCachePluginDoc = JSON.parse(readFixture(path.join(xRes.cachePluginDir, '.codex-plugin', 'plugin.json')));
+      const expectedCacheMcpEntry = process.platform === 'win32'
+        ? path.win32.join(xRes.cachePluginDir, 'mcp', 'server.mjs')
+        : path.join(xRes.cachePluginDir, 'mcp', 'run.sh');
+      const expectedProjMcpEntry = process.platform === 'win32'
+        ? path.win32.join(xProjRes.bundleDir, 'mcp', 'server.mjs')
+        : path.join(xProjRes.bundleDir, 'mcp', 'run.sh');
+      const codexMcpOk = xCachePluginDoc.mcpServers === './.mcp.json'
+        && xCacheMcpDoc?.mcpServers?.['oh-my-agy_state']?.command === (process.platform === 'win32' ? 'node' : 'sh')
+        && xCacheMcpDoc?.mcpServers?.['oh-my-agy_state']?.args?.[0] === expectedCacheMcpEntry
+        && fs.existsSync(path.join(xRes.cachePluginDir, 'mcp', 'server.mjs'))
+        && xProjCfg.includes('[mcp_servers.custom_proj]')
+        && xProjCfg.includes('[mcp_servers.oh-my-agy_state]')
+        && xProjCfg.includes(JSON.stringify(expectedProjMcpEntry));
 
       const codexDefaultHome = path.join(t54Root, 'codex-default-home');
       fs.mkdirSync(path.join(codexDefaultHome, 'skills', '.system'), { recursive: true });
@@ -3492,6 +3509,9 @@ export async function runSelftest() {
       const depCfgPath = path.join(codexCopyHome, 'config.toml');
       fs.writeFileSync(depCfgPath, readFixture(depCfgPath).replace(/\[features\]\r?\n/, '[features]\nmulti_agent = true\n'), 'utf8');
       const xDepFlagVal = validateHostBundle({ host: 'codex', dir: codexCopyBundle, workspace: codexProj, codexHome: codexCopyHome, scope: 'user', pluginRoot, strict: true });
+      const cacheMcpPath = path.join(xCopyRes.cachePluginDir, '.mcp.json');
+      fs.writeFileSync(cacheMcpPath, JSON.stringify({ mcpServers: { 'oh-my-agy_state': { command: 'sh', args: ['${PLUGIN_ROOT}/mcp/run.sh'] } } }, null, 2), 'utf8');
+      const xMcpTamperVal = validateHostBundle({ host: 'codex', dir: codexCopyBundle, workspace: codexProj, codexHome: codexCopyHome, scope: 'user', pluginRoot, strict: true });
       fs.writeFileSync(path.join(claudeBundle, 'hooks', 'hooks.json'), JSON.stringify({
         hooks: { ...claudeHooksDoc.hooks, PostToolUse: [{ hooks: [{ type: 'command', command: 'OMAGY_HOST=claude hooks/run.sh post-tool-use --host=claude' }] }] },
       }, null, 2), 'utf8');
@@ -3512,6 +3532,8 @@ export async function runSelftest() {
         && xRes.ok === true && (process.platform === 'win32' ? ['symlink', 'copy'].includes(xRes.mode) : xRes.mode === 'symlink') && xCopyRes.ok === true && xCopyRes.mode === 'copy' && xCopyVal.ok === true && xUpgradeOk && codexCopyMdCount === 18
         && xVal.ok === true && codexCliValOut.ok === true
         && xProjRes.ok === true && xProjVal.ok === true && fs.existsSync(path.join(codexProjectWs, '.codex', 'hooks.json')) && fs.readdirSync(path.join(codexProjectWs, '.codex', 'skills')).length === 23
+        && codexMcpOk
+        && xMcpTamperVal.ok === false && xMcpTamperVal.errors.includes('invalid_codex_mcp_args:cache/.mcp.json')
         && codexSystemSkillPreserved && codexTargetSkills.length === 23 && codexDefaultHooksOk && codexProseClean
         && claudeEventsOk && codexEventsOk
         && codexCfg.includes('[[profiles.dev]]') && codexCfg.includes('[mcp_servers.custom]') && codexCfg.includes('trusted = true') && codexCfg.includes('hooks = true')
@@ -4078,12 +4100,19 @@ export async function runSelftest() {
       const wCxProjSetup = setupHostBundle({ host: 'codex', workspace: winCxProjWs, scope: 'project', pluginRoot, platform: 'win32' });
       const wCxProjVal = validateHostBundle({ host: 'codex', workspace: winCxProjWs, scope: 'project', pluginRoot, platform: 'win32', strict: true });
       const wCxHooksDoc = JSON.parse(readFixture(path.join(wCxSetup.cachePluginDir, 'hooks', 'hooks.json')));
+      const wCxMcpDoc = JSON.parse(readFixture(path.join(wCxSetup.cachePluginDir, '.mcp.json')));
+      const wCxProjCfg = readFixture(path.join(winCxProjWs, '.codex', 'config.toml'));
       const wCxCmd = String(wCxHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0]?.command || '');
       const wCxPreMatcher = String(wCxHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '');
       const wCxUserTomlOk = fs.readdirSync(path.join(winCxHome, 'agents')).filter((f) => f.endsWith('.toml'))
         .every((f) => readFixture(path.join(winCxHome, 'agents', f)).includes('<native_subagent_leaf_guard>'));
       const wCxProjTomlOk = fs.readdirSync(path.join(winCxProjWs, '.codex', 'agents')).filter((f) => f.endsWith('.toml'))
         .every((f) => readFixture(path.join(winCxProjWs, '.codex', 'agents', f)).includes('<native_subagent_leaf_guard>'));
+      const wCxMcpOk = wCxMcpDoc?.mcpServers?.['oh-my-agy_state']?.command === 'node'
+        && String(wCxMcpDoc?.mcpServers?.['oh-my-agy_state']?.args?.[0] || '').endsWith('\\mcp\\server.mjs')
+        && wCxProjCfg.includes('[mcp_servers.oh-my-agy_state]')
+        && wCxProjCfg.includes('command = "node"')
+        && wCxProjCfg.includes('mcp\\\\server.mjs');
       const winOk = wClSetup.ok === true && wClVal.ok === true
         && String(wClHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0]?.command || '').startsWith('node "')
         && Number(wClStopHook?.timeout) === 30
@@ -4094,7 +4123,7 @@ export async function runSelftest() {
         && wCxProjSetup.ok === true && wCxProjVal.ok === true
         && wCxCmd.startsWith('node "') && !/^[A-Za-z_]+=/.test(wCxCmd)
         && wCxPreMatcher.includes('Bash|shell_command|exec_command')
-        && wCxUserTomlOk && wCxProjTomlOk;
+        && wCxUserTomlOk && wCxProjTomlOk && wCxMcpOk;
 
       t60Ok = foreignOk && manifestOk && hostPriorityOk && sanOk && livePromptOk && compactOk && winOk;
       t60Detail = `foreign=${foreignOk} manifest=${manifestOk} hostPrio=${hostPriorityOk} san=${sanOk} live=${livePromptOk} compact=${compactOk} win=${winOk}`;
@@ -4741,23 +4770,32 @@ export async function runSelftest() {
       const logoH = logoSigOk ? logoRaw.readUInt32BE(20) : 0;
       const logoColorType = logoSigOk ? logoRaw[25] : -1;
       let cornerAlpha = -1;
-      if (logoSigOk && logoColorType === 6) {
+      let hasTrns = false;
+      if (logoSigOk && (logoColorType === 6 || logoColorType === 3)) {
         const idatChunks = [];
+        let trnsBuf = null;
         let off = 8;
         while (off + 12 <= logoRaw.length) {
           const len = logoRaw.readUInt32BE(off);
           const type = logoRaw.subarray(off + 4, off + 8).toString('ascii');
           if (off + 12 + len > logoRaw.length) break;
           if (type === 'IDAT') idatChunks.push(logoRaw.subarray(off + 8, off + 8 + len));
+          else if (type === 'tRNS') trnsBuf = logoRaw.subarray(off + 8, off + 8 + len);
           off += 12 + len;
           if (type === 'IEND') break;
         }
+        hasTrns = Boolean(trnsBuf && trnsBuf.length > 0);
         if (idatChunks.length > 0) {
           const inflated = zlib.inflateSync(Buffer.concat(idatChunks));
-          if (inflated.length >= 5) cornerAlpha = inflated[4];
+          if (logoColorType === 6 && inflated.length >= 5) cornerAlpha = inflated[4];
+          else if (logoColorType === 3 && hasTrns && inflated.length >= 2) {
+            const palIdx = inflated[1];
+            cornerAlpha = palIdx < trnsBuf.length ? trnsBuf[palIdx] : 255;
+          }
         }
       }
-      const logoOk = logoSigOk && logoColorType === 6 && logoW === logoH && logoW >= 128 && cornerAlpha === 0;
+      const logoTransparentOk = (logoColorType === 6 || (logoColorType === 3 && hasTrns)) && cornerAlpha === 0;
+      const logoOk = logoSigOk && logoTransparentOk && logoW === logoH && logoW >= 128;
 
       const dsStoreFiles = [];
       const walkDs = (dir) => {

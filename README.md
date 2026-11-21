@@ -41,8 +41,8 @@ oh-my-agy/
 ├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 24)
 ├── plugin.json               # Antigravity manifest (v0.9.0, strict 10-key JSON · hooks 4 · mcpServers 1)
 ├── assets/
-│   ├── logo.png              # Transparent RGBA plugin icon (388x388)
-│   └── sidecar-hud.webp      # Live Aux Pane HUD showcase animation (<=2 MB animated WebP)
+│   ├── logo.png              # Transparent plugin icon (346x346)
+│   └── sidecar-hud.webp      # Live Aux Pane HUD showcase screenshot (<=2 MB WebP)
 ├── HOW_TO_USE.md             # Complete guide to all 23 skills, 18 subagents, hooks, MCP & recipes
 ├── rules/AGENTS.md           # always-on operating contract (14.3 KB, <=14.5 KB target)
 ├── hooks.json                # 4 hooks: SessionStart + PreInvocation routing/wiki, Stop continuation, enabled write-guards, opt-in planning-guard

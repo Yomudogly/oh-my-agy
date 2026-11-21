@@ -285,6 +285,22 @@ function adaptAgentBody(body, host, bundleDir = '') {
   return adaptHostProse(body, host, bundleDir);
 }
 
+function buildCodexMcpSpec(rootDir, { platform = process.platform } = {}) {
+  const isWin = platform === 'win32';
+  return {
+    command: isWin ? 'node' : 'sh',
+    args: [isWin ? path.win32.join(rootDir, 'mcp', 'server.mjs') : path.join(rootDir, 'mcp', 'run.sh')],
+  };
+}
+
+function buildCodexMcpConfig(rootDir, { platform = process.platform } = {}) {
+  return {
+    mcpServers: {
+      'oh-my-agy_state': buildCodexMcpSpec(rootDir, { platform }),
+    },
+  };
+}
+
 function buildCodexPluginManifest(pluginJson) {
   const devName = typeof pluginJson.author === 'object' ? pluginJson.author?.name : pluginJson.author;
   const repoRaw = typeof pluginJson.repository === 'string' ? pluginJson.repository : (pluginJson.repository?.url || '');
@@ -301,6 +317,7 @@ function buildCodexPluginManifest(pluginJson) {
     keywords: ['orchestration', 'multi-agent', 'workflows', 'hud', 'wiki'],
     skills: './skills/',
     hooks: './hooks/hooks.json',
+    mcpServers: './.mcp.json',
     interface: {
       displayName: pluginJson.displayName || 'Oh My Agy',
       shortDescription: 'Multi-agent workflow & HUD.',
@@ -675,7 +692,7 @@ function upsertTomlSection(tomlText, sectionHeader, desiredPairs, removeKeys = [
   return `${out.join('\n').replace(/\n+$/, '')}\n`;
 }
 
-function mergeCodexConfigToml(configPath, roleDescs, pluginOpts = null) {
+function mergeCodexConfigToml(configPath, roleDescs, pluginOpts = null, mcpSpec = null) {
   assertNotSymlinkTarget(path.dirname(configPath), 'codex_dir_symlink_target');
   assertNotSymlinkTarget(configPath, 'config_toml_symlink_target');
   let content = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '') : '';
@@ -688,6 +705,12 @@ function mergeCodexConfigToml(configPath, roleDescs, pluginOpts = null) {
     });
     content = upsertTomlSection(content, `plugins.${JSON.stringify(pluginOpts.pluginId)}`, {
       enabled: 'true',
+    });
+  }
+  if (mcpSpec) {
+    content = upsertTomlSection(content, 'mcp_servers.oh-my-agy_state', {
+      command: JSON.stringify(mcpSpec.command),
+      args: JSON.stringify(mcpSpec.args),
     });
   }
   for (const role of ALL_ROLES) {
@@ -907,6 +930,10 @@ function materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson, p
     path.join(loc.mktPluginDir, 'hooks', 'hooks.json'),
     `${JSON.stringify(buildHostHooksJson('codex', loc.mktPluginDir, { platform }), null, 2)}\n`,
   );
+  writeRealFileSync(
+    path.join(loc.mktPluginDir, '.mcp.json'),
+    `${JSON.stringify(buildCodexMcpConfig(loc.mktPluginDir, { platform }), null, 2)}\n`,
+  );
   resetRealCleanDir(loc.mktAgentsDir);
   writeRealFileSync(
     path.join(loc.mktAgentsDir, 'marketplace.json'),
@@ -918,6 +945,10 @@ function materializeCodexPluginTrees({ bundleDir, codexTargetRoot, pluginJson, p
   writeRealFileSync(
     path.join(loc.cachePluginDir, 'hooks', 'hooks.json'),
     `${JSON.stringify(buildHostHooksJson('codex', loc.cachePluginDir, { platform }), null, 2)}\n`,
+  );
+  writeRealFileSync(
+    path.join(loc.cachePluginDir, '.mcp.json'),
+    `${JSON.stringify(buildCodexMcpConfig(loc.cachePluginDir, { platform }), null, 2)}\n`,
   );
   return loc;
 }
@@ -1005,8 +1036,19 @@ export function setupHostBundle(options = {}) {
   const hooksConfig = buildHostHooksJson(host, bundleDir, { platform });
   writeRealFileSync(path.join(hooksDstDir, 'hooks.json'), `${JSON.stringify(hooksConfig, null, 2)}\n`);
 
-  // 2. Link/copy sidecars/ and assets/ (omitting README showcase animation), and write host-adapted rules/AGENTS.md
+  // 2. Link/copy sidecars/, mcp/, and assets/ (omitting README showcase animation), and write host-adapted rules/AGENTS.md
   if (linkOrCopyDir(path.join(pluginRoot, 'sidecars'), path.join(bundleDir, 'sidecars'), usedCopy)) usedCopy = true;
+  const mcpSrcDir = path.join(pluginRoot, 'mcp');
+  const mcpDstDir = path.join(bundleDir, 'mcp');
+  if (fs.existsSync(mcpSrcDir)) {
+    resetRealCleanDir(mcpDstDir);
+    for (const name of fs.readdirSync(mcpSrcDir)) {
+      if (name === '.DS_Store') continue;
+      const src = path.join(mcpSrcDir, name);
+      if (!fs.statSync(src).isFile()) continue;
+      if (linkOrCopyFile(src, path.join(mcpDstDir, name), usedCopy)) usedCopy = true;
+    }
+  }
   const assetsSrcDir = path.join(pluginRoot, 'assets');
   const assetsDstDir = path.join(bundleDir, 'assets');
   resetRealCleanDir(assetsDstDir);
@@ -1112,6 +1154,8 @@ export function setupHostBundle(options = {}) {
   writeRealFileSync(path.join(bundleDir, 'plugin.json'), `${JSON.stringify(codexManifest, null, 2)}\n`);
   resetRealCleanDir(path.join(bundleDir, '.codex-plugin'));
   writeRealFileSync(path.join(bundleDir, '.codex-plugin', 'plugin.json'), `${JSON.stringify(codexManifest, null, 2)}\n`);
+  const codexMcpSpec = buildCodexMcpSpec(bundleDir, { platform });
+  writeRealFileSync(path.join(bundleDir, '.mcp.json'), `${JSON.stringify({ mcpServers: { 'oh-my-agy_state': codexMcpSpec } }, null, 2)}\n`);
 
   const bundleAgentsDst = path.join(bundleDir, 'agents');
   const codexAgentsDst = path.join(codexTargetRoot, 'agents');
@@ -1145,7 +1189,7 @@ export function setupHostBundle(options = {}) {
       copyDirRecursive(path.join(skillsDstDir, sName), targetSkillDir);
     }
     hooksJsonOut = mergeCodexHooksJson(path.join(codexTargetRoot, 'hooks.json'), hooksConfig);
-    mergeCodexConfigToml(path.join(codexTargetRoot, 'config.toml'), roleDescs, null);
+    mergeCodexConfigToml(path.join(codexTargetRoot, 'config.toml'), roleDescs, null, codexMcpSpec);
     skillsDirOut = codexSkillsDst;
   } else {
     cleanLegacyDuplicateCodexUserSkills(path.join(codexTargetRoot, 'skills'), skillNames, warnings);
@@ -1408,6 +1452,37 @@ function validateCodexSkillsTree(skillsDir, bundleSkillDirs, errors, labelPrefix
   }
 }
 
+function validateCodexMcpJson(mcpJsonPath, expectedRoot, errors, { platform = '', label = '.mcp.json' } = {}) {
+  if (!fs.existsSync(mcpJsonPath)) { errors.push(`missing:${label}`); return; }
+  let doc;
+  try { doc = readJsonStrict(mcpJsonPath); } catch { /* fail open: malformed .mcp.json recorded */ errors.push(`invalid_json:${label}`); return; }
+  const entry = doc && typeof doc === 'object' && !Array.isArray(doc) ? doc.mcpServers?.['oh-my-agy_state'] : null;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    errors.push(`missing_codex_mcp_server:${label}`);
+    return;
+  }
+  const cmd = typeof entry.command === 'string' ? entry.command : '';
+  const expectedCmd = platform ? (platform === 'win32' ? 'node' : 'sh') : (cmd === 'node' || cmd === 'sh' ? cmd : '');
+  if (!cmd || cmd !== expectedCmd) {
+    errors.push(`invalid_codex_mcp_command:${label}`);
+    return;
+  }
+  const isWin = cmd === 'node';
+  const expectedArg = isWin
+    ? path.win32.join(expectedRoot, 'mcp', 'server.mjs')
+    : path.join(expectedRoot, 'mcp', 'run.sh');
+  const arg0 = Array.isArray(entry.args) && typeof entry.args[0] === 'string' ? entry.args[0] : '';
+  if (!arg0 || arg0.includes('${') || arg0 !== expectedArg) {
+    errors.push(`invalid_codex_mcp_args:${label}`);
+  }
+  const hostEntry = path.join(expectedRoot, 'mcp', isWin ? 'server.mjs' : 'run.sh');
+  try {
+    if (!fs.statSync(hostEntry).isFile()) errors.push(`missing_codex_mcp_entry:${label}`);
+  } catch { /* fail open: missing MCP runtime script recorded */
+    errors.push(`missing_codex_mcp_entry:${label}`);
+  }
+}
+
 /** Strictly validate generated Claude Code or Codex bundle and host configuration files. */
 export function validateHostBundle(options = {}) {
   const host = String(options.host || '').trim().toLowerCase();
@@ -1447,6 +1522,7 @@ export function validateHostBundle(options = {}) {
   for (const rel of [
     'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs',
     'hooks/omagy-cli.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-audit.mjs',
+    'mcp/run.sh', 'mcp/server.mjs',
     'sidecars/hud/run.sh', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs',
   ]) {
     try {
@@ -1455,7 +1531,7 @@ export function validateHostBundle(options = {}) {
       errors.push(`missing_or_broken_entry:${rel}`);
     }
   }
-  for (const sub of ['hooks', 'sidecars', 'assets', 'rules', 'agents']) {
+  for (const sub of ['hooks', 'mcp', 'sidecars', 'assets', 'rules', 'agents']) {
     checkSubtreeSymlinks(path.join(bundleDir, sub), sub, allowedRoots, disallowSymlinks, errors);
   }
   if (fs.existsSync(path.join(bundleDir, 'assets', 'sidecar-hud.gif'))) errors.push('unexpected_large_asset:sidecar-hud.gif');
@@ -1561,6 +1637,7 @@ export function validateHostBundle(options = {}) {
       try {
         bundlePluginManifest = readJsonStrict(codexPluginPath);
         if (!bundlePluginManifest.hooks || !bundlePluginManifest.skills) errors.push('invalid_codex_plugin_paths');
+        if (bundlePluginManifest.mcpServers !== './.mcp.json') errors.push('invalid_codex_plugin_mcp_servers');
         const iface = bundlePluginManifest.interface || {};
         if (!iface.displayName || !iface.logo) errors.push('missing_codex_plugin_interface');
         const shortDesc = typeof iface.shortDescription === 'string' ? iface.shortDescription : '';
@@ -1568,6 +1645,7 @@ export function validateHostBundle(options = {}) {
         if (typeof iface.supportURL !== 'string' || !iface.supportURL.trim()) errors.push('missing_codex_plugin_support_url');
       } catch { /* fail open: malformed plugin manifest recorded */ errors.push('invalid_json:.codex-plugin/plugin.json'); }
     }
+    validateCodexMcpJson(path.join(bundleDir, '.mcp.json'), bundleDir, errors, { platform: options.platform || '', label: 'bundle/.mcp.json' });
     if (!fs.existsSync(path.join(bundleDir, 'plugin.json'))) errors.push('missing:plugin.json');
     if (!fs.existsSync(path.join(bundleDir, 'assets', 'logo.png'))) errors.push('missing:assets/logo.png');
     if (!meta?.codexVersion || !parseCodexVersion(meta.codexVersion)) errors.push('missing_or_invalid:codexVersion');
@@ -1618,6 +1696,7 @@ export function validateHostBundle(options = {}) {
         if (!fs.existsSync(path.join(loc.mktPluginDir, '.codex-plugin', 'plugin.json'))) {
           errors.push(`missing:${path.join(loc.mktPluginDir, '.codex-plugin', 'plugin.json')}`);
         }
+        validateCodexMcpJson(path.join(loc.mktPluginDir, '.mcp.json'), loc.mktPluginDir, errors, { platform: options.platform || '', label: 'marketplace/.mcp.json' });
         if (!fs.existsSync(loc.cachePluginDir)) {
           errors.push(`missing:${loc.cachePluginDir}`);
         } else {
@@ -1625,6 +1704,7 @@ export function validateHostBundle(options = {}) {
           if (!fs.existsSync(path.join(loc.cachePluginDir, '.codex-plugin', 'plugin.json'))) errors.push('missing:cache/.codex-plugin/plugin.json');
           if (!fs.existsSync(path.join(loc.cachePluginDir, 'assets', 'logo.png'))) errors.push('missing:cache/assets/logo.png');
           validateHooksConfig(path.join(loc.cachePluginDir, 'hooks', 'hooks.json'), 'codex', errors);
+          validateCodexMcpJson(path.join(loc.cachePluginDir, '.mcp.json'), loc.cachePluginDir, errors, { platform: options.platform || '', label: 'cache/.mcp.json' });
           validateCodexSkillsTree(path.join(loc.cachePluginDir, 'skills'), bundleSkillDirs, errors, 'cache/skills');
         }
       }
@@ -1654,6 +1734,23 @@ export function validateHostBundle(options = {}) {
           }
           const plugBody = extractTomlSectionBody(cfg, 'plugins."oh-my-agy@oh-my-agy-local"');
           if (!/^\s*enabled\s*=\s*true\b/m.test(plugBody)) errors.push('config_missing_enabled_plugin');
+        } else {
+          const mcpBody = extractTomlSectionBody(cfg, 'mcp_servers.oh-my-agy_state');
+          const cmdMatch = /^\s*command\s*=\s*"([^"]+)"\s*(?:#.*)?$/m.exec(mcpBody);
+          const argsMatch = /^\s*args\s*=\s*(\[[^\r\n]*\])\s*(?:#.*)?$/m.exec(mcpBody);
+          let parsedArgs = null;
+          if (argsMatch) {
+            try { parsedArgs = JSON.parse(argsMatch[1]); } catch { /* fail open: malformed args array recorded below */ }
+          }
+          const expectedCmd = options.platform
+            ? (options.platform === 'win32' ? 'node' : 'sh')
+            : (cmdMatch && (cmdMatch[1] === 'sh' || cmdMatch[1] === 'node') ? cmdMatch[1] : '');
+          const expectedArg = expectedCmd === 'node'
+            ? path.win32.join(bundleDir, 'mcp', 'server.mjs')
+            : path.join(bundleDir, 'mcp', 'run.sh');
+          if (!cmdMatch || cmdMatch[1] !== expectedCmd || !Array.isArray(parsedArgs) || parsedArgs[0] !== expectedArg) {
+            errors.push('config_missing_mcp_oh_my_agy_state');
+          }
         }
       }
       const agentsMdPath = (effScope === 'project' && workspace)
