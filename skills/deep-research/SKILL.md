@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: "[oh-my-agy] Multidisciplinary deep research and systems analysis across technical, business, idea, and implementation lenses, plus bounded read-only official/upstream version-aware best-practice lookups (--quick) and stateful validator-gated research loops (--loop). Executes terminological scoping, Boolean query matrices, Tier A-E source ranking with claim-kind tags, contradiction resolution, and a 100-point self-audit into .omagy/artifacts/research/. Use for $deep-research, 'deep research', official upstream docs and best practices, validator-gated research loops after $deep-interview --autoresearch, market/business landscape studies, or technical/architecture deep dives."
+description: "[oh-my-agy] Multidisciplinary deep research across technical, business, idea, and implementation lenses, official upstream docs (--quick), and validator-gated research loops (--loop) with Boolean query matrices, Tier A-E ranking, claim-kind tags, and self-audit. Use for $deep-research or deep dives."
 ---
 
 # Deep Research & Multi-Lens Systems Analysis
@@ -79,7 +79,7 @@ PHASE 5: 5-Dimension Self-Assessment (>=85) & Automated Audit (audit-research)
    ```bash
    sh <PLUGIN_DIR>/hooks/run.sh research-matrix "<topic>" <technical|business|idea|implementation|general>
    ```
-2. **Parallel Subagent Dispatch**: For multi-faceted topics, launch bounded parallel subagents (`invoke_subagent`, max 3–4 concurrent lanes) matching the lens table above (`explore` for repo facts, `researcher` for upstream/external evidence and package/SDK comparison, `planner` for product/market assumption stress-testing).
+2. **Parallel Subagent Dispatch**: For multi-faceted topics, when a native `run_workflow` (`parallel`) tool is available in the active host, prefer it for multi-lens sweeps; otherwise fall back to bounded parallel subagents (`invoke_subagent`, max 3–4 concurrent lanes) matching the lens table above (`explore` for repo facts, `researcher` for upstream/external evidence and package/SDK comparison, `planner` for product/market assumption stress-testing).
 3. **Tier-Rank All Sources (Tier A–E)**:
    - **Tier A (Gold Standard)**: Official specifications/RFCs, reproducible benchmarks, peer-reviewed systematic reviews, primary regulatory/financial filings, verified repo code/test outputs.
    - **Tier B (High Priority)**: Maintainer documentation, official release notes/changelogs, engineering postmortems, specialized peer-reviewed studies.

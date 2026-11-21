@@ -1,6 +1,6 @@
 ---
 name: team
-description: "[oh-my-agy] N coordinated subagent workers on a shared, leader-owned task board, built on Antigravity invoke_subagent/send_message. Use only for an explicit $team request when an approved plan benefits from parallel lanes, task-state tracking, or workspace isolation."
+description: "[oh-my-agy] N coordinated subagent workers on a shared leader-owned task board via invoke_subagent/send_message. Use only for an explicit $team request needing parallel lanes, task-state tracking, or workspace isolation."
 ---
 
 # Team Skill
@@ -14,6 +14,7 @@ In Antigravity, workers are **subagents**:
 - coordinate: `send_message` to a worker's conversation ID
 - monitor/stop: `manage_subagents` (`list`, `kill`)
 - isolate: prefer `Workspace: "share"` (shared git object store with an independent branch, like `git worktree`) over `"branch"` (isolated clone deleted when the subagent is killed) whenever workers write overlapping areas or commit recovery matters.
+- **Native `swarm` fast path**: when a native `swarm` tool (shared message board, `tasks` sharding, `workspace: "share"`) is available in the active host, prefer it as a fast path alongside the file-backed `.omagy/state/team/` DAG contract; otherwise fall back to `invoke_subagent` / `send_message`. Keep `.omagy/evidence/` receipts intact in both paths.
 
 ## Inputs and preconditions
 
@@ -83,7 +84,7 @@ Only the leader edits the board. Workers report results in their final message, 
    - `unverified` is an array (empty, or listing checks that were not run).
 
    Then re-run the verification command for anything non-trivial, transition the task to `completed`/`failed`/`blocked` with `result`, and refresh `updated_at`. Launch newly unblocked tasks. When merely inspecting team status (`$hud` or status check), stay strictly read-only and never mutate `tasks.json` or reassign tasks.
-   (Optional scripted check: `sh <plugin>/hooks/run.sh verify-evidence <workspace> .omagy/evidence/task-<id>.json <team> <id>`. Antigravity's terminal sandbox may deny reading plugin files, in which case it needs `BypassSandbox: true`. The `read_file` check above is the default.)
+   (Optional scripted check: when the `oh-my-agy_state` MCP tool `omagy_verify_evidence` is available in the active host, prefer it as a read-only fast path; otherwise fall back to `sh <plugin>/hooks/run.sh verify-evidence <workspace> .omagy/evidence/task-<id>.json <team> <id>`. Antigravity's terminal sandbox may deny reading plugin files, in which case it needs `BypassSandbox: true`. The `read_file` check above is the default.)
 5. **Blocked worker**: answer via `send_message` to the same conversation ID rather than spawning a replacement. For a stuck or looping worker, **preserve its work before killing** (since `manage_subagents kill` deletes `"branch"` workspaces): if it ran in `"share"` or `"branch"`, ask it once via `send_message` to commit/report its branch or salvage reachable commits in the leader lane before calling `manage_subagents kill` on that worker only, then set the task `pending` and relaunch with a sharper prompt.
 6. **Integrate & Shutdown Worktree Preservation**:
    - **Fail-closed Git integration**: when workers used `share`/`branch` workspaces, merge their verified `verified_head` commits into the main workspace in the leader lane. Never auto-resolve merge conflicts with `-X theirs` or `-X ours`, and never automatically abort pre-existing manual Git operations (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_START`, `rebase-merge`, `rebase-apply`) in the leader workspace — surface conflict details and stop or resolve both intents explicitly.

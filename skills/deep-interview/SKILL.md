@@ -1,6 +1,6 @@
 ---
 name: deep-interview
-description: "[oh-my-agy] Socratic deep interview with quantitative ambiguity gating before planning or execution. Use when a request is broad, ambiguous, or missing acceptance criteria, or when the user says 'deep interview', 'interview me', 'ask me everything', 'don't assume', or 'ouroboros'. Supports --quick, --standard (default), --deep, --ideate, and --autoresearch."
+description: "[oh-my-agy] Socratic deep interview with quantitative ambiguity gating before planning (--quick, --standard, --deep, --ideate, --autoresearch). Use when a request is broad, ambiguous, missing acceptance criteria, or for 'interview me'/'ouroboros'."
 ---
 
 <Purpose>

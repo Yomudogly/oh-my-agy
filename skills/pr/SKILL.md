@@ -1,6 +1,6 @@
 ---
 name: pr
-description: "[oh-my-agy] Assemble a review-ready PR body from the .omagy/ paper trail: one-line summary with the smallest load-bearing visual, verification evidence (before/after), and ADR-tested reversibility. Use for $pr, 'draft a PR', or after $ultragoal / $code-review."
+description: "[oh-my-agy] Assemble a review-ready PR body from the paper trail: summary, smallest load-bearing visual, before/after verification evidence, and ADR reversibility. Use for $pr, 'draft a PR', or after $ultragoal/$code-review."
 ---
 
 # PR Body Assembly (`$pr`)
@@ -85,7 +85,7 @@ When invoked as `$pr --watch` or tending an open PR through CI, review comments,
    ```bash
    sh <plugin>/hooks/run.sh watch-pr '{"state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","checks":{"total":3,"passed":3,"failed":0,"pending":0}}'
    ```
-   `watch-pr` classifies the PR into `ready | waiting | blocked | gone` with explicit `reasons` (accepting either the canonical nested `state` + `checks.{total,passed,failed,pending,canceled}` schema or flat `prState`/`checksTotal`/`checksPassed` aliases). When `checks.total === 0` (`checksTotal === 0`), it holds in `waiting` (`no_checks_confirm_window`) until `nowMs - noChecksFirstSeenAtMs >= 60000` (or `elapsedSinceFirstZeroChecksMs >= 60000`, `DEFAULT_NO_CHECKS_CONFIRM_MS`) so newly pushed commits do not prematurely report `ready` before CI registers checks.
+   `watch-pr` classifies the PR into `ready | waiting | blocked | gone` with explicit `reasons` (accepting either the canonical nested `state` + `checks.{total,passed,failed,pending,canceled}` schema or flat `prState`/`checksTotal`/`checksPassed` aliases). When `checks.total === 0` (`checksTotal === 0`), it holds in `waiting` (`no_checks_confirm_window`) until `nowMs - noChecksFirstSeenAtMs >= 60000` (or `elapsedSinceFirstZeroChecksMs >= 60000`, `DEFAULT_NO_CHECKS_CONFIRM_MS`) so newly pushed commits do not prematurely report `ready` before CI registers checks. When a native `schedule` timer tool (`DurationSeconds` + `TimerCondition`) is available in the active host, prefer it for `--watch` wait intervals instead of shell polling loops; otherwise fall back to bounded re-checks.
 2. **CI Failure Triage (`ci-triage`)**: read the failing step log (`gh run view <id> --log-failed`) and classify each failure before acting:
    - **`real`**: deterministic code/test regression introduced or exposed by the branch — reproduce locally, fix, and push.
    - **`flaky`**: known non-deterministic test/network blip that passes locally — inspect the failed job log locally (`gh run view <id> --log-failed`), verify local determinism without mutating remote GitHub Actions runs, and note the flake in the report.

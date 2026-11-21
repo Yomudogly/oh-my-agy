@@ -1,6 +1,6 @@
 ---
 name: loft
-description: "[oh-my-agy] Shape-before-steel prototyping: settle a design or logic fork that prose cannot resolve by building a throwaway artifact (pure zero-I/O logic module in an HTML harness, or 3 structurally distinct UI variants behind one switcher). Use for $loft or when a spec/interview stalls on 'we need to see/feel it first'."
+description: "[oh-my-agy] Shape-before-steel prototyping for design or logic forks prose cannot resolve: throwaway zero-I/O HTML harness or 3 distinct UI variants behind one switcher. Use for $loft or when we need to see/feel it first."
 ---
 
 # Loft — Shape Before Steel (`$loft`)

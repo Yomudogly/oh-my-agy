@@ -1,6 +1,6 @@
 ---
 name: threat-model
-description: "[oh-my-agy] Structured security threat modeling workflow producing trust-boundary data-flow diagrams, STRIDE and OWASP Agentic/LLM risk enumeration, likelihood-impact scoring, file:line mitigations, and MCP/supply-chain audits. Use for $threat-model or when mapping attack surfaces, reviewing auth/agent/MCP architectures, or documenting security controls."
+description: "[oh-my-agy] Structured security threat modeling with trust-boundary data-flow diagrams, STRIDE and OWASP Agentic/LLM risks, likelihood-impact scoring, file:line mitigations, and MCP audits. Use for $threat-model or mapping attack surfaces."
 ---
 
 # Threat Model

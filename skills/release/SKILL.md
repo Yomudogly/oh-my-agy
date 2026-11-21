@@ -1,6 +1,6 @@
 ---
 name: release
-description: "[oh-my-agy] End-to-end release engineering workflow covering pre-release quality gates, SemVer bump classification, CHANGELOG and manifest synchronization, dry-run packaging validation, rollout/rollback playbooks, and tag or registry confirmation gates. Use for $release or when preparing a versioned release, release notes, or production rollout."
+description: "[oh-my-agy] End-to-end release engineering: pre-release readiness gates, SemVer bump, CHANGELOG/manifest sync, dry-run packaging, rollout/rollback playbooks, and tag gates. Use for $release, release notes, or versioned rollouts."
 ---
 
 # Release

@@ -1,6 +1,6 @@
 ---
 name: autopilot
-description: "[oh-my-agy] Canonical autonomous orchestrator for hands-off delivery with durable state, consensus planning, and evidence-backed completion. Use when the user invokes $autopilot or asks for end-to-end autonomous delivery from an idea, issue, or requirements seed."
+description: "[oh-my-agy] Canonical autonomous orchestrator for end-to-end hands-off delivery with durable workflow state, consensus planning, and evidence-backed completion. Use for $autopilot or autonomous delivery from an idea, issue, or requirements seed."
 ---
 
 # Autopilot

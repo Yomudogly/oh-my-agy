@@ -1,6 +1,6 @@
 ---
 name: performance-goal
-description: "[oh-my-agy] Evaluator-gated performance optimization loop with durable artifacts: define an evaluator command and pass/fail contract first, then optimize in small reversible patches with recorded checkpoints until the evaluator passes. Use when the user wants measurable speed, latency, throughput, memory, or benchmark improvement as a goal-oriented loop."
+description: "[oh-my-agy] Evaluator-gated performance optimization loop: define a benchmark evaluator and pass/fail contract first, then optimize in small reversible patches with checkpoints. Use for measurable speed, latency, throughput, or memory gains."
 ---
 
 # Performance Goal Workflow

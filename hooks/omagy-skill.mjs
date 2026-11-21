@@ -35,7 +35,7 @@ import {
 } from './omagy-hook.mjs';
 
 const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const ALLOWED_FRONTMATTER_KEYS = ['name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility'];
+const ALLOWED_FRONTMATTER_KEYS = ['name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility', 'disable-slash-command'];
 const REQUIRED_FRONTMATTER_KEYS = ['name', 'description'];
 const PERSONAL_HOME_PATH_RE = /(?:^|[^A-Za-z0-9_])\/(?:Users|home)\/[A-Za-z0-9._-]+\//;
 const TRIGGER_CUE_RE = /\b(?:use\b.*?\b(?:when|for|on|to)|triggers?\s+on|activate\b)/i;

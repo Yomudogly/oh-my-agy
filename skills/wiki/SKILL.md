@@ -1,11 +1,11 @@
 ---
 name: wiki
-description: "[oh-my-agy] Persistent markdown project wiki stored in the repository under omagy_wiki/ with keyword/tag search, cross-links, linting, and session-log capture. Use for 'wiki add', 'wiki query', 'wiki read', 'wiki lint', 'wiki delete', or when durable project knowledge (architecture, decisions, debugging notes) should be recorded or looked up."
+description: "[oh-my-agy] Persistent markdown project wiki under omagy_wiki/ with keyword/tag search, cross-links, linting, and session-log capture. Use for wiki add, query, read, lint, delete, or durable architecture/debugging knowledge."
 ---
 
 # Wiki
 
-A persistent, self-maintained markdown knowledge base for project and session knowledge. The agent operates it directly with file tools; no CLI or MCP server is needed.
+A persistent, self-maintained markdown knowledge base for project and session knowledge. The agent operates it directly with file tools; optional read-only `oh-my-agy_state` MCP tools (`omagy_wiki_query`, `omagy_wiki_lint`) or `sh <plugin>/hooks/run.sh` accelerate lexical search and linting.
 
 ## Storage
 
@@ -39,12 +39,12 @@ Content. Cross-reference with [[other-page-slug]].
 ## Operations
 
 - **Add / ingest**: derive a slug from the title (lowercase, hyphenated). For periodic or recurring pages (`session-log-*`, `weekly-*`), allocate the slug with `nextAvailableWikiSlug` (which scans active, `archive/`, and `deleted/` pages and appends `-2`, `-3`, etc. so archived or deleted slugs are never resurrected with stale inbound links). If a topic page already exists, merge rather than overwrite (ingest), or refuse and suggest editing (quick add). Write the page, update `index.md`, and append to `log.md`.
-- **Query**: run `sh <plugin>/hooks/run.sh wiki-query "<query>" [omagy_wiki] --json` for deterministic lexical ranking (`tags*3 + title*2 + body*1` with hyphen splitting and CJK bi-gram tokenization, redacting secret snippets), and supplement with `grep -ril "<terms>" omagy_wiki/` or `read_file` when full surrounding line context is needed. Rank title/tag matches first and cite page paths.
+- **Query**: when the `oh-my-agy_state` MCP server is available in the active host, prefer read-only `omagy_wiki_query` first; otherwise fall back to `sh <plugin>/hooks/run.sh wiki-query "<query>" [omagy_wiki] --json` for deterministic lexical ranking (`tags*3 + title*2 + body*1` with hyphen splitting and CJK bi-gram tokenization, redacting secret snippets), and supplement with `grep -ril "<terms>" omagy_wiki/` or `read_file` when full surrounding line context is needed. Rank title/tag matches first and cite page paths.
 - **Read**: open `omagy_wiki/<slug>.md`. If missing, suggest the closest slugs.
 - **List**: render `index.md`, or rebuild it if it is stale.
 - **Delete / Move / Archive & Link Repair**: confirm destructive deletes with the user, remove or move the page, update `index.md`, append to `log.md`, and run `sh <plugin>/hooks/run.sh wiki-repair omagy_wiki '{"moved":{"<old>":"<new>"},"archived":["<slug>"],"deleted":["<slug>"]}'` (or an action array `'[{"action":"delete","oldSlug":"<slug>"}]'`) to automatically rewrite `[[old-slug]]`, `[[old-slug|Label]]`, and `[Label](old-slug.md)` references across all markdown pages while leaving fenced (` ``` ` / `~~~`) and inline (`` `...` ``) code spans untouched.
 - **Refresh**: rebuild `index.md` from page frontmatter.
-- **Lint**: run `sh <plugin>/hooks/run.sh wiki-lint [omagy_wiki] [repoRoot] --json` to deterministically detect dangling `[[slug]]` wiki links (`brokenWikiLinks`), dead or out-of-range repository `file:line` citations (`brokenFileRefs`), and non-meta/non-archive zero-inbound-link pages (`isolatedPages`), alongside checking missing/invalid frontmatter, unknown categories, duplicate titles, and `index.md` drift. Lint never rewrites files unless the user asks for fixes (delegate larger cross-link or docs sync updates to `doc-steward`). Surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once when listing, reading, or linting wiki pages so the user can browse pages and lint status in the `Wiki` tab of the Auxiliary Pane.
+- **Lint**: when the `oh-my-agy_state` MCP server is available in the active host, prefer read-only `omagy_wiki_lint` first; otherwise fall back to `sh <plugin>/hooks/run.sh wiki-lint [omagy_wiki] [repoRoot] --json` to deterministically detect dangling `[[slug]]` wiki links (`brokenWikiLinks`), dead or out-of-range repository `file:line` citations (`brokenFileRefs`), and non-meta/non-archive zero-inbound-link pages (`isolatedPages`), alongside checking missing/invalid frontmatter, unknown categories, duplicate titles, and `index.md` drift. Lint never rewrites files unless the user asks for fixes (delegate larger cross-link or docs sync updates to `doc-steward`). Surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` once when listing, reading, or linting wiki pages so the user can browse pages and lint status in the `Wiki` tab of the Auxiliary Pane.
 
 ## Session capture & secret-reference rules
 

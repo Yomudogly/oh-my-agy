@@ -1,6 +1,6 @@
 ---
 name: ask
-description: "[oh-my-agy] Ask a locally installed external advisor CLI (Claude Code, Gemini CLI, or Codex CLI) for a second opinion, blind-claim --doubt review, or brainstorm, and save a reusable artifact. Use for $ask claude|gemini|codex [--doubt] <question>, or when the user wants another model's opinion."
+description: "[oh-my-agy] Ask a local external advisor CLI (Claude Code, Gemini CLI, Codex CLI) for a second opinion, --doubt review, or brainstorm and save an artifact. Use for $ask or another model's opinion."
 ---
 
 # Ask (Local Advisor CLI)

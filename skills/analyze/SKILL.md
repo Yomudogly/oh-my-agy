@@ -1,6 +1,6 @@
 ---
 name: analyze
-description: "[oh-my-agy] Read-only deep repository analysis returning a ranked synthesis with explicit confidence, concrete file references, and evidence-vs-inference boundaries. Use when the user says 'analyze', 'investigate', 'why does', 'what's causing', pastes a stack trace or runtime error log, or needs a grounded cross-file explanation before any changes."
+description: "[oh-my-agy] Read-only deep repository analysis with ranked synthesis, confidence, file references, and evidence-vs-inference boundaries. Use for 'analyze', 'investigate', 'why does', stack traces, or cross-file root causes."
 ---
 
 # Analyze — Read-Only Deep Analysis

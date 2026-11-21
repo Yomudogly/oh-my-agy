@@ -1,6 +1,6 @@
 ---
 name: doctor
-description: "[oh-my-agy] Diagnose and fix oh-my-agy installation, manifest health, and runtime issues (plugin discovery, lifecycle hook wiring, Node availability, rules size, agents and skills integrity, continuation nudges, and stale workflow state); install, enable, update, or uninstall the plugin and bootstrap AGENTS.md (--setup, --init-deep); configure Slack, Discord, Telegram, webhook, or command notifications (--notifications); and audit sessions (--session, --session-compare, --session-scan). Use when hooks, subagents, or continuation are failing or not working."
+description: "[oh-my-agy] Diagnose and fix plugin install, hook wiring, Node, rules size, agents/skills integrity, continuation nudges, stale state, tmpdir-audit, AGENTS.md bootstrap (--setup), and Slack/Discord/Telegram notifications (--notifications). Use when hooks or subagents fail."
 ---
 
 # oh-my-agy Doctor

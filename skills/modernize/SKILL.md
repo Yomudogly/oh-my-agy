@@ -1,6 +1,6 @@
 ---
 name: modernize
-description: "[oh-my-agy] Phased codebase, dependency, framework, and runtime modernization workflow using behavior-lock baselines, license/coverage pre-flight checks, codemod waves, Expand-Migrate-Contract seams, and rollback checkpoints. Use for $modernize or when upgrading packages, frameworks, language versions, SDKs, or legacy modules end-to-end. Flags: --plan, --dry-run, --wave."
+description: "[oh-my-agy] Phased dependency, framework, and runtime modernization via behavior-lock tests, license checks, codemod waves, Expand-Migrate-Contract seams, and rollback checkpoints. Use for $modernize or upgrading packages, SDKs, or legacy modules."
 ---
 
 # Modernize

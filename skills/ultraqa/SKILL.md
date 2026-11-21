@@ -1,6 +1,6 @@
 ---
 name: ultraqa
-description: "[oh-my-agy] Adversarial dynamic end-to-end QA: build a hostile scenario matrix, run baseline + adversarial scenarios, diagnose, fix, clean up, and report, in up to 5 bounded cycles. Use for $ultraqa (--tests, --build, --lint, --typecheck, --interactive, --custom \"pattern\") when runnable behavior needs more than a shallow test checklist."
+description: "[oh-my-agy] Adversarial dynamic end-to-end QA: build a hostile scenario matrix, run baseline + adversarial scenarios, diagnose, fix, and report across 5 bounded cycles. Use for $ultraqa (--tests, --build, --lint, --typecheck, --interactive)."
 ---
 
 # UltraQA Task Card

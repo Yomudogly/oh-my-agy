@@ -1,6 +1,6 @@
 ---
 name: ai-slop-cleaner
-description: "[oh-my-agy] Bounded anti-slop cleanup/refactor/deslop workflow: lock behavior with tests, plan, classify fallbacks, then dead-code, duplication, naming/error-handling, and test passes. Use when code is bloated, repetitive, over-abstracted, or AI-generated, or the user asks for cleanup/deslop."
+description: "[oh-my-agy] Bounded anti-slop cleanup/refactor/deslop workflow: lock tests, classify fallbacks, then dead-code, duplication, naming, and test passes. Use when code is bloated, repetitive, over-abstracted, or AI-generated."
 ---
 
 # AI Slop Cleaner Task Card

@@ -1,6 +1,6 @@
 ---
 name: ultragoal
-description: "[oh-my-agy] Create and execute durable repo-native multi-goal plans with a goals.json + ledger.jsonl audit trail, sequential completion, review gates, and resume. Use for $ultragoal, 'create-goals', 'complete-goals', durable multi-goal execution, or the Autopilot execution stage."
+description: "[oh-my-agy] Create and execute durable multi-goal plans with goals.json and ledger.jsonl audit trails, sequential completion, review gates, and resume. Use for $ultragoal, 'create-goals', or 'complete-goals'."
 ---
 
 # Ultragoal Workflow

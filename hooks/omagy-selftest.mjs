@@ -2928,6 +2928,15 @@ export async function runSelftest() {
         mkAdvSkill('no-trigger-skill', 'Formatting helper for local markdown tables and lists in repositories.', '## When to Use\nOnly in body.\n'),
         { strict: true },
       );
+      const mkSlashFlagSkill = (slug, flagVal) => {
+        const d = path.join(advRoot, slug);
+        fs.mkdirSync(d, { recursive: true });
+        fs.writeFileSync(path.join(d, 'SKILL.md'), `---\nname: ${slug}\ndescription: "${goodDesc}"\ndisable-slash-command: ${flagVal}\n---\n\n# ${slug}\n\nBody.\n`, 'utf8');
+        return d;
+      };
+      const advSlashTrue = await validateSkillDirectory(mkSlashFlagSkill('slash-flag-true', 'true'), { strict: true });
+      const advSlashFalse = await validateSkillDirectory(mkSlashFlagSkill('slash-flag-false', 'false'), { strict: true });
+      const advSlashBad = await validateSkillDirectory(mkSlashFlagSkill('slash-flag-maybe', 'maybe'), { strict: true });
 
       const adversarialOk = advOver20k.ok === false && advOver20k.exitCode === 1
         && advNearLoose.ok === true && advNearLoose.warnings.length === 1
@@ -2952,7 +2961,11 @@ export async function runSelftest() {
         && advTodo.ok === false && advTodo.exitCode === 1
         && advHomePath.ok === false && advHomePath.exitCode === 1
         && advShortDesc.ok === false && advShortDesc.exitCode === 1
-        && advTriggerlessStrict.ok === false && advTriggerlessStrict.exitCode === 1;
+        && advTriggerlessStrict.ok === false && advTriggerlessStrict.exitCode === 1
+        && advSlashTrue.ok === true && advSlashTrue.exitCode === 0
+        && advSlashFalse.ok === true && advSlashFalse.exitCode === 0
+        && advSlashBad.ok === false && advSlashBad.exitCode === 1
+        && advSlashBad.errors.some((e) => e.includes('invalid_boolean:disable-slash-command'));
 
       const dsColDir = path.join(ws, 't51-ds-col');
       fs.mkdirSync(dsColDir, { recursive: true });
@@ -2983,6 +2996,15 @@ export async function runSelftest() {
         && skillRefTxt.includes('entries')
         && skillRefTxt.includes('inherits');
 
+      let totalShippedDescChars = 0;
+      for (const sd of fs.readdirSync(path.join(pluginRoot, 'skills')).sort()) {
+        const sf = path.join(pluginRoot, 'skills', sd, 'SKILL.md');
+        if (!fs.existsSync(sf)) continue;
+        const dm = fs.readFileSync(sf, 'utf8').match(/^description:\s*(.*)$/m);
+        totalShippedDescChars += dm ? dm[1].length : 0;
+      }
+      const descBudgetOk = totalShippedDescChars > 0 && totalShippedDescChars <= 5800;
+
       const shippedOk = dsColRes.ok === true && dsColRes.skillCount === 1
         && shippedColRes.ok === true && shippedColRes.exitCode === 0
         && shippedColRes.skillCount === 23
@@ -2991,10 +3013,11 @@ export async function runSelftest() {
         && shippedVrRes.ok === true && shippedVrRes.errors.length === 0
         && shippedUqaRes.ok === true && shippedUqaRes.errors.length === 0
         && shippedSkillRes.ok === true && shippedSkillRes.errors.length === 0 && shippedSkillRes.warnings.length === 0
-        && playbookConceptsOk;
+        && playbookConceptsOk
+        && descBudgetOk;
 
       t51Ok = byteAndDispatchOk && scaffoldOk && adversarialOk && shippedOk;
-      t51Detail = `hook=${hookBytesT51} cli=${cliBytesT51} skill=${skillBytesT51} dispatch=${byteAndDispatchOk} scaffold=${scaffoldOk} adv=${adversarialOk} shipped=${shippedOk}`;
+      t51Detail = `hook=${hookBytesT51} cli=${cliBytesT51} skill=${skillBytesT51} descChars=${totalShippedDescChars} dispatch=${byteAndDispatchOk} scaffold=${scaffoldOk} adv=${adversarialOk} shipped=${shippedOk}`;
     } catch (e) { /* fail open: capture T51 error detail */
       t51Detail = e instanceof Error ? e.message : String(e);
     }

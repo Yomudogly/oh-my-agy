@@ -1,6 +1,6 @@
 ---
 name: cancel
-description: "[oh-my-agy] Cancel active oh-my-agy workflow modes (autopilot, deep-interview, ralplan, plan, ultragoal, ultraqa, autoresearch, performance-goal, team) with exact-scope cleanup of their state, subagents, and background tasks. Use for $cancel, 'stop the workflow', 'cancel autopilot', or when a hard blocker prevents progress."
+description: "[oh-my-agy] Cancel active workflow modes (autopilot, ralplan, ultragoal, ultraqa, team) with exact-scope cleanup of state, subagents, and background tasks. Use for $cancel, 'stop the workflow', or hard blockers."
 ---
 
 # Cancel Skill

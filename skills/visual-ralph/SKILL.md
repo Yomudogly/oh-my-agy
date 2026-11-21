@@ -1,6 +1,6 @@
 ---
 name: visual-ralph
-description: "[oh-my-agy] Measured frontend implementation against an approved visual reference (generated mockup, static image, or live URL) via $ultragoal with a vision verdict before every edit and pixel-diff evidence, or repo-local DESIGN.md design-system authoring and refresh (--design) as the durable source of truth for UI, UX, typography, color tokens, and layout rules. Use when a UI must be built or restyled to match a visual target, when cloning a URL, or when creating or refreshing DESIGN.md before frontend implementation."
+description: "[oh-my-agy] Measured frontend UI matching an approved visual target (mockup, screenshot, live URL) with vision verdicts and pixel-diff evidence, or DESIGN.md design-system authoring (--design). Use when cloning a URL, matching a visual reference, or creating DESIGN.md."
 ---
 
 # Visual Ralph & Design System Skill

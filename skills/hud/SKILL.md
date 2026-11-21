@@ -1,6 +1,6 @@
 ---
 name: hud
-description: "[oh-my-agy] Show an on-demand status board of active oh-my-agy workflows (autopilot phase, ultragoal progress, team tasks, QA cycle) from .omagy/ state, or create a structured, self-contained session handoff artifact under .omagy/artifacts/handoff-<slug>-<UTC>.md (--handoff) so work resumes cleanly after /compact or in a fresh conversation. Use for $hud, 'what modes are active', 'workflow status', 'create a handoff', 'save context for next session', or before context compaction."
+description: "[oh-my-agy] On-demand status board of active workflows (autopilot phase, ultragoal progress, team tasks, QA cycle) or self-contained session handoff artifacts (--handoff). Use for $hud, 'what modes are active', workflow status, or handoffs before compaction."
 ---
 
 # HUD (Status Board)
@@ -33,6 +33,7 @@ The HUD workbench runs **exclusively on Desktop apps** (no CLI `statusLine`/`tmu
 Accept `$hud --preset=<name>`. A default can be stored in `.omagy/config.json` as `{"hud": {"preset": "focused"}}`.
 
 ## Sources (strictly read-only)
+- **Read-only `oh-my-agy_state` MCP fast path**: when the `oh-my-agy_state` MCP server is available in the active host, prefer read-only `omagy_status` (plus `omagy_codebase_map` / `omagy_verify_evidence` as needed) before falling back to reading `.omagy/` files or `sh <plugin>/hooks/run.sh`.
 - **Zero-mutation status invariant & live SSE (`/api/status` & `/api/events`)**: `$hud`, `GET /api/status`, and debounced `GET /api/events` (`150 ms` `.omagy/` + `omagy_wiki/` watcher debounce with `computeSnapshotDigest` duplicate suppression and `statusRequiresToken` verification) are strictly observational — never write state files or mutate `.omagy/` while rendering. Interactive actions (`Run in Chat`, `Dispatch into Active Chat`, `Continue`, two-step `Cancel Mode`, `Create Handoff`, `Run /doctor`) use `POST /api/dispatch` via Antigravity's native `agentapi` CLI without mutating `.omagy/` files directly, while `window.addEventListener('message', ...)` rejects null/foreign `event.source` frames and reconnects `/api/events` on `workspace-change`.
 - `.omagy/state/*-state.json` and `.omagy/state/sessions/*/*-state.json`: mode, active, current_phase, iteration, updated_at (aggregate across the 5 newest session directories by default, or filter to a requested `--session=<id>`).
 - `.omagy/ultragoal/goals.json` and the tail of `ledger.jsonl`: goal counts by status, current goal

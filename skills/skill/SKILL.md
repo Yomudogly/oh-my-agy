@@ -1,6 +1,6 @@
 ---
 name: skill
-description: "[oh-my-agy] Author, scaffold, validate, and manage Antigravity skills: list, init, add, edit, remove, search, info, sync, setup, scan, validate, test, eval, and extract SKILL.md folders across project, shared (.agents/skills.json), and user scopes with progressive-disclosure references/ and scripts/ bundles. Use for $skill <command> or when creating, scaffolding, validating, sharing, or capturing a repeatable workflow as a SKILL.md skill."
+description: "[oh-my-agy] Author, scaffold, validate, scan, and manage Antigravity SKILL.md packs across project, shared (.agents/skills.json), and user scopes with references and scripts. Use for $skill or custom SKILL.md workflows."
 ---
 
 # Skill Authoring & Management

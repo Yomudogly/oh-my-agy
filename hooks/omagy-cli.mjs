@@ -471,7 +471,7 @@ export function validateFrontmatterYaml(rawMarkdown, allowedKeys = ['name', 'des
       }
       errors.push(`expected_array:${key}`); fields[key] = []; continue;
     }
-    if (okKey && (key === 'subagent' || key === 'mainAgent')) {
+    if (okKey && (key === 'subagent' || key === 'mainAgent' || key === 'disable-slash-command')) {
       const pb = rawVal.replace(/\s+#.*$/, '').trim();
       if (pb !== 'true' && pb !== 'false') errors.push(`invalid_boolean:${key}`);
       fields[key] = pb; continue;
