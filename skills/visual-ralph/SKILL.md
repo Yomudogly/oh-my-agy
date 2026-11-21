@@ -7,7 +7,7 @@ description: "[oh-my-agy] Measured frontend UI matching an approved visual targe
 
 Use `$visual-ralph` for measured frontend implementation from an approved generated reference, static image, or live-URL baseline, and `$visual-ralph --design` to create, refresh, or audit the repository's durable `DESIGN.md` design-system contract.
 
-- **Visual-reference implementation (default `$visual-ralph`)**: `description / URL -> approved reference -> $ultragoal implementation -> Visual Ralph verdict + pixel diff -> reusable design system` (including migrated `$web-clone` URL cloning).
+- **Visual-reference implementation (default `$visual-ralph`)**: `description / URL -> approved reference -> $ultragoal implementation -> Visual Ralph verdict + pixel diff -> reusable design system`.
 - **Design-system governance (`$visual-ralph --design`)**: author, extract from a live URL, audit/lint (`validate-design-md`), or sync (`StitchMCP`) repository-root `DESIGN.md` in the Google Stitch Two-Layer format (YAML frontmatter `colors`/`typography`/`spacing`/`shapes` + 8 canonical `## ` sections: `Overview`, `Colors`, `Typography`, `Layout`, `Elevation & Depth`, `Shapes`, `Components`, `Do's and Don'ts` with `{category.subpath}` token references). See [design-system-stitch.md](./references/design-system-stitch.md).
 
 Shared operating, delegation, state, and verification invariants live in the oh-my-agy rules (`rules/AGENTS.md`).

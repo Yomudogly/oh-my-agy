@@ -41,7 +41,6 @@ import {
   RESERVED_GATE_SKILLS,
   SKILLS,
   STALE_MS,
-  SUNSET_GATE_SKILLS,
   activeStates,
   analyzeDiffCodeHealth,
   appendJsonlRecord,
@@ -831,14 +830,14 @@ export async function runSelftest() {
     fs.writeFileSync(path.join(subPkg, 'index.ts'), 'export const ok = true;\n');
 
     const transcript = path.join(ws, 'transcript.jsonl');
-    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $hud --handoff on packages/core/index.ts, plus $handoff $plan $design $omagy-setup /plan $nonexistent' })}\n`);
+    fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $hud --handoff on packages/core/index.ts, plus /plan $nonexistent' })}\n`);
     const p1 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 1 });
     const stepTexts = (p1.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '');
     const p1NoLegacy = (p1.injectSteps || []).every((s) => s && s.ephemeralMessage === undefined);
     const routeMsg = stepTexts[0] || '';
     const wikiMsg = stepTexts.find((t) => t.includes('Project Wiki index')) || '';
     const subdirMsg = stepTexts.find((t) => t.includes('Subdirectory AGENTS.md')) || '';
-    check('pre-invocation routes $skills in order (including $hud --handoff) and ignores retired skills', p1NoLegacy && routeMsg.includes('$autopilot, $code-review, $hud') && !routeMsg.includes('$handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('$design') && !routeMsg.includes('$omagy-setup') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
+    check('pre-invocation routes $skills in order (including $hud --handoff) and ignores unknown skills', p1NoLegacy && routeMsg.includes('$autopilot, $code-review, $hud') && !routeMsg.includes('$plan') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
     check('pre-invocation injects working agreements + bounded wiki index (<=3500 chars)', wikiMsg.includes('Working Agreements') && wikiMsg.length <= MAX_WIKI_CONTEXT_CHARS && wikiMsg.includes('Wiki index truncated'), `len=${wikiMsg.length}`);
     check('pre-invocation discovers subdirectory AGENTS.md on touched path', subdirMsg.includes('packages/core/AGENTS.md') && subdirMsg.includes('Keep core zero-dependency'));
     check('pre-invocation injects once per user message', Object.keys(preInvocation({ ...base, transcriptPath: transcript, invocationNum: 2 })).length === 0);
@@ -941,6 +940,25 @@ export async function runSelftest() {
     const subPreNoLegacy = (subPre.injectSteps || []).every((s) => s && s.ephemeralMessage === undefined);
     const subStop = await stop({ conversationId: `${conv}-sub`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL' });
     check('subagent prompt suppresses quoted $skill routing and unowned parent stop nudges', subPreNoLegacy && !subPreTexts.some((t) => t.includes('Skill routing')) && subStop.decision === 'stop');
+
+    // Native Swarm worker & swarm_pane coexistence (passive isolation without breaking built-in /swarm)
+    const swarmTranscript = path.join(ws, 'swarm-worker-transcript.jsonl');
+    fs.writeFileSync(swarmTranscript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: '<swarm_worker>You own parser.ts. Mention $autopilot in comments only.</swarm_worker>' })}\n`);
+    const swarmPre = preInvocation({ conversationId: `${conv}-swarm-w`, workspacePaths: [ws], transcriptPath: swarmTranscript, invocationNum: 1 });
+    const swarmStop = await stop({ conversationId: `${conv}-swarm-w`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: '@coordinator [done] implemented parser fix' });
+    const swarmArtDir = path.join(ws, 'fake-art-dir');
+    const swarmPlanPath = path.join(swarmArtDir, '.system_generated', 'swarm', 'plan.json');
+    const swarmPlanState = path.join(ws, '.omagy', 'state', 'ralplan-state.json');
+    writeJson(swarmPlanState, { mode: 'ralplan', active: true, current_phase: 'planning', updated_at: new Date().toISOString() });
+    const swarmPlanPtu = preToolUse({
+      conversationId: `${conv}-swarm-coord`,
+      workspacePaths: [ws],
+      artifactDirectoryPath: swarmArtDir,
+      toolCall: { name: 'write_file', args: { Path: swarmPlanPath, Content: '{"goal":{"title":"x","line":"y"}}', Overwrite: true } },
+    }, { guardScope: 'planning' });
+    fs.rmSync(swarmPlanState, { force: true });
+    check('native Swarm worker suppresses OMA routing/stop nudges and planning-guard allows swarm_pane plan.json',
+      Object.keys(swarmPre).length === 0 && swarmStop.decision === 'stop' && swarmPlanPtu.decision === 'allow');
     writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
 
     // Symlink state & planning-guard escape protection
@@ -1049,9 +1067,9 @@ export async function runSelftest() {
       && qgValid.gates[0].skill === 'better-interface' && qgValid.gates[0].mode === 'blocking'
       && qgValid.gates[1].skill === 'security-audit' && qgValid.gates[1].mode === 'advisory' && qgValid.gates[1].model === 'pro');
 
-    writeJson(path.join(qgRoot, '.omagy', 'config.json'), { qualityGates: { ralplan: ['ralplan', 'ralph'], review: ['security-audit'] } });
+    writeJson(path.join(qgRoot, '.omagy', 'config.json'), { qualityGates: { ralplan: ['ralplan', 'bad skill!'], review: ['security-audit'] } });
     const qgInvalid = validateQualityGates(qgRoot);
-    check('validateQualityGates rejects self-recursive controller skills, sunset skills, and legacy stage keys', qgInvalid.ok === false && qgInvalid.errors.length === 3);
+    check('validateQualityGates rejects self-recursive controller skills, invalid skill slugs, and unsupported stage keys', qgInvalid.ok === false && qgInvalid.errors.length === 3);
 
     // Verify hooks.json split PreToolUse matchers (write-guards enabled, planning-guard disabled, both write-only without read_file/view_file)
     const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1628,13 +1646,13 @@ export async function runSelftest() {
     if (!criticTxtT34.includes('APPROVE') || !criticTxtT34.includes('ITERATE') || !criticTxtT34.includes('REJECT') || /\bOKAY\b/.test(criticTxtT34)) {
       clashHygieneIssues.push('critic:verdict-mismatch');
     }
-    if (!rulesTxtT34.includes('$swarm') || /and\s+`?swarm`?\s+are\s+deprecated/i.test(rulesTxtT34)) {
-      clashHygieneIssues.push('rules:bare-swarm-clash');
+    if (/\$(?:ralph|ultrawork|pipeline|swarm)\b|\becomode\b/i.test(rulesTxtT34)) {
+      clashHygieneIssues.push('rules:stale-deprecated-skill-list');
     }
     if (prSkillTxtT34.includes('gh run ' + 'rerun')) {
       clashHygieneIssues.push('pr:gh-run-rerun');
     }
-    check('zero static Default effort: lines, zero foreign/retired subagent names, clash-free $swarm/critic/pr contracts, and zero upstream provenance references across plugin files',
+    check('zero static Default effort: lines, zero foreign/retired subagent names, clean AGENTS.md/critic/pr contracts, and zero upstream provenance references across plugin files',
       effortViolations.length === 0
       && foreignViolations.length === 0
       && provenanceViolations.length === 0
@@ -1865,7 +1883,7 @@ export async function runSelftest() {
       const retiredSkills = ['omagy-setup', 'configure-notifications', 'best-practice-research', 'autoresearch', 'handoff', 'plan', 'design'];
       const retiredDirsAbsent = retiredSkills.every((s) => !fs.existsSync(path.join(pluginRoot, 'skills', s)));
       const hookMod = await import('./omagy-hook.mjs');
-      const zeroAliases = hookMod.SKILL_ALIASES === undefined && SKILLS.length === 23;
+      const zeroAliases = hookMod.SKILL_ALIASES === undefined && hookMod.SUNSET_GATE_SKILLS === undefined && SKILLS.length === 23;
 
       const docSetupRef = path.join(pluginRoot, 'skills', 'doctor', 'references', 'setup-and-init-deep.md');
       const docNotifRef = path.join(pluginRoot, 'skills', 'doctor', 'references', 'notifications.md');
@@ -1898,17 +1916,14 @@ export async function runSelftest() {
         && CONTINUATION_MODES.includes('autoresearch')
         && autoStop.decision === 'continue';
 
-      const sunsetWs = path.join(ws, 't42-sunset-ws');
-      writeJson(path.join(sunsetWs, '.omagy', 'config.json'), {
-        qualityGates: { ralplan: [...retiredSkills, 'swarm'] },
+      const gateWs = path.join(ws, 't42-gate-ws');
+      writeJson(path.join(gateWs, '.omagy', 'config.json'), {
+        qualityGates: { ralplan: ['ralplan', 'autopilot', 'team'] },
       });
-      const sunsetGateRes = validateQualityGates(sunsetWs, 'ralplan');
-      const allSunsetRegistered = [...retiredSkills, 'swarm'].every((s) => SUNSET_GATE_SKILLS.has(s));
-      const joinedGateErrors = sunsetGateRes.errors.join('\n');
-      const sunsetHintsOk = sunsetGateRes.ok === false
-        && sunsetGateRes.errors.length === 8
-        && allSunsetRegistered
-        && ['$doctor --setup', '$doctor --notifications', '$deep-research --quick', '$deep-research --loop', '$hud --handoff', '$ralplan --light', '$visual-ralph --design', "'$swarm'"].every((h) => joinedGateErrors.includes(h));
+      const reservedGateRes = validateQualityGates(gateWs, 'ralplan');
+      const reservedGatesOk = reservedGateRes.ok === false
+        && reservedGateRes.errors.length === 3
+        && !RESERVED_GATE_SKILLS.has('verification');
 
       const evalCasesObj = readJson(path.join(pluginRoot, 'hooks', 'skill-eval-cases.json')) || {};
       const evalSkillsMap = evalCasesObj.skills || {};
@@ -1949,12 +1964,12 @@ export async function runSelftest() {
         && hudCatT42.skills.length === 23
         && Boolean(cancelHud && Array.isArray(cancelHud.flags) && !cancelHud.flags.includes('--all'));
 
-      t42Ok = retiredDirsAbsent && zeroAliases && foldedRefsOk && modesCompatOk && sunsetHintsOk && evalSchemaClean && staleSkillRefs.length === 0 && hudSkillsOk;
-      t42Detail = `retiredAbsent=${retiredDirsAbsent} zeroAliases=${zeroAliases} folded=${foldedRefsOk} modes=${modesCompatOk} sunset=${sunsetHintsOk} eval=${evalSchemaClean} staleRefs=${staleSkillRefs.join(',') || '0'} hudSkills=${hudCatT42.skills?.length}`;
+      t42Ok = retiredDirsAbsent && zeroAliases && foldedRefsOk && modesCompatOk && reservedGatesOk && evalSchemaClean && staleSkillRefs.length === 0 && hudSkillsOk;
+      t42Detail = `retiredAbsent=${retiredDirsAbsent} zeroAliases=${zeroAliases} folded=${foldedRefsOk} modes=${modesCompatOk} reserved=${reservedGatesOk} eval=${evalSchemaClean} staleRefs=${staleSkillRefs.join(',') || '0'} hudSkills=${hudCatT42.skills?.length}`;
     } catch (e) { /* fail open: capture T42 error detail */
       t42Detail = e instanceof Error ? e.message : String(e);
     }
-    check('23-skill catalog unlinks 7 retired dirs, preserves plan/autoresearch mode compatibility, enforces sunset hints ($swarm), reconciles eval negatives, and cleans HUD/docs',
+    check('23-skill catalog has zero legacy alias/sunset shims, preserves plan/autoresearch mode compatibility, rejects reserved controller gates, reconciles eval negatives, and cleans HUD/docs',
       t42Ok, t42Detail);
 
     // T43: computeWcagContrast WCAG 2.1 math, 3-level+ flattenTokens ({value, role}), and all 5 canonical starter presets

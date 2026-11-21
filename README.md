@@ -39,7 +39,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 oh-my-agy/
 ├── .gitattributes            # LF line-ending normalization across POSIX & Windows checkouts
 ├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 24)
-├── plugin.json               # Antigravity manifest (v0.9.0, strict 10-key JSON · hooks 4 · mcpServers 1)
+├── plugin.json               # Antigravity manifest (v0.9.1, strict 10-key JSON · hooks 4 · mcpServers 1)
 ├── assets/
 │   ├── logo.png              # Transparent plugin icon (346x346)
 │   └── sidecar-hud.webp      # Live Aux Pane HUD showcase screenshot (<=2 MB WebP)
@@ -150,7 +150,7 @@ sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh host-validate claude --strict
 #### 3. First-Run Activation (Codex & Claude Code)
 
 - **OpenAI Codex / Codex Desktop**:
-  - Registers a native local Codex UI plugin (`oh-my-agy@oh-my-agy-local`) across `~/.codex/marketplaces/oh-my-agy`, `~/.codex/plugins/cache/oh-my-agy-local/oh-my-agy/<version>`, `~/.codex/plugins/oh-my-agy`, `~/.codex/agents/*.toml`, adapted `~/.codex/AGENTS.md` (zero `Antigravity`/`sidecar://` mentions), and `~/.codex/config.toml` (`[agents].enabled = true` and `[features].hooks = true`, stripping deprecated `[features].multi_agent` while preserving `[mcp_servers]`, `[projects]`, and `[hooks.state]`). Legacy duplicate `oh-my-agy` entries in `~/.codex/hooks.json` and `~/.codex/skills/` are automatically cleaned without touching `.system/` or custom user files.
+  - Registers a native local Codex UI plugin (`oh-my-agy@oh-my-agy-local`) across `~/.codex/marketplaces/oh-my-agy`, `~/.codex/plugins/cache/oh-my-agy-local/oh-my-agy/<version>`, `~/.codex/plugins/oh-my-agy`, `~/.codex/agents/*.toml`, adapted `~/.codex/AGENTS.md` (zero `Antigravity`/`sidecar://` mentions), bundled read-only MCP server (`mcp/` + resolved `.mcp.json` for user-scope plugins, or `[mcp_servers.oh-my-agy_state]` for project-scope `.codex/config.toml`), and `~/.codex/config.toml` (`[agents].enabled = true` and `[features].hooks = true`, stripping deprecated `[features].multi_agent` while preserving foreign `[mcp_servers]`, `[projects]`, and `[hooks.state]`). Legacy duplicate `oh-my-agy` entries in `~/.codex/hooks.json` and `~/.codex/skills/` are automatically cleaned without touching `.system/` or custom user files.
   - Reload Codex Desktop so **Oh My Agy** appears under **Installed Plugins** (note: Codex's plugin detail UI currently lists **Skills** and **Hooks**, while custom role agents load from `~/.codex/agents/*.toml` and `[agents.<role>]` in `config.toml`), approve hooks once via `/hooks`, and run `/hud` (or `$hud`) inside Codex Desktop to launch/reuse the localhost HUD (`#212121` theme, Copy-only prompt buttons) and print a clickable `[oh-my-agy HUD](http://127.0.0.1:<port>/)` link.
 - **Claude Code / Claude Desktop**:
   - Installs a standalone `~/.claude/plugins/oh-my-agy` bundle and adapted global rules at `~/.claude/rules/oh-my-agy.md`. Load the plugin in Claude Code sessions with `claude --plugin-dir ~/.claude/plugins/oh-my-agy`.

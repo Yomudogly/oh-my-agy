@@ -50,7 +50,6 @@ instructions always take precedence.
 - **`$team`**: coordinated parallel execution across multiple subagent lanes on an approved plan.
 - Bounded helpers inside the active lane: `$code-review`, `$ultraqa`, `$deep-research`, `$ai-slop-cleaner`, `$loft`, `$pr`, `$hud --handoff`, `$modernize`, `$threat-model`, `$release`.
 - Stages may run standalone when their input contract is satisfied. `$deep-interview` is not `$ralplan --interview`.
-- `$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, and `$swarm` are deprecated and unsupported. Do not route there.
 
 ## Role subagents
 

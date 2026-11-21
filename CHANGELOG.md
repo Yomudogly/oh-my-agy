@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 — 2026-11-21
+### Deprecated-Skill Cleanup & Passive Native Swarm Coexistence (`100/100` Selftest)
+- **Removed Redundant Legacy Skill Reminders & Sunset Blockers**:
+  - Removed the deprecated-skills bullet (`$ralph`, `$ultrawork`, `$pipeline`, `ecomode`, `$swarm`) from `rules/AGENTS.md`, trimming always-on context tokens.
+  - Removed `SUNSET_GATE_SKILLS`, `SUNSET_GATE_HINTS`, the sunset-skill rejection branch in `validateQualityGates()`, the unused `'verification'` entry in `RESERVED_GATE_SKILLS`, and the dead `s?.ephemeralMessage` fallback in `hooks/omagy-hook.mjs`.
+  - Removed the stale migrated `$web-clone` note from `skills/visual-ralph/SKILL.md`.
+- **Passive Native Swarm Coexistence & `run_workflow` Team Fast Path (`hooks/omagy-hook.mjs`, `skills/team/SKILL.md`, `hooks/omagy-selftest.mjs`)**:
+  - Extended `isSubagentPayload()` to detect native Swarm workers (`<swarm_worker>`, `swarm_monitor`, `swarm_narrator`, `isSwarmWorker`/`swarmMember`), exempted `<artifactDir>/.system_generated/swarm/plan.json` from the opt-in `planning-guard`, and skipped completion drift/freshness blockers and outbound `notify()` on subagent/Swarm worker turns in `Stop`.
+  - Updated `skills/team/SKILL.md` to prefer `run_workflow` (`parallel`/`pipeline`, `type_name`, `workspace="share"`, JSON `schema`) over wrapping built-in `/swarm` inside `$team`, preserving `agents/*.md` role sandboxing and `.omagy/evidence/` receipts.
+- **Hygiene & Regression Parity (`T34`, `T42`, `100/100` Selftest)**:
+  - Flipped `T34` in `hooks/omagy-selftest.mjs` to guard against stale deprecated-skill lists creeping back into `rules/AGENTS.md`, updated `T42` to assert `SUNSET_GATE_SKILLS === undefined && SKILL_ALIASES === undefined`, added the Swarm worker & `swarm_pane` coexistence check (`100/100`), and synced `plugin.json`, `mcp/server.mjs`, `README.md`, `HOW_TO_USE.md`, `UPSTREAM_TRACKING.md`, and `omagy_wiki/` to `v0.9.1` (including documenting native Codex `.mcp.json` / `[mcp_servers.oh-my-agy_state]` wiring in `README.md`).
+
 ## 0.9.0 — 2026-11-21
 ### Antigravity Spec Modernization, Zero-Dep Read-Only MCP Server & Asset Hygiene (`99/99` Selftest, `100%` `skill-eval`, `mcpServers 1`)
 - **Modernized Hook Protocol, Split Write-Only Guards & POSIX `run.sh` (`hooks.json`, `hooks/omagy-hook.mjs`, `hooks/omagy-host.mjs`, `hooks/run.sh`, `T62`)**:

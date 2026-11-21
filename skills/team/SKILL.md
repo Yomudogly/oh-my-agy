@@ -14,7 +14,7 @@ In Antigravity, workers are **subagents**:
 - coordinate: `send_message` to a worker's conversation ID
 - monitor/stop: `manage_subagents` (`list`, `kill`)
 - isolate: prefer `Workspace: "share"` (shared git object store with an independent branch, like `git worktree`) over `"branch"` (isolated clone deleted when the subagent is killed) whenever workers write overlapping areas or commit recovery matters.
-- **Native `swarm` fast path**: when a native `swarm` tool (shared message board, `tasks` sharding, `workspace: "share"`) is available in the active host, prefer it as a fast path alongside the file-backed `.omagy/state/team/` DAG contract; otherwise fall back to `invoke_subagent` / `send_message`. Keep `.omagy/evidence/` receipts intact in both paths.
+- **Native `run_workflow` fast path**: when a native `run_workflow` tool (`parallel`/`pipeline`, `type_name`, `workspace="share"`, JSON `schema`) is available in the active host, prefer it for scripted DAG fan-outs that preserve `agents/*.md` role sandboxing alongside the file-backed `.omagy/state/team/` contract; otherwise fall back to `invoke_subagent` / `send_message`. Reserve built-in `/swarm` for standalone open-ended peer-to-peer sessions rather than wrapping it inside `$team`, and keep `.omagy/evidence/` receipts intact in all paths.
 
 ## Inputs and preconditions
 

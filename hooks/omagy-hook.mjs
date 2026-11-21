@@ -224,12 +224,13 @@ export function hasSymlinkSegment(rootPath, targetPath) {
   }
   return false;
 }
-const SUBAGENT_PROMPT_RE = /^(?:\s*TEAM\s+\S+\s+[—-]\s+TASK\b|\s*<identity>\s*\n\s*You are |\s*<antigravity_runtime>)/m;
+const SUBAGENT_PROMPT_RE = /^(?:\s*TEAM\s+\S+\s+[—-]\s+TASK\b|\s*<identity>\s*\n\s*You are |\s*<antigravity_runtime>|\s*<swarm_worker\b)/m;
+const SWARM_WORKER_PROMPT_RE = /<swarm_worker\b|\bYou are this swarm's (?:stall monitor|narrator)\b/i;
 function isSubagentPayload(payload, userText = '') {
   if (!payload || typeof payload !== 'object') return false;
-  if (payload.isSubagent === true || payload.is_subagent === true) return true;
-  if (payload.parentConversationId || payload.parent_conversation_id || payload.subagentType || payload.subagent_type || payload.agent_id || payload.agent_type || payload.agentId || payload.agentType) return true;
-  return Boolean(userText && (SUBAGENT_PROMPT_RE.test(userText) || userText.includes('<antigravity_runtime>')));
+  if (payload.isSubagent === true || payload.is_subagent === true || payload.isSwarmWorker === true || payload.is_swarm_worker === true) return true;
+  if (payload.parentConversationId || payload.parent_conversation_id || payload.subagentType || payload.subagent_type || payload.agent_id || payload.agent_type || payload.agentId || payload.agentType || payload.swarmMember || payload.swarm_member) return true;
+  return Boolean(userText && (SUBAGENT_PROMPT_RE.test(userText) || userText.includes('<antigravity_runtime>') || SWARM_WORKER_PROMPT_RE.test(userText)));
 }
 
 // ---------- mode state & multi-repo root ----------
@@ -688,23 +689,8 @@ export function validateCompletionEvidence(cwd, evidenceRelPath, opts = {}) {
 const QUALITY_GATE_STAGES = new Set(['deep-interview', 'ralplan', 'code-review']);
 export const RESERVED_GATE_SKILLS = new Set([
   'deep-interview', 'ralplan', 'code-review', 'ai-slop-cleaner', 'autopilot',
-  'ultragoal', 'team', 'plan', 'ultraqa', 'cancel', 'verification',
+  'ultragoal', 'team', 'plan', 'ultraqa', 'cancel',
 ]);
-export const SUNSET_GATE_SKILLS = new Set([
-  'ralph', 'ultrawork', 'pipeline', 'ecomode', 'swarm',
-  'omagy-setup', 'configure-notifications', 'best-practice-research',
-  'autoresearch', 'handoff', 'plan', 'design',
-]);
-const SUNSET_GATE_HINTS = {
-  'omagy-setup': 'Use $doctor --setup instead.',
-  'configure-notifications': 'Use $doctor --notifications instead.',
-  'best-practice-research': 'Use $deep-research --quick instead.',
-  autoresearch: 'Use $deep-research --loop instead.',
-  handoff: 'Use $hud --handoff instead.',
-  plan: 'Use $ralplan --light instead.',
-  design: 'Use $visual-ralph --design instead.',
-  swarm: 'Legacy $swarm is unsupported; use $team instead.',
-};
 const VALID_GATE_MODELS = new Set(['inherit', 'flash', 'pro']);
 export function validateQualityGates(cwd, requestedStage = '') {
   const rawCwd = String(cwd || '').trim();
@@ -758,14 +744,7 @@ export function validateQualityGates(cwd, requestedStage = '') {
         continue;
       }
       if (RESERVED_GATE_SKILLS.has(normalized)) {
-        const hint = SUNSET_GATE_HINTS[normalized] ? ` ${SUNSET_GATE_HINTS[normalized]}` : '';
-        errors.push(`Workflow-controller skill '${normalized}' is reserved and cannot be configured as a quality gate for stage '${stage}'.${hint}`);
-        continue;
-      }
-      if (SUNSET_GATE_SKILLS.has(normalized)) {
-        const label = normalized === 'swarm' ? '$swarm' : normalized;
-        const hint = SUNSET_GATE_HINTS[normalized] ? ` ${SUNSET_GATE_HINTS[normalized]}` : '';
-        errors.push(`Sunset skill '${label}' cannot be configured as a quality gate for stage '${stage}'.${hint}`);
+        errors.push(`Workflow-controller skill '${normalized}' is reserved and cannot be configured as a quality gate for stage '${stage}'.`);
         continue;
       }
       if (seenInStage.has(normalized)) {
@@ -2971,7 +2950,13 @@ export function preToolUse(payload, opts = {}) {
     }
   }
 
-  const outsideTarget = targets.find((t) => !isPathInsideAllowedOmagy(roots, t));
+  const isSwarmOverviewPlan = (rawTarget) => {
+    if (!artifactDir) return false;
+    const res = resolveTargetPath(rawTarget);
+    const swarmPlan = path.join(canonicalizePath(artifactDir), '.system_generated', 'swarm', 'plan.json');
+    return res === swarmPlan;
+  };
+  const outsideTarget = targets.find((t) => !isPathInsideAllowedOmagy(roots, t) && !isSwarmOverviewPlan(t));
   if (!outsideTarget) return passThrough();
   const resolved = resolveTargetPath(outsideTarget);
 
@@ -3123,11 +3108,11 @@ export async function stop(payload) {
   const rawReason = rawReasonInput.toLowerCase();
   const isNormalStop = NORMAL_STOP_REASONS.has(rawReason);
 
+  const routingRec = readJson(runtimeFile(conv, 'routing')) || {};
+  const isSubagent = Boolean(routingRec.isSubagent) || isSubagentPayload(payload);
   let decision = allow;
   if (isNormalStop && payload.fullyIdle !== false && !payload.error) {
     const contActive = payload?.continuationActive === true || payload?.continuation_active === true;
-    const routingRec = readJson(runtimeFile(conv, 'routing')) || {};
-    const isSubagent = Boolean(routingRec.isSubagent) || isSubagentPayload(payload);
     const active = activeStates(roots, CONTINUATION_MODES, conv)
       .filter((s) => !isSubagent || (conv && s.owner === String(conv)))
       .filter((s) => !isAwaitingConfirmation(s));
@@ -3156,7 +3141,7 @@ export async function stop(payload) {
       }
     } else {
       try { fs.rmSync(nudgeFile, { force: true }); } catch { /* fail open: ignore missing nudge file */ }
-      if (!contActive) {
+      if (!contActive && !isSubagent) {
         const msg = lastAssistantMessage(payload);
         const justCompleted = roots.flatMap((r) => loadModeStates(r, conv)).some(
           (s) => !s.foreignOwner && String(s.data.current_phase || '').toLowerCase() === 'complete' && Date.now() - updatedMs(s) < 60 * 1000,
@@ -3198,7 +3183,7 @@ export async function stop(payload) {
     }
   }
 
-  if (decision.decision !== 'continue') {
+  if (decision.decision !== 'continue' && !isSubagent) {
     await notify(payload, roots).catch(() => {});
   }
   return decision;
@@ -3356,7 +3341,7 @@ async function main() {
         const ws = workspaceRoots(payload)[0] || process.cwd();
         const txt = String(payload.lastUserInput || payload.last_user_input || payload.prompt || rawPayload?.prompt || '');
         const hudAsk = detectSkills(txt).includes('hud')
-          || (result.injectSteps || []).some((s) => String(s?.systemMessage?.systemMessage || s?.ephemeralMessage || '').includes('$hud'));
+          || (result.injectSteps || []).some((s) => String(s?.systemMessage?.systemMessage || '').includes('$hud'));
         if (hudAsk || !fs.existsSync(desktopHudRegistryFile(ws))) {
           const hud = await ensureDesktopHudDaemon({ host, workspace: ws, pluginRoot, env: process.env, argv1: process.argv[1] });
           if (hud?.message) extra.push(hud.message);

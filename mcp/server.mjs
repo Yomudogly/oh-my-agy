@@ -31,7 +31,7 @@ console.info = (...args) => console.error(...args);
 
 const SERVER_INFO = Object.freeze({
   name: 'oh-my-agy-state',
-  version: '0.9.0',
+  version: '0.9.1',
 });
 
 const DEFAULT_PROTOCOL_VERSION = '2024-11-05';
