@@ -1005,14 +1005,14 @@ export function setupHostBundle(options = {}) {
   const hooksConfig = buildHostHooksJson(host, bundleDir, { platform });
   writeRealFileSync(path.join(hooksDstDir, 'hooks.json'), `${JSON.stringify(hooksConfig, null, 2)}\n`);
 
-  // 2. Link/copy sidecars/ and assets/ (omitting 82MB README demo GIF), and write host-adapted rules/AGENTS.md
+  // 2. Link/copy sidecars/ and assets/ (omitting README showcase animation), and write host-adapted rules/AGENTS.md
   if (linkOrCopyDir(path.join(pluginRoot, 'sidecars'), path.join(bundleDir, 'sidecars'), usedCopy)) usedCopy = true;
   const assetsSrcDir = path.join(pluginRoot, 'assets');
   const assetsDstDir = path.join(bundleDir, 'assets');
   resetRealCleanDir(assetsDstDir);
   if (fs.existsSync(assetsSrcDir)) {
     for (const name of fs.readdirSync(assetsSrcDir)) {
-      if (name === '.DS_Store' || name === 'sidecar-hud.gif') continue;
+      if (name === '.DS_Store' || name === 'sidecar-hud.gif' || name === 'sidecar-hud.webp') continue;
       const src = path.join(assetsSrcDir, name);
       const dst = path.join(assetsDstDir, name);
       const st = fs.statSync(src);
@@ -1459,6 +1459,7 @@ export function validateHostBundle(options = {}) {
     checkSubtreeSymlinks(path.join(bundleDir, sub), sub, allowedRoots, disallowSymlinks, errors);
   }
   if (fs.existsSync(path.join(bundleDir, 'assets', 'sidecar-hud.gif'))) errors.push('unexpected_large_asset:sidecar-hud.gif');
+  if (fs.existsSync(path.join(bundleDir, 'assets', 'sidecar-hud.webp'))) errors.push('unexpected_large_asset:sidecar-hud.webp');
   checkHostProseClean(path.join(bundleDir, 'rules', 'AGENTS.md'), 'rules/AGENTS.md', errors);
 
   const skillsDir = path.join(bundleDir, 'skills');

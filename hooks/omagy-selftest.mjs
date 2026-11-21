@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
@@ -3000,7 +3001,7 @@ export async function runSelftest() {
       for (const sd of fs.readdirSync(path.join(pluginRoot, 'skills')).sort()) {
         const sf = path.join(pluginRoot, 'skills', sd, 'SKILL.md');
         if (!fs.existsSync(sf)) continue;
-        const dm = fs.readFileSync(sf, 'utf8').match(/^description:\s*(.*)$/m);
+        const dm = readFixture(sf).match(/^description:\s*(.*)$/m);
         totalShippedDescChars += dm ? dm[1].length : 0;
       }
       const descBudgetOk = totalShippedDescChars > 0 && totalShippedDescChars <= 5800;
@@ -3353,7 +3354,7 @@ export async function runSelftest() {
       const xCopyVal = validateHostBundle({ host: 'codex', dir: codexCopyBundle, workspace: codexProj, codexHome: codexCopyHome, scope: 'user', pluginRoot, strict: true });
       const codexCopyMdCount = fs.readdirSync(path.join(codexCopyBundle, 'agents')).filter((f) => f.endsWith('.md')).length;
 
-      // In-place symlink-to-copy upgrade must clear legacy symlinks (rules/AGENTS.md, assets/sidecar-hud.gif) without mutating pluginRoot
+      // In-place symlink-to-copy upgrade must clear legacy symlinks (rules/AGENTS.md, assets/sidecar-hud.{gif,webp}) without mutating pluginRoot
       const symUpgradeHome = path.join(t54Root, 'codex-sym-upgrade-home');
       const symUpgradeBundle = path.join(t54Root, 'codex-sym-upgrade-bundle');
       setupHostBundle({ host: 'codex', dir: symUpgradeBundle, workspace: codexProj, codexHome: symUpgradeHome, scope: 'user', pluginRoot, symlink: true });
@@ -3362,6 +3363,7 @@ export async function runSelftest() {
         fs.rmSync(upgRulesFile, { force: true });
         fs.symlinkSync(path.join(pluginRoot, 'rules', 'AGENTS.md'), upgRulesFile);
         fs.symlinkSync(path.join(pluginRoot, 'README.md'), path.join(symUpgradeBundle, 'assets', 'sidecar-hud.gif'));
+        fs.symlinkSync(path.join(pluginRoot, 'README.md'), path.join(symUpgradeBundle, 'assets', 'sidecar-hud.webp'));
       } catch { /* fail open: skip symlink plant when OS disallows symlinks */ }
       const xUpgradeRes = setupHostBundle({ host: 'codex', dir: symUpgradeBundle, workspace: codexProj, codexHome: symUpgradeHome, scope: 'user', pluginRoot });
       const xUpgradeVal = validateHostBundle({ host: 'codex', dir: symUpgradeBundle, workspace: codexProj, codexHome: symUpgradeHome, scope: 'user', pluginRoot, strict: true });
@@ -3370,6 +3372,7 @@ export async function runSelftest() {
         && xUpgradeVal.ok === true
         && !fs.lstatSync(path.join(symUpgradeBundle, 'rules', 'AGENTS.md')).isSymbolicLink()
         && !fs.existsSync(path.join(symUpgradeBundle, 'assets', 'sidecar-hud.gif'))
+        && !fs.existsSync(path.join(symUpgradeBundle, 'assets', 'sidecar-hud.webp'))
         && readFixture(path.join(pluginRoot, 'rules', 'AGENTS.md')) === repoAgentsBefore;
       const t54ShBin = process.platform === 'win32' ? 'sh' : '/bin/sh';
       const t54RunSh = path.join(pluginRoot, 'hooks', 'run.sh');
@@ -3435,7 +3438,8 @@ export async function runSelftest() {
       const codexTeamYaml = readFixture(path.join(codexBundle, 'skills', 'team', 'agents', 'openai.yaml'));
       const codexProseClean = !/\bantigravity\b|sidecar:\/\/|customization:\/\/|\bmanage_task\b/i.test(codexAgentsMdRaw + codexHudSkillMd + codexTeamYaml)
         && codexHudSkillMd.includes('desktop-ensure')
-        && !fs.existsSync(path.join(codexBundle, 'assets', 'sidecar-hud.gif'));
+        && !fs.existsSync(path.join(codexBundle, 'assets', 'sidecar-hud.gif'))
+        && !fs.existsSync(path.join(codexBundle, 'assets', 'sidecar-hud.webp'));
       const codexTomlCount = fs.readdirSync(path.join(codexHome, 'agents')).filter((f) => f.endsWith('.toml')).length;
       const openaiYamlCount = fs.readdirSync(path.join(codexBundle, 'skills')).filter((d) => fs.existsSync(path.join(codexBundle, 'skills', d, 'agents', 'openai.yaml'))).length;
       const bundleMeta = JSON.parse(readFixture(path.join(codexBundle, 'host-bundle.json')));
@@ -4695,6 +4699,67 @@ export async function runSelftest() {
       t63Detail = e instanceof Error ? e.message : String(e);
     }
     check('T63: G5 read-only stdio MCP server (chunked/batched JSON-RPC 2.0, 6 tools, path/symlink containment, zero mutation) & mcp-audit mcp_config.json pass', t63Ok, t63Detail);
+
+    // T64: G6 asset hygiene — no sidecar-hud.gif, sidecar-hud.webp <= 2 MiB with RIFF....WEBP, logo.png RGBA (IHDR byte 25 === 6, square >=128, transparent corner), zero .DS_Store files
+    let t64Ok = false;
+    let t64Detail = '';
+    try {
+      const gifPath = path.join(pluginRoot, 'assets', 'sidecar-hud.gif');
+      const webpPath = path.join(pluginRoot, 'assets', 'sidecar-hud.webp');
+      const logoPngPath = path.join(pluginRoot, 'assets', 'logo.png');
+      const gifAbsent = !fs.existsSync(gifPath);
+      const webpInfo = readHeaderBytes(webpPath, 16);
+      const webpValid = fs.existsSync(webpPath)
+        && webpInfo.size > 0
+        && webpInfo.size <= 2 * 1024 * 1024
+        && webpInfo.buf.length >= 12
+        && webpInfo.buf.subarray(0, 4).toString('ascii') === 'RIFF'
+        && webpInfo.buf.subarray(8, 12).toString('ascii') === 'WEBP';
+
+      const logoRaw = readHeaderBytes(logoPngPath, 512 * 1024).buf;
+      const logoSigOk = logoRaw.length >= 29
+        && logoRaw[0] === 0x89 && logoRaw[1] === 0x50 && logoRaw[2] === 0x4e && logoRaw[3] === 0x47
+        && logoRaw[4] === 0x0d && logoRaw[5] === 0x0a && logoRaw[6] === 0x1a && logoRaw[7] === 0x0a
+        && logoRaw.subarray(12, 16).toString('ascii') === 'IHDR';
+      const logoW = logoSigOk ? logoRaw.readUInt32BE(16) : 0;
+      const logoH = logoSigOk ? logoRaw.readUInt32BE(20) : 0;
+      const logoColorType = logoSigOk ? logoRaw[25] : -1;
+      let cornerAlpha = -1;
+      if (logoSigOk && logoColorType === 6) {
+        const idatChunks = [];
+        let off = 8;
+        while (off + 12 <= logoRaw.length) {
+          const len = logoRaw.readUInt32BE(off);
+          const type = logoRaw.subarray(off + 4, off + 8).toString('ascii');
+          if (off + 12 + len > logoRaw.length) break;
+          if (type === 'IDAT') idatChunks.push(logoRaw.subarray(off + 8, off + 8 + len));
+          off += 12 + len;
+          if (type === 'IEND') break;
+        }
+        if (idatChunks.length > 0) {
+          const inflated = zlib.inflateSync(Buffer.concat(idatChunks));
+          if (inflated.length >= 5) cornerAlpha = inflated[4];
+        }
+      }
+      const logoOk = logoSigOk && logoColorType === 6 && logoW === logoH && logoW >= 128 && cornerAlpha === 0;
+
+      const dsStoreFiles = [];
+      const walkDs = (dir) => {
+        for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (ent.name === '.git' || ent.name === 'node_modules') continue;
+          const p = path.join(dir, ent.name);
+          if (ent.name === '.DS_Store') dsStoreFiles.push(path.relative(pluginRoot, p));
+          else if (ent.isDirectory()) walkDs(p);
+        }
+      };
+      walkDs(pluginRoot);
+
+      t64Ok = gifAbsent && webpValid && logoOk && dsStoreFiles.length === 0;
+      t64Detail = `gifAbsent=${gifAbsent} webp=${webpInfo.size}B(valid=${webpValid}) logo=${logoW}x${logoH}/ct=${logoColorType}/a0=${cornerAlpha} dsStore=${dsStoreFiles.length}`;
+    } catch (e) { /* fail open: capture T64 error detail */
+      t64Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T64: G6 asset hygiene (no sidecar-hud.gif, <=2MB RIFF/WEBP sidecar-hud.webp, RGBA transparent logo.png, zero .DS_Store)', t64Ok, t64Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

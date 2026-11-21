@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, live HUD sidecar tab, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.8.1`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
+This guide covers every workflow skill, role subagent, live HUD sidecar tab, read-only MCP tool, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.9.0`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
 
 ---
 
@@ -205,7 +205,7 @@ Turns a brief or plan into `.omagy/ultragoal/goals.json`, verifies `.omagy/plans
 #### `/team` — Coordinated Parallel Subagent Workers (`--amend` & `--arena`)
 Dispatches up to 6 concurrent `executor` subagent workers across wave-scheduled DAG tasks stored under `.omagy/state/team/<team-slug>/tasks/task-<id>.json`.
 - **Flags & Features**:
-  - **Work-Shape Model Routing**: `Splittable / Quick` -> `Model: "flash"`, `Cohesive / Deep` -> `Model: "inherit"`, `Ultrabrain` -> `Model: "pro"` (with `ESCALATE_MODEL: pro` upward escalation).
+  - **Work-Shape Model Routing**: Gemini 4 `inherit`-first — `Splittable / Quick` lookup/doc roles -> `Model: "flash"`, `Cohesive / Deep` & `Ultrabrain` -> `Model: "inherit"` (zero hardcoded `model: pro` pins, with `ESCALATE_MODEL: pro` upward escalation when on a lighter parent model).
   - **Safe Workspace Isolation**: Uses `Workspace: "share"` so worker branch commits survive worker shutdown, requiring `.omagy/evidence/task-<id>.json` (`verdict` + `verified_head`) on every code-changing slice.
   - `--amend`: Safely adds, re-scopes, or cancels pending DAG tasks mid-flight without corrupting in-progress worker waves (`references/amend-and-arena.md`).
   - `--arena`: Runs `N=2..3` isolated `Workspace: "share"` workers on the same hard slice and selects the winner via independent `critic` scoring.
@@ -307,7 +307,7 @@ Maps trust boundaries and data flows, enumerates `STRIDE` and OWASP Agentic/LLM 
 Runs pre-release quality gates (`selftest`, `skill-validate --strict`, `docs-drift`, `dep-license-diff`, `wiki-lint`), classifies SemVer bumps, synchronizes `plugin.json` / `CHANGELOG.md` / docs / wiki, validates cross-host dry-run bundles (`host-setup --dry-run`), and prepares rollout/rollback playbooks with explicit confirmation gates before tagging or publishing (`references/rollout-and-compliance.md`).
 - **Example**:
   ```text
-  /release Prepare v0.8.0 release notes, manifest sync, and dry-run bundle validation
+  /release Prepare v0.9.0 release notes, manifest sync, and dry-run bundle validation
   ```
 
 ---
@@ -347,7 +347,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
 
 #### `/doctor` — Diagnostics, Setup, Notifications, Deep Init & Session Forensics
 All-in-one operational health, setup, notification, and transcript forensics toolkit:
-- **Default (`/doctor`)**: Verifies plugin placement, `hooks/run.sh selftest` (`96/96`), `hooks/run.sh skill-validate skills --strict`, `hooks/run.sh skill-eval --min-rank1 95` (`23` skills), `hooks/run.sh floor-guard`, `docs-drift`, `wiki-lint`, `dep-license-diff`, `mcp-audit`, `tmpdir-audit`, `sidecars/hud/run.sh selftest` (`H1`–`H29`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93.7 KB`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md < 24 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 18-agent `tools:` YAML frontmatter, `plugin.json` `v0.8.1` parity, cross-host bundle drift (`host-validate`, experimental), and stale/waiting `.omagy/state/` files.
+- **Default (`/doctor`)**: Verifies plugin placement, `agy plugin validate --strict` (`hooks 4 · mcpServers 1 · skills 23 · agents 18`), `hooks/run.sh selftest` (`99/99`), `hooks/run.sh skill-validate skills --strict` (supporting `disable-slash-command`), `hooks/run.sh skill-eval --min-rank1 95` (`23` skills, `100%` rank-1), `hooks/run.sh floor-guard`, `docs-drift`, `wiki-lint`, `dep-license-diff`, `mcp-audit` (scanning `mcp_config.json`), `tmpdir-audit`, `sidecars/hud/run.sh selftest` (`H1`–`H29`, sandbox-aware `H25`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93.7 KB`, `sidecars/hud/main.mjs < 175 KB` with lazy `selftest.mjs`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md <= 14.5 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 18-agent `tools:` + `call_mcp_tool` YAML frontmatter, `plugin.json` `v0.9.0` parity, cross-host bundle drift (`host-validate`, experimental), and stale/waiting `.omagy/state/` files.
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density, git churn, and infra/migration/CI boundaries (`migrations`, `workflows`, `containers`, `infra`) and generates non-duplicative child `AGENTS.md` files where warranted.
@@ -367,7 +367,7 @@ All-in-one operational health, setup, notification, and transcript forensics too
   ```
 
 #### `/skill` — Author, Scaffold (`init`), Validate (`validate`), Share, Evaluate (`>=95%`), Test & Extract Skills
-Self-contained skill authoring, SDO governance, supply-chain hardening (blocking Trojan Unicode bidi, un-fenced HTML-comment injections, unpinned `curl|sh`/`npx -y @latest`, broken JS scripts, corrupt PNGs, and `> 5 MB` assets), team sharing (`.agents/skills.json`), routing evaluation, pressure-testing, and extraction suite (`skills/skill/SKILL.md` + `references/testing-and-sdo.md`), enforcing 3-level progressive disclosure, degrees-of-freedom calibration, anti-clutter hygiene, and **"Write the Procedure, Not the Workaround"**.
+Self-contained skill authoring, SDO governance, supply-chain hardening (blocking Trojan Unicode bidi, un-fenced HTML-comment injections, unpinned `curl|sh`/`npx -y @latest`, broken JS scripts, corrupt PNGs, and `> 5 MB` assets; supporting boolean `disable-slash-command: true|false` in frontmatter), team sharing (`.agents/skills.json`), routing evaluation (`100%` rank-1 across 23 skills), pressure-testing, and extraction suite (`skills/skill/SKILL.md` + `references/testing-and-sdo.md`), enforcing 3-level progressive disclosure, degrees-of-freedom calibration, anti-clutter hygiene, and **"Write the Procedure, Not the Workaround"**.
 - **Subcommands**: `list`, `info`, `search`, `init <name> [--scope project|shared|user] [--dir <path>] [--resources references,scripts,assets,resources]` (`hooks/run.sh skill-init`), `add`, `edit`, `remove`, `validate [target] [--strict]` (`hooks/run.sh skill-validate`, including `.agents/skills.json` `entries`/`inherits`), `sync` (materialize `.agents/skills.json` into `.agents/skills/`), `eval` (`hooks/run.sh skill-eval --min-rank1 95`), `test <name>` (3-pressure `RED -> GREEN -> REFACTOR` subagent testing), `scan`, `extract` (requires `>= 2` concrete validations, genericized repo-independent paths, and `skill-validate --strict` compliance).
 - **Examples**:
   ```text
@@ -383,27 +383,27 @@ Self-contained skill authoring, SDO governance, supply-chain hardening (blocking
 
 ## 4. All 18 Role Subagents & How Delegation Works
 
-`oh-my-agy` ships 18 specialized subagents in [`agents/`](agents/), each carrying verified `subagent: true`, `mainAgent: false`, and a 3-tier `tools:` YAML allowlist. Skills invoke them via `invoke_subagent`, or you can request them directly in chat.
+`oh-my-agy` ships 18 specialized subagents in [`agents/`](agents/), each carrying verified `subagent: true`, `mainAgent: false`, Gemini 4 `inherit`-first model routing (`model: flash` on `explore` & `doc-steward` only, zero hardcoded `model: pro` pins), `commandExecutionPolicy: sandbox` on repo-inspecting read-only roles, `call_mcp_tool` on MCP-using roles (`explore`, `debugger`, `tracer`, `researcher`, `designer`), and a 3-tier `tools:` YAML allowlist. Skills invoke them via `invoke_subagent`, or you can request them directly in chat.
 
 | Subagent (`TypeName`) | Role & Folded Capabilities | Default Model | `tools:` Tier |
 |---|---|---|---|
-| `explore` | Repo-local file, symbol, and dependency lookup (`codegraph_explore` fast path -> `read_file`) | `flash` | Repo-inspecting read-only |
-| `researcher` | Official docs (`context7` first), version-aware citations (`UNVERIFIED:` guard), plus folded SDK/package comparison, license/CVE audit & migration playbooks | `inherit` | Pure read + web (`read_file`, `search_web`) |
-| `planner` | Folded pre-planning requirements analysis (Capability Map DAG, XY probe, `Always/Ask/Never`, `Must/Should/Might Be True`) + right-sized plans under `.omagy/plans/` | `inherit` | Repo-inspecting read-only |
-| `architect` | Architectural review, Steelman Antithesis, Demolition/ADR Tests, Expand/Contract & Idempotency checks, `CLEAR / WATCH / BLOCK` | `pro` / `inherit` | Repo-inspecting read-only |
-| `critic` | Sequential plan & arena review gate (`APPROVE / ITERATE / REJECT`) with concrete alternatives | `pro` / `inherit` | Repo-inspecting read-only |
+| `explore` | Repo-local file, symbol, and dependency lookup (`codegraph_explore` fast path -> `read_file`) | `flash` | Repo-inspecting read-only (`sandbox`, + `call_mcp_tool`) |
+| `researcher` | Official docs (`context7` first), version-aware citations (`UNVERIFIED:` guard), plus folded SDK/package comparison, license/CVE audit & migration playbooks | `inherit` | Pure read + web (`read_file`, `search_web`, `call_mcp_tool`) |
+| `planner` | Folded pre-planning requirements analysis (Capability Map DAG, XY probe, `Always/Ask/Never`, `Must/Should/Might Be True`) + right-sized plans under `.omagy/plans/` | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `architect` | Architectural review, Steelman Antithesis, Demolition/ADR Tests, Expand/Contract & Idempotency checks, `CLEAR / WATCH / BLOCK` | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `critic` | Sequential plan & arena review gate (`APPROVE / ITERATE / REJECT`) with concrete alternatives | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `executor` | Bounded implementation slices, folded `<team_protocol>` (`VERIFICATION_VERDICTS`, `verified_head`), folded simplification (`Chesterton's Fence`, `Rule of 500`), `ESCALATE_MODEL: pro`, and `Decision:`/`Rejected:`/`Constraint:` trailers | `inherit` (`flash` for trivial) | Implementation write |
-| `debugger` | 4-Phase Iron Law root-cause isolation (`codegraph_explore` fast path), `find-polluter` bisection, LLM01 log quarantine, minimal fix | `inherit` | Implementation write |
-| `tracer` | Competing-hypothesis causal tracing (`H1..Hn`, `codegraph_explore` fast path), 6-tier evidence ranking, rebuttal probes | `pro` / `inherit` | Repo-inspecting read-only |
+| `debugger` | 4-Phase Iron Law root-cause isolation (`codegraph_explore` fast path), `find-polluter` bisection, LLM01 log quarantine, minimal fix | `inherit` | Implementation write (+ `call_mcp_tool`) |
+| `tracer` | Competing-hypothesis causal tracing (`H1..Hn`, `codegraph_explore` fast path), 6-tier evidence ranking, rebuttal probes | `inherit` | Repo-inspecting read-only (`sandbox`, + `call_mcp_tool`) |
 | `test-engineer` | Integration/e2e test strategy, `R/F/C/D` & 2×2 mutation proof, flaky-test hardening, TDD | `inherit` | Implementation write |
-| `verifier` | Independent completion verification and Blind-Claim `AdversarialVerify` (`product` vs `harness` triage) | `inherit` | Repo-inspecting read-only (+ test runs) |
-| `code-reviewer` | Severity- & `Confidence: HIGH\|MEDIUM\|LOW`-rated diff review across Spec and Standards axes + `Lean: -<N> lines` | `pro` / `inherit` | Repo-inspecting read-only |
-| `security-reviewer` | `STRIDE`, OWASP Top 10 & LLM01–LLM10, lifecycle scripts, DNS SSRF, authn/authz, and `lookout` hazard review | `pro` / `inherit` | Repo-inspecting read-only |
-| `supply-chain-auditor` | Read-only SPDX `dep-license-diff`, `mcp-audit`, `skill-validate` Trojan checks, lockfile provenance & pinned CI workflow audits | `pro` / `inherit` | Repo-inspecting read-only |
-| `runtime-qa` | Read-only black-box CLI/process/API edge-case probing, `coverage-map` gaps, zero-assertion test audits, and timeout/signal repros | `inherit` | Repo-inspecting read-only |
+| `verifier` | Independent completion verification and Blind-Claim `AdversarialVerify` (`product` vs `harness` triage) | `inherit` | Repo-inspecting read-only (`sandbox`, + test runs) |
+| `code-reviewer` | Severity- & `Confidence: HIGH\|MEDIUM\|LOW`-rated diff review across Spec and Standards axes + `Lean: -<N> lines` | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `security-reviewer` | `STRIDE`, OWASP Top 10 & LLM01–LLM10, lifecycle scripts, DNS SSRF, authn/authz, and `lookout` hazard review | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `supply-chain-auditor` | Read-only SPDX `dep-license-diff`, `mcp-audit`, `skill-validate` Trojan checks, lockfile provenance & pinned CI workflow audits | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `runtime-qa` | Read-only black-box CLI/process/API edge-case probing, `coverage-map` gaps, zero-assertion test audits, and timeout/signal repros | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `devops-engineer` | CI/CD pipelines, Dockerfiles, runtime alignment, dry-run `host-setup` packaging, and canary/rollback automation | `inherit` | Implementation write |
-| `doc-steward` | Documentation drift (`docs-drift`), `wiki-lint` cross-link hygiene (`0` `isolatedPages`), README/CLI sync, key-only `.env.example`, and release notes | `inherit` | Implementation write |
-| `designer` | UI/UX design decisions and polished frontend implementation grounded in Stitch 2-Layer `DESIGN.md` & Craft Floor | `inherit` | Implementation write |
+| `doc-steward` | Documentation drift (`docs-drift`), `wiki-lint` cross-link hygiene (`0` `isolatedPages`), README/CLI sync, key-only `.env.example`, and release notes | `flash` | Implementation write |
+| `designer` | UI/UX design decisions and polished frontend implementation grounded in Stitch 2-Layer `DESIGN.md` & Craft Floor | `inherit` | Implementation write (+ `call_mcp_tool`) |
 | `vision` | Screenshot, mockup, PDF, and diagram analysis, including `/visual-ralph` 6-category rubric scoring | `inherit` | Pure read + web (`read_file`, `search_web`) |
 
 ### Subagent Workspace Isolation & Work Preservation
@@ -462,7 +462,7 @@ Unlike `.omagy/` (transient workflow state), **`omagy_wiki/`** is designed to be
 
 ## 7. Live Auxiliary Pane HUD (`sidecars/hud/`)
 
-The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.mjs), [`sidecars/hud/ui.mjs`](sidecars/hud/ui.mjs), [`sidecars/hud/client.mjs`](sidecars/hud/client.mjs), declared in [`sidecars/hud/sidecar.json`](sidecars/hud/sidecar.json)) turns Antigravity's side pane into a real-time observability workbench and authenticated prompt launcher (`agentapi`) with zero external dependencies.
+The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.mjs) `< 175 KB` with lazy [`sidecars/hud/selftest.mjs`](sidecars/hud/selftest.mjs), [`sidecars/hud/ui.mjs`](sidecars/hud/ui.mjs), [`sidecars/hud/client.mjs`](sidecars/hud/client.mjs), declared in [`sidecars/hud/sidecar.json`](sidecars/hud/sidecar.json) with `"restart_policy": "on-failure"`, previewed in [`assets/sidecar-hud.webp`](assets/sidecar-hud.webp)) turns Antigravity's side pane into a real-time observability workbench and authenticated prompt launcher (`agentapi`) with zero external dependencies.
 
 ### 7.1 Opening & Top-Bar Controls
 - **How to open**: Click `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` in chat (returned by `/hud` and active workflow notices), or toggle **Oh My Agy** in Antigravity's Extensions Aux Pane menu.
@@ -507,21 +507,24 @@ The `oh-my-agy` Auxiliary Pane HUD ([`sidecars/hud/main.mjs`](sidecars/hud/main.
 
 ## 8. Lifecycle Hooks & CLI Utilities (39 Total)
 
-`oh-my-agy` wires its hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-host-setup.mjs`](hooks/omagy-host-setup.mjs) for `host-setup`/`host-validate`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93.7 KB`) for `COLD_CLI_EVENTS`, [`hooks/omagy-audit.mjs`](hooks/omagy-audit.mjs) for static/supply-chain audit commands, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`:
+`oh-my-agy` wires its 4 hooks through [`hooks.json`](hooks.json) -> [`hooks/run.sh`](hooks/run.sh) (pure POSIX Node `>= 18` numeric nvm/mise/asdf/nodenv locator) -> [`hooks/omagy-hook.mjs`](hooks/omagy-hook.mjs) (`< 170 KB`), dynamically importing [`hooks/omagy-skill.mjs`](hooks/omagy-skill.mjs) for non-lifecycle CLI dispatch + `skill-validate`/`skill-init`, [`hooks/omagy-host-setup.mjs`](hooks/omagy-host-setup.mjs) for `host-setup`/`host-validate`, [`hooks/omagy-cli.mjs`](hooks/omagy-cli.mjs) (`< 93.7 KB`) for `COLD_CLI_EVENTS`, [`hooks/omagy-audit.mjs`](hooks/omagy-audit.mjs) for static/supply-chain audit commands, and [`hooks/omagy-selftest.mjs`](hooks/omagy-selftest.mjs) for `selftest`, alongside the zero-dep strictly read-only stdio MCP server in [`mcp_config.json`](mcp_config.json) -> [`mcp/run.sh`](mcp/run.sh) -> [`mcp/server.mjs`](mcp/server.mjs):
 
-- **`SessionStart` & `PreInvocation` (Enabled by default)**:
-  - Strips UTF-8 BOMs (`stripUtf8Bom`) and sanitizes relayed `[Message ...]` / `<SYSTEM_MESSAGE>` / `<CONTEXT_SUMMARY>` blocks (`sanitizeRelayedText`), fenced/inline code, comments, blockquotes, URLs, quotes, negations, and help queries before `/skill` / `$skill` detection.
-  - Detects `<CONTEXT_SUMMARY>` compaction epochs (`compactionEpoch`) even when the user says `"continue"`, re-injecting `omagy_wiki/` (`<= 3,500` chars) + `.omagy/ultragoal/notepad.md` (`<= 2,000` chars), and enforces a deterministic `<= 6,000`-char ceiling on `injectSteps[0].ephemeralMessage` (`routing + modes` > `compaction recovery` > `wiki` > `subdir AGENTS.md` > `codebase-map`).
-- **`Stop` (Enabled by default)**:
-  - Bails out immediately (`{ decision: "stop" }`) on context-overflow markers (`isContextOverflowStop`), honors `awaiting_confirmation` holds, caps continuation nudges at 2 without a state update, and enforces user-refusal finality (`blocked`).
+- **`SessionStart` & `PreInvocation` (`oh-my-agy-routing`, Enabled by default)**:
+  - Emits `{ systemMessage: { systemMessage, metadata? } }` steps (with `metadata.user_markdown` on user-facing notices; zero deprecated `ephemeralMessage`), strips UTF-8 BOMs (`stripUtf8Bom`), and sanitizes relayed `[Message ...]` / `<SYSTEM_MESSAGE>` / `<CONTEXT_SUMMARY>` blocks (`sanitizeRelayedText`), fenced/inline code, comments, blockquotes, URLs, quotes, negations, and help queries before `/skill` / `$skill` detection.
+  - Detects `<CONTEXT_SUMMARY>` compaction epochs (`compactionEpoch`) even when the user says `"continue"`, re-injecting `omagy_wiki/` (`<= 3,500` chars) + `.omagy/ultragoal/notepad.md` (`<= 2,000` chars), merges canonicalized lazy `transcriptPath` read paths (`extractTranscriptReadPaths`) for subdirectory `AGENTS.md` / child-wiki discovery, and enforces a deterministic `<= 6,000`-char ceiling (`routing + modes` > `compaction recovery` > `wiki` > `subdir AGENTS.md` > `codebase-map`).
+- **`Stop` (`oh-my-agy-continuation`, Enabled by default)**:
+  - Bails out immediately (`{ decision: "stop" }`) on context-overflow markers (`isContextOverflowStop`) or repeated/idle `continuationActive: true` turns, honors `awaiting_confirmation` holds, caps continuation nudges at 2 without a state update, and enforces user-refusal finality (`blocked`).
   - Runs **`checkVerificationFreshness`** (`<= 512 KB` transcript tail scan, isolated on `runtimeFile(conv, 'freshness')` and exempting `.omagy/**`, `omagy_wiki/**`, and `<appDataDir>/brain/**`) to nudge once when source files changed after the last passing test (`stale`) or when the last test failed (`fail`), alongside **`scanDiffBlockers`** (`runtimeFile(conv, 'drift')`).
-- **`PreToolUse` (Opt-in in `hooks.json`)**:
-  - Enforces `append-only-guard` (blocking `Overwrite: true` on non-empty `.omagy/ultragoal/ledger.jsonl` and `omagy_wiki/log.md` before planning exemptions), the planning-phase write boundary, `protected-block-guard`, `agreements-guard`, `notifications-guard`, and `write-existing-file-guard`.
+- **`PreToolUse` (`oh-my-agy-write-guards` Enabled by default + `oh-my-agy-planning-guard` Opt-in)**:
+  - **`oh-my-agy-write-guards`** (`enabled: true`, write-only matcher, `--guard-scope=write`): zero `read_file`/`view_file` hot-path overhead; lazily scans `transcriptPath` via `extractTranscriptReadPaths` and enforces `notifications-guard` (including `PLUGIN_DATA/notifications.json`), `append-only-guard` (blocking `Overwrite: true` on non-empty `.omagy/ultragoal/ledger.jsonl` and `omagy_wiki/log.md`), `agreements-guard` (`[by:human]`), `protected-block-guard`, and `write-existing-file-guard`.
+  - **`oh-my-agy-planning-guard`** (`enabled: false` opt-in, write-only matcher, `--guard-scope=planning`): enforces planning-phase and `ralplan_gate` write boundaries cleanly without double-prompting write guards.
+- **Read-Only MCP Server (`oh-my-agy_state` in `mcp_config.json`)**:
+  - Exposes **6 strictly read-only, zero-shell, zero-mutation tools** over stdio JSON-RPC 2.0 (`omagy_status`, `omagy_wiki_query`, `omagy_wiki_lint`, `omagy_plan_hash`, `omagy_codebase_map`, `omagy_verify_evidence`) wrapping existing hook/CLI read-only exports with canonical workspace & symlink containment; `sh <plugin>/hooks/run.sh` remains available as the universal CLI fallback.
 
 ### Built-In Hook CLI Commands (39 Total)
 
 ```bash
-# 1. Run the 96-check offline hook, runtime, and static repository selftest (hooks/omagy-selftest.mjs)
+# 1. Run the 99-check offline hook, runtime, MCP, asset, and static repository selftest (hooks/omagy-selftest.mjs)
 sh ~/.gemini/config/plugins/oh-my-agy/hooks/run.sh selftest
 
 # 2. Evaluate TF-IDF skill routing accuracy, owner-negative survival, and cosine collisions across all 23 skills (>=95% default)
