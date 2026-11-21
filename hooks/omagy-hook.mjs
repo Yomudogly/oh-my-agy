@@ -3,7 +3,7 @@
 // Dependency-free, fail-open lifecycle hook and deterministic CLI runtime for Antigravity:
 //   session-start       : bounded project wiki index + active-mode reminder on new session start
 //   pre-invocation      : $skill keyword routing + active-mode reminder + once-per-session wiki index
-//   pre-tool-use        : opt-in planning-mode write guard (never auto-allows)
+//   pre-tool-use        : write-only safety guards + opt-in planning guard (allow/ask/force_ask)
 //   stop                : bounded, progress-aware continuation (NO_TOOL_CALL / model_stop) + notifications
 //   verify-evidence     : deterministic validator for .omagy/evidence/<file>.json team task evidence
 //   validate-team-tasks : fail-closed validator for .omagy/state/team/<team>/ task board files
@@ -2839,7 +2839,9 @@ export function preToolUse(payload, opts = {}) {
     if (found) return canonicalizePath(found);
     return canonicalizePath(roots[0] ? path.resolve(roots[0], rawTarget) : rawTarget);
   };
-  const artifactDir = String(payload.artifactDirectoryPath || payload.artifact_directory_path || '').trim();
+  let cachedRouting = null;
+  const getRoutingRec = () => (cachedRouting ??= (readJson(runtimeFile(conv, 'routing')) || {}));
+  const artifactDir = String(payload.artifactDirectoryPath || payload.artifact_directory_path || getRoutingRec().artifactDirectoryPath || '').trim();
   const isWithinSafeRoot = (rawTarget) => {
     const res = resolveTargetPath(rawTarget);
     if (artifactDir) {
@@ -2849,7 +2851,11 @@ export function preToolUse(payload, opts = {}) {
     return roots.some((r) => {
       const wr = canonicalizePath(r);
       const sr = canonicalizePath(stateRoot(r));
-      return res === wr || res.startsWith(wr + path.sep) || res === sr || res.startsWith(sr + path.sep);
+      const srOmagy = path.join(sr, '.omagy');
+      const srWiki = path.join(sr, 'omagy_wiki');
+      return res === wr || res.startsWith(wr + path.sep)
+        || res === srOmagy || res.startsWith(srOmagy + path.sep)
+        || res === srWiki || res.startsWith(srWiki + path.sep);
     });
   };
   const passThrough = () => {
@@ -2991,7 +2997,7 @@ export function preToolUse(payload, opts = {}) {
       const readList = Array.isArray(seen.readFiles) ? seen.readFiles : [];
       let wasRead = readList.includes(resolved);
       if (!wasRead) {
-        const txPath = String(payload.transcriptPath || payload.transcript_path || payload.logPath || readJson(runtimeFile(conv, 'routing'))?.transcriptPath || '').trim();
+        const txPath = String(payload.transcriptPath || payload.transcript_path || payload.logPath || getRoutingRec().transcriptPath || '').trim();
         if (txPath) wasRead = extractTranscriptReadPaths(txPath, roots, host).includes(resolved);
       }
       if (!wasRead) {

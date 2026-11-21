@@ -4383,11 +4383,27 @@ export async function runSelftest() {
         const pgSkipsWriteGuard = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(t62Root, 'omagy_wiki', 'agreements.md'), Overwrite: true, Content: '# wiped\n' } } }, { guardScope: 'planning' });
         const allScopeBlocks = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 2;\n' } } }, { guardScope: 'all' });
         const wgOutsideWs = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(ws, 'outside-file.txt'), Content: 'x' } } }, { guardScope: 'write' });
+        const anchoredParent = path.join(ws, 't62-anchored-parent');
+        const anchoredRepoA = path.join(anchoredParent, 'repo-a');
+        const anchoredRepoB = path.join(anchoredParent, 'repo-b');
+        const anchoredArtDir = path.join(ws, 't62-brain-artifacts');
+        fs.mkdirSync(anchoredRepoA, { recursive: true });
+        fs.mkdirSync(anchoredRepoB, { recursive: true });
+        fs.mkdirSync(anchoredArtDir, { recursive: true });
+        fs.writeFileSync(path.join(anchoredParent, '.omagy-workspace'), '{}\n', 'utf8');
+        const t62AnchorConv = `${conv}-t62-anchor`;
+        sessionStart({ conversationId: t62AnchorConv, workspacePaths: [anchoredRepoA], artifactDirectoryPath: anchoredArtDir });
+        const wgSiblingAsk = preToolUse({ conversationId: t62AnchorConv, workspacePaths: [anchoredRepoA], toolCall: { name: 'write_file', args: { Path: path.join(anchoredRepoB, 'secrets.env'), Content: 'A=1\n' } } }, { guardScope: 'write' });
+        const wgAnchoredOmagyAllow = preToolUse({ conversationId: t62AnchorConv, workspacePaths: [anchoredRepoA], toolCall: { name: 'write_file', args: { Path: path.join(anchoredParent, '.omagy', 'state', 'x.json'), Content: '{}' } } }, { guardScope: 'write' });
+        const wgArtFallbackAllow = preToolUse({ conversationId: t62AnchorConv, workspacePaths: [anchoredRepoA], toolCall: { name: 'write_file', args: { Path: path.join(anchoredArtDir, 'task.md'), Content: '# task\n' } } }, { guardScope: 'write' });
         guardScopeOk = parseGuardScope(['--guard-scope=write']) === 'write'
           && parseGuardScope(['--guard-scope', 'planning']) === 'planning'
           && parseGuardScope([]) === 'all'
           && wgReadOverwrite.decision === 'allow'
           && wgOutsideWs.decision === 'ask'
+          && wgSiblingAsk.decision === 'ask'
+          && wgAnchoredOmagyAllow.decision === 'allow'
+          && wgArtFallbackAllow.decision === 'allow'
           && wgNotif.decision === 'force_ask' && String(wgNotif.reason || '').includes('notifications-guard')
           && wgLedger.decision === 'force_ask' && String(wgLedger.reason || '').includes('append-only-guard')
           && wgAgree.decision === 'force_ask' && String(wgAgree.reason || '').includes('agreements-guard')
