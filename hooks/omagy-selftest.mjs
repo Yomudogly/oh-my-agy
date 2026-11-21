@@ -478,7 +478,7 @@ export function runG1SelftestChecks(ctx) {
       ptu('rename_file', { Path: agPath, newPath: path.join(t35Repo, 'omagy_wiki', 'renamed.md') }),
     ];
     const agAllowed = ptu('edit_file', { Path: agPath, Target: '- [by:agent] Agent note.', Replacement: '- [by:agent] Updated agent note.' });
-    const agGuardOk = agBlocked.every((r) => r.decision === 'force_ask' && String(r.reason || '').includes('agreements-guard')) && !agAllowed.decision;
+    const agGuardOk = agBlocked.every((r) => r.decision === 'force_ask' && String(r.reason || '').includes('agreements-guard')) && agAllowed.decision === 'allow';
     fs.rmSync(path.join(t35Repo, 'omagy_wiki'), { recursive: true, force: true });
 
     const notifLocalPath = path.join(t35Repo, '.omagy', 'notifications.json');
@@ -507,7 +507,7 @@ export function runG1SelftestChecks(ctx) {
     fs.rmSync(path.join(t35Repo, '.omagy'), { recursive: true, force: true });
 
     const preProtOk = protMutations.every((r) => r.decision === 'force_ask' && String(r.reason || '').includes('protected-block-guard'))
-      && !pOutsideAllowed.decision && !pMultiFileAllowed.decision && !pCrlfOutsideAllowed.decision && pCrlfInsideBlocked.decision === 'force_ask';
+      && pOutsideAllowed.decision === 'allow' && pMultiFileAllowed.decision === 'allow' && pCrlfOutsideAllowed.decision === 'allow' && pCrlfInsideBlocked.decision === 'force_ask';
 
     fs.writeFileSync(protPath, protectedInitial.replace('const CRITICAL_GUARD = true;', 'const CRITICAL_GUARD = false;'), 'utf8');
     const diffProtMut = scanDiffBlockers([t35Repo]);
@@ -854,7 +854,7 @@ export async function runSelftest() {
     const g1Path = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
     const g2 = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: path.join(ws, '.omagy', 'plans', 'prd.md') } } });
     check('planning guard escalates implementation writes (TargetFile & Path)', g1.decision === 'force_ask' && g1Path.decision === 'force_ask');
-    check('planning guard ignores .omagy writes', !g2.decision);
+    check('planning guard ignores .omagy writes', g2.decision === 'allow');
 
     // Ralplan-first gate inside autopilot
     fs.rmSync(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { force: true });
@@ -864,7 +864,7 @@ export async function runSelftest() {
     fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'prd-demo.md'), '# PRD\n');
     fs.writeFileSync(path.join(ws, '.omagy', 'plans', 'test-spec-demo.md'), '# Test Spec\n');
     const gRalplanPresent = preToolUse({ ...base, toolCall: { name: 'edit_file', args: { Path: path.join(ws, 'src', 'index.ts') } } });
-    check('autopilot ralplan_gate blocks writes until prd + test-spec exist', gRalplanMissing.decision === 'force_ask' && !gRalplanPresent.decision);
+    check('autopilot ralplan_gate blocks writes until prd + test-spec exist', gRalplanMissing.decision === 'force_ask' && gRalplanPresent.decision === 'allow');
 
     // Write-existing-file guard (unread full Overwrite vs read-then-overwrite)
     writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
@@ -874,7 +874,7 @@ export async function runSelftest() {
     const gOverwriteUnread = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: existingSrc, Overwrite: true } } });
     preToolUse({ ...base, toolCall: { name: 'read_file', args: { Path: existingSrc } } });
     const gOverwriteAfterRead = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: existingSrc, Overwrite: true } } });
-    check('write-existing-file-guard escalates unread Overwrite and allows after read_file', gOverwriteUnread.decision === 'force_ask' && !gOverwriteAfterRead.decision);
+    check('write-existing-file-guard escalates unread Overwrite and allows after read_file', gOverwriteUnread.decision === 'force_ask' && gOverwriteAfterRead.decision === 'allow');
 
     // Foreign conversation owner isolation
     writeJson(stateFile, { mode: 'autopilot', active: true, current_phase: 'ultragoal', owner_conversation_id: 'other-conv', updated_at: new Date().toISOString() });
@@ -1007,7 +1007,7 @@ export async function runSelftest() {
     fs.writeFileSync(agFile, '- [by:human] Never mutate production tables directly.\n');
     const gDropHuman = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: agFile, Overwrite: true, Content: '- [v2] Only automated rule.\n' } } });
     const gKeepHuman = preToolUse({ ...base, toolCall: { name: 'write_file', args: { Path: agFile, Overwrite: true, Content: '- [by:human] Never mutate production tables directly.\n- [v2] Added rule.\n' } } });
-    check('agreements-guard blocks Overwrite dropping [by:human] line and allows preserving it', gDropHuman.decision === 'force_ask' && !gKeepHuman.decision);
+    check('agreements-guard blocks Overwrite dropping [by:human] line and allows preserving it', gDropHuman.decision === 'force_ask' && gKeepHuman.decision === 'allow');
 
     // Stop continuation includes refusal-is-final rule
     check('stop continuation prompt includes refusal-is-final rule', typeof s1.reason === 'string' && s1.reason.includes('permission denial or a refusal by the user is final'));
@@ -2403,11 +2403,11 @@ export async function runSelftest() {
       fs.appendFileSync(hudTx, `${JSON.stringify({ step_index: 2, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'edit_file', arguments: { Path: 'src/app.js' } }] })}\n`, 'utf8');
       const ch3 = getCachedCodeHealth(hudRepo, 201000, hudTx);
 
-      t47Ok = !allowEmptyLedger.decision
+      t47Ok = allowEmptyLedger.decision === 'allow'
         && blockOverwriteLedger.decision === 'force_ask' && String(blockOverwriteLedger.reason || '').includes('append-only-guard')
-        && !allowAppendLedger.decision
+        && allowAppendLedger.decision === 'allow'
         && blockOverwriteWikiLog.decision === 'force_ask' && String(blockOverwriteWikiLog.reason || '').includes('append-only-guard')
-        && !allowAppendWikiLog.decision
+        && allowAppendWikiLog.decision === 'allow'
         && IDLE_GAP_MS === 1800000
         && idleCmp.candidate.duration_ms === 5000
         && idleCmp.candidate.raw_duration_ms === 7205000
@@ -4313,17 +4313,19 @@ export async function runSelftest() {
         const pgOutside = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 2;\n' } } }, { guardScope: 'planning' });
         const pgSkipsWriteGuard = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(t62Root, 'omagy_wiki', 'agreements.md'), Overwrite: true, Content: '# wiped\n' } } }, { guardScope: 'planning' });
         const allScopeBlocks = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 2;\n' } } }, { guardScope: 'all' });
+        const wgOutsideWs = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(ws, 'outside-file.txt'), Content: 'x' } } }, { guardScope: 'write' });
         guardScopeOk = parseGuardScope(['--guard-scope=write']) === 'write'
           && parseGuardScope(['--guard-scope', 'planning']) === 'planning'
           && parseGuardScope([]) === 'all'
-          && !wgReadOverwrite.decision
+          && wgReadOverwrite.decision === 'allow'
+          && wgOutsideWs.decision === 'ask'
           && wgNotif.decision === 'force_ask' && String(wgNotif.reason || '').includes('notifications-guard')
           && wgLedger.decision === 'force_ask' && String(wgLedger.reason || '').includes('append-only-guard')
           && wgAgree.decision === 'force_ask' && String(wgAgree.reason || '').includes('agreements-guard')
           && wgProt.decision === 'force_ask' && String(wgProt.reason || '').includes('protected-block-guard')
           && wgUnread.decision === 'force_ask' && String(wgUnread.reason || '').includes('write-existing-file-guard')
           && pgOutside.decision === 'force_ask'
-          && !pgSkipsWriteGuard.decision
+          && pgSkipsWriteGuard.decision === 'allow'
           && allScopeBlocks.decision === 'force_ask';
 
         // 5. resolvePluginRoot, defaultPluginDataDir, loadNotificationConfig & unchanged defaultRuntimeDir
@@ -4367,8 +4369,8 @@ export async function runSelftest() {
       const piSubdirRes = preInvocation({ conversationId: `${conv}-t62-tx-pi`, workspacePaths: [t62Root], transcriptPath: t62Tx, invocationNum: 1 });
       const piSubdirText = (piSubdirRes.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '').join('\n');
       const lazyTxOk = extractedReads.includes(canonicalizePath(subA))
-        && !directAllowA.decision && directBlockB.decision === 'force_ask'
-        && !fallbackAllowA.decision && fallbackBlockB.decision === 'force_ask'
+        && directAllowA.decision === 'allow' && directBlockB.decision === 'force_ask'
+        && fallbackAllowA.decision === 'allow' && fallbackBlockB.decision === 'force_ask'
         && piSubdirText.includes('T62_SUB_TX_AGENTS_MARKER');
 
       // 4. stop({ continuationActive: true }) prevents repeat nudges (active unchanged mode + idle drift branch)

@@ -2839,16 +2839,35 @@ export function preToolUse(payload, opts = {}) {
     if (found) return canonicalizePath(found);
     return canonicalizePath(roots[0] ? path.resolve(roots[0], rawTarget) : rawTarget);
   };
+  const artifactDir = String(payload.artifactDirectoryPath || payload.artifact_directory_path || '').trim();
+  const isWithinSafeRoot = (rawTarget) => {
+    const res = resolveTargetPath(rawTarget);
+    if (artifactDir) {
+      const ad = canonicalizePath(artifactDir);
+      if (res === ad || res.startsWith(ad + path.sep)) return true;
+    }
+    return roots.some((r) => {
+      const wr = canonicalizePath(r);
+      const sr = canonicalizePath(stateRoot(r));
+      return res === wr || res.startsWith(wr + path.sep) || res === sr || res.startsWith(sr + path.sep);
+    });
+  };
+  const passThrough = () => {
+    if (host !== 'antigravity') return {};
+    if (/^(?:read|view)_/i.test(toolName)) return { decision: 'allow' };
+    if (!targets.length) return { decision: 'ask' };
+    return targets.every(isWithinSafeRoot) ? { decision: 'allow' } : { decision: 'ask' };
+  };
 
   if (/^(?:read|view)_/i.test(toolName)) {
-    if (!targets.length) return {};
+    if (!targets.length) return passThrough();
     const resolved = resolveTargetPath(targets[0]);
     const seen = readJson(seenFile) || { readFiles: [] };
     const list = Array.isArray(seen.readFiles) ? seen.readFiles : [];
     if (!list.includes(resolved)) {
       writeJson(seenFile, { readFiles: [...list.slice(-199), resolved], at: new Date().toISOString() });
     }
-    return {};
+    return passThrough();
   }
 
   let s = null;
@@ -2869,7 +2888,7 @@ export function preToolUse(payload, opts = {}) {
         reason: `oh-my-agy: ${s.mode} planning guard could not verify a target path for ${toolName}. Approve only if you intend to write outside .omagy/.`,
       };
     }
-    return {};
+    return passThrough();
   }
 
   const isFullOverwrite = /^(?:write_file|write_to_file)$/i.test(toolName)
@@ -2947,7 +2966,7 @@ export function preToolUse(payload, opts = {}) {
   }
 
   const outsideTarget = targets.find((t) => !isPathInsideAllowedOmagy(roots, t));
-  if (!outsideTarget) return {};
+  if (!outsideTarget) return passThrough();
   const resolved = resolveTargetPath(outsideTarget);
 
   if (runPlanningGuards && s) {
@@ -2983,7 +3002,7 @@ export function preToolUse(payload, opts = {}) {
       }
     }
   }
-  return {};
+  return passThrough();
 }
 
 const SHELL_EXEC_TOOLS_RE = /^(?:run_command|bash|execute_command)$/i;
@@ -3352,7 +3371,9 @@ async function main() {
         appendJsonlRecord(path.join(logDir, 'hook-errors.jsonl'), { at: new Date().toISOString(), event, error: msg });
       }
     } catch { /* fail open: ignore hook error log write failure */ }
-    result = normEvent === 'stop' ? (host === 'antigravity' ? { decision: 'stop' } : {}) : {};
+    result = host === 'antigravity'
+      ? (normEvent === 'stop' ? { decision: 'stop' } : (normEvent === 'pre-tool-use' ? { decision: 'ask' } : {}))
+      : {};
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -3380,7 +3401,10 @@ if (isMainModule) {
     const errDetail = redactSecrets(err instanceof Error ? err.stack || errMsg : errMsg);
     process.stderr.write(`[oh-my-agy] main error: ${errDetail}\n`);
     if (LIFECYCLE_HOOK_EVENTS.has(ev)) {
-      process.stdout.write(ev === 'stop' ? (errHost === 'antigravity' ? '{"decision":"stop"}\n' : '{}\n') : '{}\n');
+      const fb = errHost === 'antigravity'
+        ? (ev === 'stop' ? '{"decision":"stop"}\n' : (ev === 'pre-tool-use' ? '{"decision":"ask"}\n' : '{}\n'))
+        : '{}\n';
+      process.stdout.write(fb);
     } else {
       process.stdout.write(`${JSON.stringify({ ok: false, error: errMsg })}\n`);
       process.exitCode = 2;

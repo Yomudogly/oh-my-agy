@@ -93,7 +93,13 @@ if [ -z "$NODE" ]; then
   case "${1:-}" in
     session-start|pre-invocation|user-prompt-submit|pre-tool-use|post-tool-use|subagent-start|subagent-stop|pre-compact|post-compact|stop|"")
       while IFS= read -r _omagy_line || [ -n "$_omagy_line" ]; do :; done
-      if [ "${1:-}" = "stop" ] && [ "$_omagy_host" != "claude" ] && [ "$_omagy_host" != "codex" ]; then echo '{"decision":"stop"}'; else echo '{}'; fi
+      if [ "${1:-}" = "stop" ] && [ "$_omagy_host" != "claude" ] && [ "$_omagy_host" != "codex" ]; then
+        echo '{"decision":"stop"}'
+      elif [ "${1:-}" = "pre-tool-use" ] && [ "$_omagy_host" != "claude" ] && [ "$_omagy_host" != "codex" ]; then
+        echo '{"decision":"ask"}'
+      else
+        echo '{}'
+      fi
       exit 0
       ;;
     *)
