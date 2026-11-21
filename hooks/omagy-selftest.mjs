@@ -1326,7 +1326,13 @@ export async function runSelftest() {
           input: '{}',
           encoding: 'utf8',
         });
-        nvmSortOk = JSON.parse(nvmOut.trim()).selected === 'v20.11.0';
+        const hudRunShPath = path.join(pluginRoot, 'sidecars', 'hud', 'run.sh');
+        const hudNvmOut = execFileSync('/bin/sh', [hudRunShPath, 'selftest'], {
+          env: { PATH: '/bin', HOME: fakeHome, OMAGY_SKIP_SYSTEM_NODE: '1' },
+          encoding: 'utf8',
+        });
+        nvmSortOk = JSON.parse(nvmOut.trim()).selected === 'v20.11.0'
+          && JSON.parse(hudNvmOut.trim()).selected === 'v20.11.0';
       }
 
       const symDir = path.join(ws, 'sym-bin');
@@ -1354,6 +1360,7 @@ export async function runSelftest() {
       !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
       && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
       && hooksRunSh.includes('*\\\\*)') && hudRunSh.includes('*\\\\*)')
+      && hudRunSh.includes('node_ge_18') && hudRunSh.includes('OMAGY_SKIP_SYSTEM_NODE')
       && minimalPathOk && runShFailModesOk && nvmSortOk && symlinkMainOk && userSkillsCwdEvalOk && backslashSubdirOk,
       `minPath=${minimalPathOk} noNode=${runShFailModesOk} nvmSort=${nvmSortOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk} bsSubdir=${backslashSubdirOk}`);
 
@@ -1557,10 +1564,10 @@ export async function runSelftest() {
       if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
       if (provenanceRe.test(content)) provenanceViolations.push(relPath);
     };
-    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
+    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/selftest.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
       checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
     }
-    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs']) {
+    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/selftest.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs']) {
       const coreTxt = rTxt(coreRel);
       if (retiredSubagentRe.test(coreTxt) || personaWordRe.test(coreTxt)) retiredViolations.push(coreRel);
     }
@@ -2970,7 +2977,7 @@ export async function runSelftest() {
     check('omagy-skill.mjs cold CLI dispatch, <170KB hook ceiling, skill-validate (--strict, SR-1, sibling links, manifest), and skill-init scopes pass',
       t51Ok, t51Detail);
 
-    // T52: sidecars/hud/{ui.mjs,client.mjs} modularity, provenance/path hygiene, pure helper exports, and HUD --selftest gate
+    // T52: sidecars/hud/{main.mjs,selftest.mjs,ui.mjs,client.mjs} modularity, provenance/path hygiene, pure helper exports, restart_policy, and HUD --selftest gate
     let t52Ok = false;
     let t52Detail = '';
     try {
@@ -2978,11 +2985,18 @@ export async function runSelftest() {
       const hudUiPath = path.join(pluginRoot, 'sidecars', 'hud', 'ui.mjs');
       const hudClientPath = path.join(pluginRoot, 'sidecars', 'hud', 'client.mjs');
       const hudMainPath = path.join(pluginRoot, 'sidecars', 'hud', 'main.mjs');
+      const hudSelftestPath = path.join(pluginRoot, 'sidecars', 'hud', 'selftest.mjs');
+      const hudSidecarJsonPath = path.join(pluginRoot, 'sidecars', 'hud', 'sidecar.json');
       const skillModBytes = fs.statSync(skillModPath).size;
       const hudUiBytes = fs.statSync(hudUiPath).size;
       const hudClientBytes = fs.statSync(hudClientPath).size;
+      const hudMainBytes = fs.statSync(hudMainPath).size;
+      const hudMainTxt = rTxt('sidecars/hud/main.mjs');
       const hudUiTxt = rTxt('sidecars/hud/ui.mjs');
       const hudClientTxt = rTxt('sidecars/hud/client.mjs');
+      const hudSidecarCfg = JSON.parse(readFixture(hudSidecarJsonPath));
+      const zeroStaticSelftestImport = !/\bfrom\s+['"]\.\/selftest\.mjs['"]/.test(hudMainTxt)
+        && !/^\s*import\s+['"]\.\/selftest\.mjs['"]/m.test(hudMainTxt);
       const personalPathRe = new RegExp(`(?:${'/Us' + 'ers/'}|${'/ho' + 'me/'}|[A-Za-z]:\\\\\\\\Users\\\\\\\\)[A-Za-z0-9._-]+`, 'i');
       const uiMod = await import('../sidecars/hud/ui.mjs');
       const clientMod = await import('../sidecars/hud/client.mjs');
@@ -2992,9 +3006,13 @@ export async function runSelftest() {
       t52Ok = fs.existsSync(skillModPath)
         && fs.existsSync(hudUiPath)
         && fs.existsSync(hudClientPath)
+        && fs.existsSync(hudSelftestPath)
         && skillModBytes < 256_000
         && hudUiBytes < 256_000
         && hudClientBytes < 256_000
+        && hudMainBytes < 175_000
+        && zeroStaticSelftestImport
+        && hudSidecarCfg.restart_policy === 'on-failure'
         && provenanceViolations.length === 0
         && retiredViolations.length === 0
         && !personalPathRe.test(rTxt('hooks/omagy-skill.mjs'))
@@ -3031,14 +3049,14 @@ export async function runSelftest() {
         && hudOut.skills === 23
         && hudOut.subagents === 18
         && hudOut.workflows === 11;
-      t52Detail = `hudUi=${hudUiBytes}B hudClient=${hudClientBytes}B skillMod=${skillModBytes}B hudSelftest=${hudOut.selftest}`;
+      t52Detail = `hudMain=${hudMainBytes}B zeroStaticSelftest=${zeroStaticSelftestImport} restart=${hudSidecarCfg.restart_policy} hudUi=${hudUiBytes}B hudClient=${hudClientBytes}B skillMod=${skillModBytes}B hudSelftest=${hudOut.selftest}`;
     } catch (e) { /* fail open: capture T52 error detail including child stdout/stderr */
       const baseMsg = e instanceof Error ? e.message : String(e);
       const childOut = String(e?.stdout || '').trim();
       const childErr = String(e?.stderr || '').trim();
       t52Detail = [baseMsg, childOut, childErr].filter(Boolean).join(' | ').replace(/\s+/g, ' ');
     }
-    check('sidecars/hud/{ui,client}.mjs modularity (<256KB, zero circularity/provenance/personal-paths) and HUD --selftest pass',
+    check('sidecars/hud/{main,selftest,ui,client}.mjs modularity (main<175KB, lazy selftest, restart_policy=on-failure) and HUD --selftest pass',
       t52Ok, t52Detail);
 
     // T53: Polyglot HostCodec, Desktop gating, transcript canonicalization, Codex version tiers & wire codecs
