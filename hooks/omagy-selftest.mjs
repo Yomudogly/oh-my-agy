@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   buildCompactClaudeContract,
   checkHostBundleDrift,
@@ -1272,9 +1272,10 @@ export async function runSelftest() {
       && pathLeaks.length === 0,
       `rules=${rulesSize} hook=${hookByteSize} cli=${cliByteSize} staticFree=${zeroStaticCliImport} agents=${agentCount} issues=${agentIssues.join(';')} leaks=${pathLeaks.join(';')}`);
 
-    // T8: hooks/run.sh and sidecars/hud/run.sh avoid external dirname and sort -V, fail-closed CLI vs fail-open lifecycle node_not_found, sameModulePath symlink invocation, and skill-eval defaultRoot isolation
+    // T8: hooks/run.sh, sidecars/hud/run.sh, and mcp/run.sh avoid external dirname and sort -V, fail-closed CLI vs fail-open lifecycle node_not_found, sameModulePath symlink invocation, and skill-eval defaultRoot isolation
     const hooksRunSh = readFixture(path.join(pluginRoot, 'hooks', 'run.sh'));
     const hudRunSh = readFixture(path.join(pluginRoot, 'sidecars', 'hud', 'run.sh'));
+    const mcpRunSh = readFixture(path.join(pluginRoot, 'mcp', 'run.sh'));
     let minimalPathOk = false;
     let runShFailModesOk = false;
     let nvmSortOk = process.platform === 'win32';
@@ -1284,6 +1285,7 @@ export async function runSelftest() {
       const isWin = process.platform === 'win32';
       const shBin = isWin ? 'sh' : '/bin/sh';
       const runShPath = path.join(pluginRoot, 'hooks', 'run.sh');
+      const mcpRunShPath = path.join(pluginRoot, 'mcp', 'run.sh');
       const shDir = isWin
         ? ((process.env.PATH || '').split(path.delimiter).find((d) => d && (fs.existsSync(path.join(d, 'sh.exe')) || fs.existsSync(path.join(d, 'sh')))) || '')
         : '/bin';
@@ -1308,10 +1310,15 @@ export async function runSelftest() {
         cliNoNodeStatus = noNodeErr?.status ?? 0;
         cliNoNodeOut = String(noNodeErr?.stdout || '').trim();
       }
+      const mcpNoNodeRes = spawnSync(shBin, [mcpRunShPath], { env: noNodeEnv, encoding: 'utf8' });
+      const mcpNoNodeOk = mcpNoNodeRes.status === 1
+        && String(mcpNoNodeRes.stdout || '') === ''
+        && String(mcpNoNodeRes.stderr || '').includes('Node.js >= 18 not found');
       runShFailModesOk = JSON.parse(hookStopNoNode.trim()).decision === 'stop'
         && hookStartNoNode.trim() === '{}'
         && cliNoNodeStatus === 2
-        && JSON.parse(cliNoNodeOut || '{}').error === 'node_not_found';
+        && JSON.parse(cliNoNodeOut || '{}').error === 'node_not_found'
+        && mcpNoNodeOk;
 
       if (!isWin) {
         const fakeHome = path.join(ws, 't8-fake-nvm-home');
@@ -1331,8 +1338,13 @@ export async function runSelftest() {
           env: { PATH: '/bin', HOME: fakeHome, OMAGY_SKIP_SYSTEM_NODE: '1' },
           encoding: 'utf8',
         });
+        const mcpNvmOut = execFileSync('/bin/sh', [mcpRunShPath], {
+          env: { PATH: '/bin', HOME: fakeHome, OMAGY_SKIP_SYSTEM_NODE: '1' },
+          encoding: 'utf8',
+        });
         nvmSortOk = JSON.parse(nvmOut.trim()).selected === 'v20.11.0'
-          && JSON.parse(hudNvmOut.trim()).selected === 'v20.11.0';
+          && JSON.parse(hudNvmOut.trim()).selected === 'v20.11.0'
+          && JSON.parse(mcpNvmOut.trim()).selected === 'v20.11.0';
       }
 
       const symDir = path.join(ws, 'sym-bin');
@@ -1356,11 +1368,13 @@ export async function runSelftest() {
       userSkillsCwdEvalOk = evalFromUserCwd.ok === true && evalFromUserCwd.skillCount === 23;
     } catch { /* fail open: flags stay false and fail T8 check */ }
     const backslashSubdirOk = discoverSubdirAgents([ws], 'check packages\\core\\index.ts', []).messages.some((m) => m.includes('packages/core/AGENTS.md'));
-    check('hooks/run.sh and sidecars/hud/run.sh use pure POSIX expansion without dirname or sort -V',
+    check('hooks/run.sh, sidecars/hud/run.sh, and mcp/run.sh use pure POSIX expansion without dirname or sort -V',
       !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
       && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
-      && hooksRunSh.includes('*\\\\*)') && hudRunSh.includes('*\\\\*)')
+      && !mcpRunSh.includes('dirname ') && !mcpRunSh.includes('sort -V')
+      && hooksRunSh.includes('*\\\\*)') && hudRunSh.includes('*\\\\*)') && mcpRunSh.includes('*\\\\*)')
       && hudRunSh.includes('node_ge_18') && hudRunSh.includes('OMAGY_SKIP_SYSTEM_NODE')
+      && mcpRunSh.includes('node_ge_18') && mcpRunSh.includes('OMAGY_SKIP_SYSTEM_NODE')
       && minimalPathOk && runShFailModesOk && nvmSortOk && symlinkMainOk && userSkillsCwdEvalOk && backslashSubdirOk,
       `minPath=${minimalPathOk} noNode=${runShFailModesOk} nvmSort=${nvmSortOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk} bsSubdir=${backslashSubdirOk}`);
 
@@ -1564,10 +1578,10 @@ export async function runSelftest() {
       if (relPath === 'README.md') content = content.replace(/\n## Credits\r?\n[\s\S]*$/, '');
       if (provenanceRe.test(content)) provenanceViolations.push(relPath);
     };
-    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/selftest.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
+    for (const rootDoc of ['rules/AGENTS.md', 'hooks.json', 'mcp_config.json', 'mcp/run.sh', 'mcp/server.mjs', 'hooks/run.sh', 'hooks/omagy-hook.mjs', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-cli.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'hooks/omagy-selftest.mjs', 'hooks/skill-eval-cases.json', '.github/workflows/ci.yml', 'sidecars/hud/run.sh', 'sidecars/hud/sidecar.json', 'sidecars/hud/main.mjs', 'sidecars/hud/selftest.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs', 'README.md', 'HOW_TO_USE.md', 'CHANGELOG.md', 'plugin.json']) {
       checkProvenanceFile(rootDoc, path.join(pluginRoot, rootDoc));
     }
-    for (const coreRel of ['rules/AGENTS.md', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/selftest.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs']) {
+    for (const coreRel of ['rules/AGENTS.md', 'mcp/server.mjs', 'hooks/omagy-host.mjs', 'hooks/omagy-host-setup.mjs', 'hooks/omagy-audit.mjs', 'hooks/omagy-skill.mjs', 'sidecars/hud/main.mjs', 'sidecars/hud/selftest.mjs', 'sidecars/hud/dispatch.mjs', 'sidecars/hud/ui.mjs', 'sidecars/hud/client.mjs']) {
       const coreTxt = rTxt(coreRel);
       if (retiredSubagentRe.test(coreTxt) || personaWordRe.test(coreTxt)) retiredViolations.push(coreRel);
     }
@@ -4417,6 +4431,237 @@ export async function runSelftest() {
       t62Detail = e instanceof Error ? e.message : String(e);
     }
     check('T62: G1 systemMessage + user_markdown, symmetric guardScope, lazy transcriptPath read-tracking, Stop continuationActive & PLUGIN_ROOT/PLUGIN_DATA pass', t62Ok, t62Detail);
+
+    // T63: G5 Strictly read-only zero-dep stdio JSON-RPC 2.0 MCP server E2E, containment & mcp-audit discovery
+    let t63Ok = false;
+    let t63Detail = '';
+    try {
+      const t63Ws = path.join(ws, 't63-mcp-ws');
+      const t63Outside = path.join(ws, 't63-outside-secret.md');
+      fs.mkdirSync(path.join(t63Ws, '.omagy', 'state'), { recursive: true });
+      fs.mkdirSync(path.join(t63Ws, '.omagy', 'plans'), { recursive: true });
+      fs.mkdirSync(path.join(t63Ws, '.omagy', 'evidence'), { recursive: true });
+      fs.mkdirSync(path.join(t63Ws, 'omagy_wiki'), { recursive: true });
+      fs.mkdirSync(path.join(t63Ws, 'src'), { recursive: true });
+      fs.writeFileSync(t63Outside, '# Secret outside workspace\n', 'utf8');
+      fs.writeFileSync(path.join(t63Ws, 'src', 'app.mjs'), 'export function mcpDemoExport() { return 42; }\n', 'utf8');
+      writeJson(path.join(t63Ws, '.omagy', 'state', 'autopilot-state.json'), {
+        mode: 'autopilot',
+        active: true,
+        current_phase: 'ultragoal',
+        iteration: 1,
+        updated_at: new Date().toISOString(),
+      });
+      fs.writeFileSync(path.join(t63Ws, 'omagy_wiki', 'index.md'), '# Wiki Index\n\n- [[guide]] — MCP Guide — guide — mcp, state\n', 'utf8');
+      fs.writeFileSync(path.join(t63Ws, 'omagy_wiki', 'guide.md'), '---\ntitle: MCP Guide\ntags: [mcp, state]\n---\n# MCP Guide\n\nSee [[index]] and `src/app.mjs:1`.\n', 'utf8');
+
+      const prdPath = path.join(t63Ws, '.omagy', 'plans', 'prd-demo.md');
+      const specPath = path.join(t63Ws, '.omagy', 'plans', 'test-spec-demo.md');
+      const receiptPath = path.join(t63Ws, '.omagy', 'plans', 'ralplan-review-demo.json');
+      fs.writeFileSync(prdPath, '# PRD Demo\n\nNo timeline words here.\n', 'utf8');
+      fs.writeFileSync(specPath, '# Test Spec Demo\n\nVerify everything.\n', 'utf8');
+      const baseHash = verifyPlanHash('compute', prdPath, '', { specPath, baseDir: t63Ws });
+      writeJson(receiptPath, {
+        slug: 'demo',
+        prd_file: '.omagy/plans/prd-demo.md',
+        test_spec_file: '.omagy/plans/test-spec-demo.md',
+        prd_hash: baseHash.planHash,
+        spec_hash: baseHash.specHash,
+        plan_hash: baseHash.combinedHash,
+        critic_verdict: 'APPROVE',
+        verified_at: new Date().toISOString(),
+      });
+      const evilRelReceiptPath = path.join(t63Ws, '.omagy', 'plans', 'evil-rel-receipt.json');
+      writeJson(evilRelReceiptPath, {
+        slug: 'evil-rel',
+        prd_file: '.omagy/plans/prd-demo.md',
+        test_spec_file: '../../t63-outside-secret.md',
+        plan_hash: baseHash.combinedHash,
+        critic_verdict: 'APPROVE',
+      });
+      const planSymPath = path.join(t63Ws, '.omagy', 'plans', 'escape-spec-link.md');
+      const evidSymPath = path.join(t63Ws, '.omagy', 'evidence', 'escape-evid-link.json');
+      let symlinksCreated = false;
+      try {
+        fs.symlinkSync(t63Outside, planSymPath, 'file');
+        fs.symlinkSync(t63Outside, evidSymPath, 'file');
+        symlinksCreated = true;
+      } catch { /* fail open on platforms without symlink privilege */ }
+      const evilSymReceiptPath = path.join(t63Ws, '.omagy', 'plans', 'evil-sym-receipt.json');
+      writeJson(evilSymReceiptPath, {
+        slug: 'evil-sym',
+        prd_file: '.omagy/plans/prd-demo.md',
+        test_spec_file: '.omagy/plans/escape-spec-link.md',
+        plan_hash: baseHash.combinedHash,
+        critic_verdict: 'APPROVE',
+      });
+      writeJson(path.join(t63Ws, '.omagy', 'evidence', 'task-1.json'), {
+        team: 't63-team',
+        taskId: '1',
+        verdict: 'unit-test-verified',
+        verified_head: 'abcdef1234567',
+        summary: 'Verified T63 task',
+        verification: [{ command: 'node --version', result: 'passed', output: 'v20.0.0' }],
+        unverified: [],
+      });
+
+      const snapshotTree = (dir) => {
+        const out = [];
+        const walk = (cur, rel) => {
+          for (const ent of fs.readdirSync(cur, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            const full = path.join(cur, ent.name);
+            const r = rel ? `${rel}/${ent.name}` : ent.name;
+            const st = fs.lstatSync(full);
+            if (st.isSymbolicLink()) out.push(`L:${r}`);
+            else if (st.isDirectory()) { out.push(`D:${r}`); walk(full, r); }
+            else out.push(`F:${r}:${st.size}`);
+          }
+        };
+        walk(dir, '');
+        return out.join('\n');
+      };
+      const beforeSnap = snapshotTree(t63Ws);
+
+      const isWin = process.platform === 'win32';
+      const shBin = isWin ? 'sh' : '/bin/sh';
+      const mcpRunShPath = path.join(pluginRoot, 'mcp', 'run.sh');
+      const mcpResult = await new Promise((resolve, reject) => {
+        const child = spawn(shBin, [mcpRunShPath], {
+          env: { ...process.env, OMAGY_NODE: process.execPath },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let out = '';
+        let err = '';
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (d) => { out += d; });
+        child.stderr.on('data', (d) => { err += d; });
+        child.on('error', reject);
+        child.on('close', (code) => resolve({ code, stdout: out, stderr: err }));
+
+        // 1. Chunked initialize (split mid-JSON across two separate writes)
+        const initMsg = `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`;
+        const splitAt = Math.floor(initMsg.length / 2);
+        child.stdin.write(initMsg.slice(0, splitAt));
+        setTimeout(() => {
+          child.stdin.write(initMsg.slice(splitAt));
+          // 2. Batched notifications/initialized (no id -> zero response) + ping in ONE write
+          const batched = [
+            JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+            JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'ping' }),
+          ].join('\n') + '\n';
+          child.stdin.write(batched);
+
+          const frames = [
+            JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }),
+            JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'omagy_status', arguments: { workspace: t63Ws } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'omagy_wiki_query', arguments: { workspace: t63Ws, query: 'mcp', limit: 5 } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'omagy_wiki_lint', arguments: { workspace: t63Ws } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'omagy_plan_hash', arguments: { workspace: t63Ws, mode: 'compute', prdFile: '.omagy/plans/prd-demo.md', specFile: '.omagy/plans/test-spec-demo.md', receiptFile: '.omagy/plans/should-not-write.json' } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'omagy_plan_hash', arguments: { workspace: t63Ws, mode: 'verify', prdFile: '.omagy/plans/prd-demo.md', receiptFile: '.omagy/plans/ralplan-review-demo.json' } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'omagy_codebase_map', arguments: { workspace: t63Ws } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'omagy_verify_evidence', arguments: { workspace: t63Ws, file: '.omagy/evidence/task-1.json', team: 't63-team', taskId: '1' } } }),
+            '{malformed json line',
+            JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'unknown/method' }),
+            JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'omagy_goal_done', arguments: { workspace: t63Ws } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'omagy_verify_evidence', arguments: { workspace: t63Ws, file: '../t63-outside-secret.md' } } }),
+            JSON.stringify({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'omagy_plan_hash', arguments: { workspace: t63Ws, mode: 'verify', prdFile: '.omagy/plans/prd-demo.md', receiptFile: '.omagy/plans/evil-rel-receipt.json' } } }),
+          ];
+          if (symlinksCreated) {
+            frames.push(JSON.stringify({ jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'omagy_verify_evidence', arguments: { workspace: t63Ws, file: '.omagy/evidence/escape-evid-link.json' } } }));
+            frames.push(JSON.stringify({ jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'omagy_plan_hash', arguments: { workspace: t63Ws, mode: 'verify', prdFile: '.omagy/plans/prd-demo.md', receiptFile: '.omagy/plans/evil-sym-receipt.json' } } }));
+          }
+          child.stdin.write(`${frames.join('\n')}\n`);
+          child.stdin.end();
+        }, 25);
+      });
+
+      const afterSnap = snapshotTree(t63Ws);
+      const rawLines = mcpResult.stdout.split('\n').filter((l) => l.length > 0);
+      let allValidJsonRpc = mcpResult.code === 0 && rawLines.length === (symlinksCreated ? 17 : 15);
+      const byId = new Map();
+      let parseErrFrame = null;
+      for (const line of rawLines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.jsonrpc !== '2.0') allValidJsonRpc = false;
+          if (parsed.id === null && parsed.error?.code === -32700) parseErrFrame = parsed;
+          else byId.set(parsed.id, parsed);
+        } catch {
+          allValidJsonRpc = false;
+        }
+      }
+
+      const toolPayload = (id) => {
+        const resp = byId.get(id);
+        if (!resp?.result || resp.result.isError !== false) return null;
+        try { return JSON.parse(resp.result.content?.[0]?.text || ''); } catch { return null; }
+      };
+      const initRes = byId.get(1)?.result;
+      const pingRes = byId.get(2)?.result;
+      const toolsList = byId.get(3)?.result?.tools || [];
+      const expectedTools = ['omagy_status', 'omagy_wiki_query', 'omagy_wiki_lint', 'omagy_plan_hash', 'omagy_codebase_map', 'omagy_verify_evidence'];
+      const toolNames = toolsList.map((t) => t.name);
+      const listOk = toolNames.length === 6
+        && expectedTools.every((n) => toolNames.includes(n))
+        && !toolNames.includes('omagy_goal_done')
+        && toolsList.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false);
+
+      const statusData = toolPayload(4);
+      const wikiQData = toolPayload(5);
+      const wikiLData = toolPayload(6);
+      const hashComputeData = toolPayload(7);
+      const hashVerifyData = toolPayload(8);
+      const mapData = toolPayload(9);
+      const evidData = toolPayload(10);
+      const toolsOk = Boolean(
+        statusData?.activeModes?.some((m) => m.mode === 'autopilot')
+        && Array.isArray(statusData?.scopes) && statusData.scopes.length >= 1
+        && wikiQData?.ok === true && wikiQData.results?.some((r) => r.slug === 'guide')
+        && wikiLData?.ok === true && wikiLData.pagesScanned >= 2
+        && hashComputeData?.ok === true && hashComputeData.combinedHash === baseHash.combinedHash && !hashComputeData.receiptPath
+        && !fs.existsSync(path.join(t63Ws, '.omagy', 'plans', 'should-not-write.json'))
+        && hashVerifyData?.ok === true && hashVerifyData.matches === true
+        && typeof mapData?.map === 'string' && mapData.map.includes('mcpDemoExport')
+        && evidData?.ok === true && evidData.taskId === '1' && evidData.team === 't63-team',
+      );
+
+      const errOk = Boolean(
+        parseErrFrame?.error?.code === -32700
+        && byId.get(11)?.error?.code === -32601
+        && byId.get(12)?.error?.code === -32601
+        && byId.get(13)?.error?.code === -32602
+        && byId.get(14)?.error?.code === -32602
+        && (!symlinksCreated || (byId.get(15)?.error?.code === -32602 && byId.get(16)?.error?.code === -32602)),
+      );
+
+      const auditRes = runMcpAudit(pluginRoot);
+      const auditOk = auditRes.ok === true && auditRes.exitCode === 0
+        && auditRes.filesScanned >= 1 && auditRes.serversScanned >= 1 && auditRes.findings.length === 0;
+
+      const mcpServerTxt = rTxt('mcp/server.mjs');
+      const personalPathRe = new RegExp(`(?:${'/Us' + 'ers/'}|${'/ho' + 'me/'}|[A-Za-z]:\\\\\\\\Users\\\\\\\\)[A-Za-z0-9._-]+`, 'i');
+      const importSpecs = [...mcpServerTxt.matchAll(/^\s*import\s+[^'"]*['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+      const hygieneOk = importSpecs.every((sp) => sp.startsWith('node:') || sp.startsWith('../hooks/'))
+        && !mcpServerTxt.includes('child_process')
+        && !/\b(?:execSync|spawnSync|execFileSync|writeFileSync|rmSync|mkdirSync)\b/.test(mcpServerTxt)
+        && !personalPathRe.test(mcpServerTxt)
+        && !personalPathRe.test(mcpRunSh);
+
+      t63Ok = allValidJsonRpc
+        && initRes?.serverInfo?.name === 'oh-my-agy-state'
+        && Boolean(pingRes && typeof pingRes === 'object')
+        && listOk
+        && toolsOk
+        && errOk
+        && beforeSnap === afterSnap
+        && auditOk
+        && hygieneOk;
+      t63Detail = `code=${mcpResult.code} lines=${rawLines.length} jsonRpc=${allValidJsonRpc} list=${listOk} tools=${toolsOk} errs=${errOk} noMut=${beforeSnap === afterSnap} audit=${auditOk} hygiene=${hygieneOk}`;
+    } catch (e) { /* fail open: capture T63 error detail */
+      t63Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T63: G5 read-only stdio MCP server (chunked/batched JSON-RPC 2.0, 6 tools, path/symlink containment, zero mutation) & mcp-audit mcp_config.json pass', t63Ok, t63Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

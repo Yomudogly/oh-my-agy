@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "oh-my-agy_state": {
+      "command": "sh",
+      "args": ["${PLUGIN_ROOT}/mcp/run.sh"],
+      "env": {
+        "PLUGIN_ROOT": "${PLUGIN_ROOT}",
+        "PLUGIN_DATA": "${PLUGIN_DATA}"
+      }
+    }
+  }
+}

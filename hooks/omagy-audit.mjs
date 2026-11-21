@@ -854,7 +854,7 @@ export function runMcpAudit(targetPath = process.cwd()) {
 
   const files = isFile(abs)
     ? [abs]
-    : ['.mcp.json', 'mcp.json', '.cursor/mcp.json', '.vscode/mcp.json'].map((n) => path.join(abs, n)).filter(isFile);
+    : ['mcp_config.json', '.mcp.json', 'mcp.json', '.cursor/mcp.json', '.vscode/mcp.json'].map((n) => path.join(abs, n)).filter(isFile);
 
   const findings = [];
   let serversScanned = 0;
