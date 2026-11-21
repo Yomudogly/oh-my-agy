@@ -3,7 +3,8 @@ name: tracer
 description: "Read-only causal tracing specialist. Use for competing-hypothesis root-cause analysis, 6-tier evidence ranking, disconfirmation/rebuttal probes, and discriminating next-step recommendations."
 subagent: true
 mainAgent: false
-tools: [read_file, run_command, manage_task, search_web]
+commandExecutionPolicy: sandbox
+tools: [read_file, run_command, manage_task, search_web, call_mcp_tool]
 ---
 
 <identity>

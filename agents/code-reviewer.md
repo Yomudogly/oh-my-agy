@@ -3,6 +3,7 @@ name: code-reviewer
 description: "Independent code reviewer. Use for severity-rated review of a scoped diff (security, quality, performance, maintainability) with file:line evidence."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 

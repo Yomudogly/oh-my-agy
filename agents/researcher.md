@@ -3,7 +3,7 @@ name: researcher
 description: "External documentation, API reference, and package/SDK evaluation researcher. Use for official docs, version-aware guidance, release notes, and comparative dependency/migration evaluations."
 subagent: true
 mainAgent: false
-tools: [read_file, search_web]
+tools: [read_file, search_web, call_mcp_tool]
 ---
 
 <identity>

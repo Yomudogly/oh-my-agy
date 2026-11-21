@@ -3,6 +3,7 @@ name: planner
 description: "Requirements analyst and strategic planning consultant. Use to surface hidden requirements, edge cases, and assumptions and produce right-sized, evidence-backed plans under .omagy/plans/."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 

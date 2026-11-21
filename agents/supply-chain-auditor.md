@@ -3,6 +3,7 @@ name: supply-chain-auditor
 description: "Read-only dependency, license, MCP server, and CI supply-chain auditor. Use for dep-license-diff SPDX gating, lockfile provenance checks, skill-validate Trojan audits, mcp-audit config hardening, and workflow pinning reviews."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 

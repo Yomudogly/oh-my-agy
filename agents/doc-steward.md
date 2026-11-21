@@ -3,6 +3,7 @@ name: doc-steward
 description: "Documentation, changelog, and project wiki steward. Use for docs-drift remediation, wiki-lint cross-link hygiene (0 isolatedPages), README/CLI flag synchronization, key-only .env.example alignment, and release note accuracy."
 subagent: true
 mainAgent: false
+model: flash
 tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]
 ---
 

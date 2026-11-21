@@ -1205,7 +1205,7 @@ export async function runSelftest() {
       skillsParity && skillIssues.length === 0,
       skillIssues.join(', ') || `count=${diskSkillCount}`);
 
-    // T7: rules/AGENTS.md <24KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 18 agents/*.md valid YAML frontmatter + subagent/mainAgent/tools + <antigravity_runtime>, and zero personal path leaks
+    // T7: rules/AGENTS.md <=14.5KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 18 agents/*.md valid YAML frontmatter + subagent/mainAgent/tools/model/commandExecutionPolicy + <antigravity_runtime>, and zero personal path leaks
     const rulesPath = path.join(pluginRoot, 'rules', 'AGENTS.md');
     const hookSelfPath = path.join(pluginRoot, 'hooks', 'omagy-hook.mjs');
     const cliSelfPath = path.join(pluginRoot, 'hooks', 'omagy-cli.mjs');
@@ -1233,7 +1233,7 @@ export async function runSelftest() {
         const raw = readFixture(path.join(agentsDir, af));
         const fmRes = validateFrontmatterYaml(
           raw,
-          ['name', 'description', 'subagent', 'mainAgent', 'tools'],
+          ['name', 'description', 'subagent', 'mainAgent', 'tools', 'model', 'commandExecutionPolicy'],
           ['name', 'description'],
           { arrayKeys: ['tools'] },
         );
@@ -1243,6 +1243,7 @@ export async function runSelftest() {
         if (!Array.isArray(fmRes.fields.tools) || fmRes.fields.tools.length < 2) {
           agentIssues.push(`${af}:tools=${JSON.stringify(fmRes.fields.tools)}`);
         }
+        if (fmRes.fields.model === 'pro') agentIssues.push(`${af}:disallowed-model-pro`);
         if (!raw.includes('<antigravity_runtime>')) agentIssues.push(`${af}:no-runtime-tag`);
       }
       const leakRe = /\/(?:Users|home)\/[A-Za-z0-9._-]+\//;
@@ -1262,8 +1263,8 @@ export async function runSelftest() {
     } catch (e) {
       agentIssues.push(e instanceof Error ? e.message : String(e));
     }
-    check('rules/AGENTS.md <24KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 18 agents/*.md valid with subagent/mainAgent/tools, and zero personal path leaks',
-      rulesSize < 24000
+    check('rules/AGENTS.md <=14.5KB, omagy-hook.mjs <175KB (zero static cold import), omagy-cli.mjs <100KB, all 18 agents/*.md valid with subagent/mainAgent/tools/model/commandExecutionPolicy, and zero personal path leaks',
+      rulesSize <= 14500
       && hookByteSize < 175000
       && cliByteSize < 100000
       && zeroStaticCliImport
@@ -1738,7 +1739,7 @@ export async function runSelftest() {
     let t41Ok = false;
     let t41Detail = '';
     try {
-      const agentAllowed = ['name', 'description', 'subagent', 'mainAgent', 'tools'];
+      const agentAllowed = ['name', 'description', 'subagent', 'mainAgent', 'tools', 'model', 'commandExecutionPolicy'];
       const agentOpts = { arrayKeys: ['tools'] };
       const fmFlowOk = validateFrontmatterYaml(
         '---\nname: demo-agent\ndescription: "Demo agent"\nsubagent: true\nmainAgent: false\ntools: [read_file, edit_file]\n---\n',
@@ -1828,15 +1829,24 @@ export async function runSelftest() {
       const writeRoles = ['executor', 'debugger', 'designer', 'test-engineer', 'devops-engineer', 'doc-steward'];
       const repoReadRoles = ['architect', 'code-reviewer', 'critic', 'explore', 'planner', 'security-reviewer', 'tracer', 'verifier', 'supply-chain-auditor', 'runtime-qa'];
       const pureReadRoles = ['researcher', 'vision'];
+      const mcpRoles = new Set(['explore', 'debugger', 'tracer', 'researcher', 'designer']);
+      const flashRoles = new Set(['explore', 'doc-steward']);
+      const allRolesT41 = [...writeRoles, ...repoReadRoles, ...pureReadRoles];
       const roleToolsParityOk = writeRoles.every((r) => {
         const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
         return fm.ok && fm.fields.tools.includes('edit_file') && fm.fields.tools.includes('write_file') && fm.fields.tools.includes('run_command');
       }) && repoReadRoles.every((r) => {
         const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
-        return fm.ok && fm.fields.tools.includes('run_command') && !fm.fields.tools.includes('edit_file') && !fm.fields.tools.includes('write_file');
+        return fm.ok && fm.fields.tools.includes('run_command') && !fm.fields.tools.includes('edit_file') && !fm.fields.tools.includes('write_file') && fm.fields.commandExecutionPolicy === 'sandbox';
       }) && pureReadRoles.every((r) => {
         const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
-        return fm.ok && JSON.stringify(fm.fields.tools) === JSON.stringify(['read_file', 'search_web']);
+        const expected = r === 'researcher' ? ['read_file', 'search_web', 'call_mcp_tool'] : ['read_file', 'search_web'];
+        return fm.ok && JSON.stringify(fm.fields.tools) === JSON.stringify(expected);
+      }) && allRolesT41.every((r) => {
+        const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
+        const mcpMatch = mcpRoles.has(r) ? fm.fields.tools.includes('call_mcp_tool') : !fm.fields.tools.includes('call_mcp_tool');
+        const modelMatch = flashRoles.has(r) ? fm.fields.model === 'flash' : !fm.fields.model;
+        return fm.ok && mcpMatch && modelMatch && fm.fields.model !== 'pro';
       });
 
       t41Ok = parserOk && deletedAbsent && foldedOk && hudSubagentsOk && roleToolsParityOk;

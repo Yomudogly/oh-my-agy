@@ -3,6 +3,7 @@ name: runtime-qa
 description: "Read-only black-box runtime QA engineer. Use for live process/CLI/API edge-case probing, coverage-map gap targeting, zero-assertion test audits, timeout/signal resilience checks, and deterministic reproduction recipes."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 

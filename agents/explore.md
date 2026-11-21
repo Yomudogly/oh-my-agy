@@ -3,7 +3,9 @@ name: explore
 description: "Read-only codebase search specialist. Use for repo-local file, symbol, pattern, and relationship lookup, or mapping how this repo currently uses a dependency."
 subagent: true
 mainAgent: false
-tools: [read_file, run_command, manage_task, search_web]
+model: flash
+commandExecutionPolicy: sandbox
+tools: [read_file, run_command, manage_task, search_web, call_mcp_tool]
 ---
 
 <identity>

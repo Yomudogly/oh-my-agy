@@ -3,6 +3,7 @@ name: security-reviewer
 description: "Security vulnerability reviewer. Use for OWASP Top 10, secrets, injection, auth, and unsafe-pattern review of a scoped change."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 

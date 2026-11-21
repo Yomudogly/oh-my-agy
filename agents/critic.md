@@ -3,6 +3,7 @@ name: critic
 description: "Plan and work review critic. Use after the architect in ralplan consensus to issue APPROVE/ITERATE/REJECT against quality criteria."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 

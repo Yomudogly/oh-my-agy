@@ -3,6 +3,7 @@ name: verifier
 description: "Completion-evidence verifier. Use to independently confirm a claimed result with fresh, concrete evidence before reporting completion."
 subagent: true
 mainAgent: false
+commandExecutionPolicy: sandbox
 tools: [read_file, run_command, manage_task, search_web]
 ---
 
