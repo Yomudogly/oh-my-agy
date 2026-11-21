@@ -12,13 +12,24 @@
       { "type": "command", "command": "sh ./hooks/run.sh stop", "timeout": 20 }
     ]
   },
+  "oh-my-agy-write-guards": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|multiedit|multi_edit|apply_patch|patch|delete_file|move_file|rename_file",
+        "hooks": [
+          { "type": "command", "command": "sh ./hooks/run.sh pre-tool-use --guard-scope=write", "timeout": 10 }
+        ]
+      }
+    ]
+  },
   "oh-my-agy-planning-guard": {
     "enabled": false,
     "PreToolUse": [
       {
-        "matcher": "write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|multiedit|multi_edit|apply_patch|patch|delete_file|move_file|rename_file|read_file|view_file",
+        "matcher": "write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|multiedit|multi_edit|apply_patch|patch|delete_file|move_file|rename_file",
         "hooks": [
-          { "type": "command", "command": "sh ./hooks/run.sh pre-tool-use", "timeout": 10 }
+          { "type": "command", "command": "sh ./hooks/run.sh pre-tool-use --guard-scope=planning", "timeout": 10 }
         ]
       }
     ]

@@ -260,6 +260,52 @@ export function resolveBundleRoot(argv1 = process.argv[1] || '', fallbackRoot = 
   return path.resolve(fallbackRoot);
 }
 
+/** Resolve persistent plugin data directory (`PLUGIN_DATA` -> `~/.gemini/config/oh-my-agy`). */
+export function defaultPluginDataDir(env = process.env) {
+  const raw = String(env?.PLUGIN_DATA || '').trim();
+  if (raw) return path.resolve(raw);
+  return path.join(os.homedir(), '.gemini', 'config', 'oh-my-agy');
+}
+
+/** Resolve plugin root (`OMAGY_PLUGIN_ROOT` -> `PLUGIN_ROOT` if `plugin.json` exists -> `selfRoot`). */
+export function resolvePluginRoot(selfRoot = process.cwd(), env = process.env) {
+  for (const raw of [env?.OMAGY_PLUGIN_ROOT, env?.PLUGIN_ROOT]) {
+    const p = String(raw || '').trim();
+    if (p && fs.existsSync(path.join(p, 'plugin.json'))) return path.resolve(p);
+  }
+  return path.resolve(String(selfRoot || process.cwd()));
+}
+
+const VALID_GUARD_SCOPES = new Set(['write', 'planning', 'all']);
+
+/** Parse `--guard-scope=write|planning|all` or `--guard-scope write|planning|all` from CLI args (default `'all'`). */
+export function parseGuardScope(argv = []) {
+  const args = Array.isArray(argv) ? argv : [];
+  for (let i = 0; i < args.length; i += 1) {
+    const a = String(args[i] || '');
+    if (a.startsWith('--guard-scope=')) {
+      const v = a.slice(14).trim().toLowerCase();
+      if (VALID_GUARD_SCOPES.has(v)) return v;
+    } else if (a === '--guard-scope' && i + 1 < args.length) {
+      const v = String(args[i + 1] || '').trim().toLowerCase();
+      if (VALID_GUARD_SCOPES.has(v)) return v;
+    }
+  }
+  return 'all';
+}
+
+/** Format an Antigravity `systemMessage` injectStep with optional concise `metadata.user_markdown`. */
+export function formatSystemMessageStep(text, opts = {}) {
+  const msg = String(text ?? '');
+  const um = typeof opts?.userMarkdown === 'string' && opts.userMarkdown.trim() ? opts.userMarkdown.trim() : '';
+  return {
+    systemMessage: {
+      systemMessage: msg,
+      ...(um ? { metadata: { user_markdown: um } } : {}),
+    },
+  };
+}
+
 /** Compare installed host-bundle.json metadata against canonical plugin.json version. */
 export function checkHostBundleDrift(canonicalRoot, opts = {}) {
   const bundleRoot = opts.bundleRoot || resolveBundleRoot(opts.argv1, opts.fallbackRoot || canonicalRoot);
@@ -604,6 +650,123 @@ export function expandTranscriptRecordForFreshness(o) {
   return out;
 }
 
+const DEFAULT_TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+const READ_TOOL_NAMES_RE = /^(?:read_file|view_file|read|view)$/i;
+const READ_PATH_ARG_KEYS = ['Path', 'path', 'AbsolutePath', 'absolutePath', 'absolute_path', 'TargetFile', 'targetFile', 'target_file', 'filePath', 'file_path', 'file'];
+
+function canonFilePath(p, depth = 0) {
+  const normDrive = (s) => (process.platform === 'win32' ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
+  const realpathFn = fs.realpathSync.native || fs.realpathSync;
+  const abs = normDrive(path.resolve(String(p || '')));
+  if (depth > 8) return abs;
+  let cur = abs;
+  const tail = [];
+  for (let i = 0; i < 32; i += 1) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) {
+        const linkTarget = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+        return canonFilePath(path.join(linkTarget, ...tail), depth + 1);
+      }
+      return normDrive(path.join(realpathFn(cur), ...tail));
+    } catch { /* fail open: walk up to existing ancestor */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    tail.unshift(path.basename(cur));
+    cur = parent;
+  }
+  return abs;
+}
+
+function unwrapQuotedString(v) {
+  if (typeof v !== 'string') return '';
+  const s = v.trim();
+  if (s.length >= 2 && s[0] === '"' && s.at(-1) === '"') {
+    try { const parsed = JSON.parse(s); if (typeof parsed === 'string') return parsed.trim(); } catch { /* fail open: literal string */ }
+  }
+  return s;
+}
+
+/** Read a bounded tail slice of a JSONL transcript file (UTF-8 BOM stripped, optional leading partial line drop). */
+export function readTranscriptTailSlice(p, maxBytes = DEFAULT_TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
+  if (!p || typeof p !== 'string') return { text: '', baseOffset: 0 };
+  try {
+    const fd = fs.openSync(p, 'r');
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile() || st.size <= 0) return { text: '', baseOffset: 0 };
+      const start = Math.max(0, st.size - (maxBytes > 0 ? Math.floor(maxBytes) : DEFAULT_TRANSCRIPT_TAIL_BYTES));
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      const rawStr = buf.toString('utf8');
+      const bomBytes = start === 0 && rawStr.charCodeAt(0) === 0xFEFF ? 3 : 0;
+      const txt = bomBytes ? rawStr.slice(1) : rawStr;
+      const nl = dropPartial && start > 0 ? txt.indexOf('\n') : -1;
+      if (nl >= 0 && nl < txt.length - 1) {
+        return { text: txt.slice(nl + 1), baseOffset: start + bomBytes + Buffer.byteLength(txt.slice(0, nl + 1), 'utf8') };
+      }
+      return { text: txt, baseOffset: start + bomBytes };
+    } finally { fs.closeSync(fd); }
+  } catch { /* fail open: unreadable transcript */ return { text: '', baseOffset: 0 }; }
+}
+
+/** Read bounded tail text of a JSONL transcript file. */
+export function readTranscriptTailText(p, maxBytes = DEFAULT_TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
+  return readTranscriptTailSlice(p, maxBytes, dropPartial).text;
+}
+
+/** Extract deduplicated, canonicalized recent read_file/view_file target paths (up to 200) from a transcript tail. */
+export function extractTranscriptReadPaths(transcriptPath, roots = [], host = 'antigravity', tailBytes = 256 * 1024) {
+  const { text: tail } = readTranscriptTailSlice(transcriptPath, tailBytes, true);
+  if (!tail) return [];
+  const rootList = (Array.isArray(roots) ? roots : (roots ? [roots] : []))
+    .filter((r) => typeof r === 'string' && r.trim());
+  const resolveReadTarget = (rawTarget) => {
+    const t = unwrapQuotedString(rawTarget);
+    if (!t) return '';
+    if (path.isAbsolute(t)) return canonFilePath(t);
+    const existing = rootList.map((r) => path.resolve(r, t)).find((cand) => {
+      try { return fs.existsSync(cand); } catch { /* fail open: ignore inaccessible root */ return false; }
+    });
+    if (existing) return canonFilePath(existing);
+    return canonFilePath(rootList[0] ? path.resolve(rootList[0], t) : t);
+  };
+  const recent = new Set();
+  for (const rawLine of tail.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { /* fail open: ignore partial or malformed JSONL line */ continue; }
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+    const [nr] = extractHostTranscriptRecords([rec]);
+    let calls = nr?.toolCalls?.length ? nr.toolCalls : [];
+    if (!calls.length && Array.isArray(rec.tool_calls)) {
+      calls = rec.tool_calls;
+    } else if (!calls.length && (rec.name || rec.toolName) && (rec.arguments || rec.args || rec.input || /TOOL_CALL/i.test(String(rec.type || '')))) {
+      calls = [rec];
+    }
+    for (const tc of calls) {
+      if (!tc || typeof tc !== 'object') continue;
+      if (String(tc.status || '').trim().toUpperCase() === 'ERROR') continue;
+      const name = String(tc.name || tc.toolName || tc.function?.name || '').trim();
+      if (!READ_TOOL_NAMES_RE.test(name)) continue;
+      const args = safeParseObj(tc.args ?? tc.arguments ?? tc.input ?? tc.function?.arguments);
+      for (const k of READ_PATH_ARG_KEYS) {
+        if (typeof args[k] === 'string' && args[k].trim()) {
+          const resolved = resolveReadTarget(args[k]);
+          if (resolved) {
+            if (recent.has(resolved)) recent.delete(resolved);
+            recent.add(resolved);
+          }
+          break;
+        }
+      }
+    }
+  }
+  const out = [...recent];
+  return out.length > 200 ? out.slice(-200) : out;
+}
+
 /** Compact (< 3200 chars) Claude standing rules injected only when .claude/rules/oh-my-agy.md is absent. */
 export function buildCompactClaudeContract() {
   return [
@@ -791,8 +954,11 @@ export function serializeHookOutcome(rawEvent, rawResult = {}, host = 'antigravi
   const msgs = [];
   if (Array.isArray(res.injectSteps)) {
     for (const step of res.injectSteps) {
-      if (step && typeof step.ephemeralMessage === 'string' && step.ephemeralMessage.trim()) {
-        msgs.push(step.ephemeralMessage.trim());
+      const text = typeof step?.systemMessage?.systemMessage === 'string'
+        ? step.systemMessage.systemMessage
+        : (typeof step?.ephemeralMessage === 'string' ? step.ephemeralMessage : '');
+      if (text.trim()) {
+        msgs.push(text.trim());
       }
     }
   }

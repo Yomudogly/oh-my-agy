@@ -29,11 +29,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import {
-  buildCompactClaudeContract, checkHostBundleDrift, defaultRuntimeDir, desktopHudRegistryFile,
-  detectHost, ensureDesktopHudDaemon, ensureSecureRuntimeDir, expandTranscriptRecordForFreshness,
-  extractHostTranscriptRecords, hasClaudeRulesFile, isDesktopAppSession, normalizeLifecycleEvent,
-  normalizeLifecyclePayload, resolveBundleRoot, resolveCodexVersion, serializeHookOutcome,
+  buildCompactClaudeContract, checkHostBundleDrift, defaultPluginDataDir, defaultRuntimeDir,
+  desktopHudRegistryFile, detectHost, ensureDesktopHudDaemon, ensureSecureRuntimeDir,
+  expandTranscriptRecordForFreshness, extractHostTranscriptRecords, extractTranscriptReadPaths,
+  formatSystemMessageStep, hasClaudeRulesFile, isDesktopAppSession, normalizeLifecycleEvent,
+  normalizeLifecyclePayload, parseGuardScope, readTranscriptTailSlice, readTranscriptTailText,
+  resolveBundleRoot, resolveCodexVersion, resolvePluginRoot, serializeHookOutcome,
 } from './omagy-host.mjs';
+export { readTranscriptTailSlice, readTranscriptTailText };
 
 export function hardenWindowsExeSearch() {
   if (process.platform === 'win32') {
@@ -2294,30 +2297,6 @@ export function nextAvailableWikiSlug(wikiDir, rawSlug) {
 }
 
 // ---------- transcript ----------
-function readTranscriptTailSlice(p, maxBytes = TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
-  if (!p || typeof p !== 'string') return { text: '', baseOffset: 0 };
-  try {
-    const fd = fs.openSync(p, 'r');
-    try {
-      const st = fs.fstatSync(fd);
-      if (!st.isFile() || st.size <= 0) return { text: '', baseOffset: 0 };
-      const start = Math.max(0, st.size - (maxBytes > 0 ? Math.floor(maxBytes) : TRANSCRIPT_TAIL_BYTES));
-      const buf = Buffer.alloc(st.size - start);
-      fs.readSync(fd, buf, 0, buf.length, start);
-      const rawStr = buf.toString('utf8');
-      const bomBytes = start === 0 && rawStr.charCodeAt(0) === 0xFEFF ? 3 : 0;
-      const txt = bomBytes ? rawStr.slice(1) : rawStr;
-      const nl = dropPartial && start > 0 ? txt.indexOf('\n') : -1;
-      if (nl >= 0 && nl < txt.length - 1) {
-        return { text: txt.slice(nl + 1), baseOffset: start + bomBytes + Buffer.byteLength(txt.slice(0, nl + 1), 'utf8') };
-      }
-      return { text: txt, baseOffset: start + bomBytes };
-    } finally { fs.closeSync(fd); }
-  } catch { /* fail open: unreadable transcript */ return { text: '', baseOffset: 0 }; }
-}
-function readTranscriptTailText(p, maxBytes = TRANSCRIPT_TAIL_BYTES, dropPartial = false) {
-  return readTranscriptTailSlice(p, maxBytes, dropPartial).text;
-}
 function lastUserMessage(transcriptPath, payload = null, host = 'antigravity') {
   const directInput = payload?.lastUserInput ?? payload?.last_user_input ?? payload?.prompt;
   if ((host === 'claude' || host === 'codex') && typeof directInput === 'string' && directInput.trim()) {
@@ -2621,6 +2600,28 @@ function capEphemeralMessages(messages, maxChars = MAX_EPHEMERAL_CHARS) {
   return out;
 }
 
+function buildUserMarkdownBanner(msg) {
+  const firstLine = String(msg || '').split('\n')[0].trim();
+  if (firstLine.startsWith('[oh-my-agy] Skill routing:')) {
+    const m = /explicitly invoked ([^.]+)\./.exec(firstLine);
+    return m ? `**oh-my-agy** · Routing ${m[1]}` : '**oh-my-agy** · Skill routing active';
+  }
+  if (firstLine.startsWith('[oh-my-agy] Active workflow state:')) {
+    const m = /Active workflow state:\s*(.+?)\s*(?:—|$)/.exec(firstLine);
+    return m ? `**oh-my-agy** · Active: ${m[1].slice(0, 140)}` : '**oh-my-agy** · Active workflow state';
+  }
+  if (firstLine.startsWith('[oh-my-agy] Context compaction recovery')) {
+    return `**oh-my-agy** · ${firstLine.replace(/^\[oh-my-agy\]\s*/, '').replace(/:$/, '')}`;
+  }
+  return '';
+}
+function toSystemMessageSteps(messages) {
+  return messages.map((m) => {
+    const userMarkdown = buildUserMarkdownBanner(m);
+    return formatSystemMessageStep(m, userMarkdown ? { userMarkdown } : {});
+  });
+}
+
 // ---------- handlers ----------
 export function sessionStart(payload) {
   const host = detectHost(payload);
@@ -2676,7 +2677,7 @@ export function sessionStart(payload) {
     artifactDirectoryPath,
     at: new Date().toISOString(),
   });
-  return capped.length ? { injectSteps: capped.map((m) => ({ ephemeralMessage: m })) } : {};
+  return capped.length ? { injectSteps: toSystemMessageSteps(capped) } : {};
 }
 
 export function preInvocation(payload) {
@@ -2731,7 +2732,20 @@ export function preInvocation(payload) {
       if (wikiMsg) { messages.push(wikiMsg); wikiInjected = true; }
     }
   }
-  const seenReads = (readJson(runtimeFile(conv, 'seen'))?.readFiles || []).slice(-8).join('\n');
+  const fileReads = readJson(runtimeFile(conv, 'seen'))?.readFiles;
+  const txReads = transcriptPath ? extractTranscriptReadPaths(transcriptPath, roots, host) : [];
+  const mergedReadList = [...new Set([...(Array.isArray(fileReads) ? fileReads : []), ...txReads])].slice(-16);
+  const canonRoots = roots.map((r) => canonicalizePath(r));
+  const readTokens = [];
+  for (const rp of mergedReadList) {
+    readTokens.push(rp);
+    if (/\s/.test(rp)) {
+      for (const cr of canonRoots) {
+        if (rp.startsWith(cr + path.sep)) readTokens.push(path.relative(cr, rp).replace(/\\/g, '/'));
+      }
+    }
+  }
+  const seenReads = readTokens.join('\n');
   const subdir = discoverSubdirAgents(roots, seenReads ? `${cleanText}\n${seenReads}` : cleanText, record.seenAgents || []);
   messages.push(...subdir.messages);
   if (!isSubagent && !mapInjected && process.env.OMAGY_MAP !== '0') {
@@ -2747,7 +2761,7 @@ export function preInvocation(payload) {
     ...(isSubagent ? {} : { skills }),
     seenAgents: subdir.seen, transcriptPath, artifactDirectoryPath, at: new Date().toISOString(),
   });
-  return capped.length ? { injectSteps: capped.map((m) => ({ ephemeralMessage: m })) } : {};
+  return capped.length ? { injectSteps: toSystemMessageSteps(capped) } : {};
 }
 
 const FILE_MUTATION_TOOLS_RE = /^(?:write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|multiedit|multi_edit|apply_patch|patch|delete_file|move_file|rename_file)$/i;
@@ -2806,8 +2820,12 @@ export function isPathInsideAllowedOmagy(roots, rawTarget) {
     return false;
   });
 }
-export function preToolUse(payload) {
-  payload = normalizeLifecyclePayload(payload, detectHost(payload));
+export function preToolUse(payload, opts = {}) {
+  const host = detectHost(payload);
+  payload = normalizeLifecyclePayload(payload, host);
+  const guardScope = ['write', 'planning', 'all'].includes(opts?.guardScope) ? opts.guardScope : 'all';
+  const runWriteGuards = guardScope === 'write' || guardScope === 'all';
+  const runPlanningGuards = guardScope === 'planning' || guardScope === 'all';
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const call = payload.toolCall || payload.tool_call || {};
@@ -2833,15 +2851,19 @@ export function preToolUse(payload) {
     return {};
   }
 
-  const planning = activeStates(roots, PLANNING_MODES, conv);
-  const autopilotStates = activeStates(roots, ['autopilot'], conv);
-  const autopilotPlanning = autopilotStates.find((s) => PLANNING_MODES.includes(String(s.data.current_phase || '').toLowerCase()));
-  const ralplanGate = autopilotStates.find((s) => s.data.ralplan_gate === true && !hasRalplanArtifacts(s.root));
-  const s = planning[0] || autopilotPlanning || ralplanGate;
+  let s = null;
+  let ralplanGate = null;
+  if (runPlanningGuards) {
+    const planning = activeStates(roots, PLANNING_MODES, conv);
+    const autopilotStates = activeStates(roots, ['autopilot'], conv);
+    const autopilotPlanning = autopilotStates.find((st) => PLANNING_MODES.includes(String(st.data.current_phase || '').toLowerCase()));
+    ralplanGate = autopilotStates.find((st) => st.data.ralplan_gate === true && !hasRalplanArtifacts(st.root));
+    s = planning[0] || autopilotPlanning || ralplanGate;
+  }
 
   // Fail closed when an explicit file-mutation tool has no recognizable target argument during active planning.
   if (!targets.length) {
-    if (s && FILE_MUTATION_TOOLS_RE.test(toolName)) {
+    if (runPlanningGuards && s && FILE_MUTATION_TOOLS_RE.test(toolName)) {
       return {
         decision: 'force_ask',
         reason: `oh-my-agy: ${s.mode} planning guard could not verify a target path for ${toolName}. Approve only if you intend to write outside .omagy/.`,
@@ -2856,10 +2878,11 @@ export function preToolUse(payload) {
 
   // Notifications, Working Agreements ([by:human]), and Protected-Block guards run across ALL mutation tools & targets
   // BEFORE the .omagy/ / omagy_wiki/ planning exemption check.
-  if (FILE_MUTATION_TOOLS_RE.test(toolName)) {
+  if (runWriteGuards && FILE_MUTATION_TOOLS_RE.test(toolName)) {
+    const globalNotifPath = canonicalizePath(path.join(defaultPluginDataDir(), 'notifications.json'));
     for (const rawTarget of targets) {
       const targetResolved = resolveTargetPath(rawTarget);
-      if (/(?:^|[/\\])(?:\.omagy|oh-my-agy)[/\\]notifications\.json$/i.test(targetResolved)) {
+      if (targetResolved === globalNotifPath || /(?:^|[/\\])(?:\.omagy|oh-my-agy)[/\\]notifications\.json$/i.test(targetResolved)) {
         return {
           decision: 'force_ask',
           reason: `oh-my-agy: notifications-guard — ${toolName} on ${targetResolved} modifies outbound notification webhooks or command settings. Approve explicitly if intended.`,
@@ -2927,7 +2950,7 @@ export function preToolUse(payload) {
   if (!outsideTarget) return {};
   const resolved = resolveTargetPath(outsideTarget);
 
-  if (s) {
+  if (runPlanningGuards && s) {
     const reason = ralplanGate && s === ralplanGate
       ? `oh-my-agy: autopilot ralplan_gate is active without .omagy/plans/prd-*.md and test-spec-*.md. Writing ${resolved} outside .omagy/ requires completing ralplan artifacts first or user approval.`
       : `oh-my-agy: ${s.mode} is in planning phase (${s.data.current_phase || 'unknown'}). ` +
@@ -2938,7 +2961,7 @@ export function preToolUse(payload) {
 
   // Write-existing-file guard:
   // Escalates full-file Overwrite on a non-empty existing code file that has not been read in this session.
-  if (isFullOverwrite && CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
+  if (runWriteGuards && isFullOverwrite && CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
     let existsNonEmpty = false;
     try {
       const st = fs.statSync(resolved);
@@ -2947,7 +2970,12 @@ export function preToolUse(payload) {
     if (existsNonEmpty) {
       const seen = readJson(seenFile) || { readFiles: [] };
       const readList = Array.isArray(seen.readFiles) ? seen.readFiles : [];
-      if (!readList.includes(resolved)) {
+      let wasRead = readList.includes(resolved);
+      if (!wasRead) {
+        const txPath = String(payload.transcriptPath || payload.transcript_path || payload.logPath || readJson(runtimeFile(conv, 'routing'))?.transcriptPath || '').trim();
+        if (txPath) wasRead = extractTranscriptReadPaths(txPath, roots, host).includes(resolved);
+      }
+      if (!wasRead) {
         return {
           decision: 'force_ask',
           reason: `oh-my-agy: write-existing-file-guard — Overwriting existing source file ${resolved} without reading it first in this session. Read the file first or use edit_file to avoid accidental code deletion, or approve to overwrite.`,
@@ -3072,6 +3100,7 @@ export async function stop(payload) {
 
   let decision = allow;
   if (isNormalStop && payload.fullyIdle !== false && !payload.error) {
+    const contActive = payload?.continuationActive === true || payload?.continuation_active === true;
     const routingRec = readJson(runtimeFile(conv, 'routing')) || {};
     const isSubagent = Boolean(routingRec.isSubagent) || isSubagentPayload(payload);
     const active = activeStates(roots, CONTINUATION_MODES, conv)
@@ -3083,7 +3112,9 @@ export async function stop(payload) {
       const sig = `${s.file}|${s.data.updated_at || ''}|${s.mtimeMs}`;
       const rec = readJson(nudgeFile) || {};
       const count = rec.sig === sig ? Number(rec.count || 0) + 1 : 1;
-      if (count <= MAX_NUDGES) {
+      if (contActive && rec.sig === sig) {
+        writeJson(nudgeFile, { sig, count, exhausted: true, at: new Date().toISOString() });
+      } else if (count <= MAX_NUDGES) {
         writeJson(nudgeFile, { sig, count, at: new Date().toISOString() });
         const d = s.data;
         decision = {
@@ -3100,40 +3131,42 @@ export async function stop(payload) {
       }
     } else {
       try { fs.rmSync(nudgeFile, { force: true }); } catch { /* fail open: ignore missing nudge file */ }
-      const msg = lastAssistantMessage(payload);
-      const justCompleted = roots.flatMap((r) => loadModeStates(r, conv)).some(
-        (s) => !s.foreignOwner && String(s.data.current_phase || '').toLowerCase() === 'complete' && Date.now() - updatedMs(s) < 60 * 1000,
-      );
-      if (justCompleted || (msg && COMPLETION_CLAIM_RE.test(msg))) {
-        const blockers = scanDiffBlockers(roots);
-        if (blockers.length) {
-          const driftFile = runtimeFile(conv, 'drift');
-          const sig = blockers.map((b) => `${b.file}:${b.line}:${b.kind}`).join('|');
-          const prev = readJson(driftFile) || {};
-          if (prev.sig !== sig) {
-            writeJson(driftFile, { sig, at: new Date().toISOString() });
-            const summary = blockers.slice(0, 4).map((b) => `${b.file}:${b.line} (${b.kind})`).join(', ');
-            decision = {
-              decision: 'continue',
-              reason: `[oh-my-agy] Completion drift guard: git diff still contains unfinished blocker pattern(s): ${summary}. ` +
-                'Resolve or remove skipped/focused tests, placeholder TODO/stub implementations, unexempted checker suppressions (or document `-- <reason>` / `shortcut: <ceiling>, <upgrade>`), bare empty catches (or document `/* fail open: <reason> */`), and unauthorized protected-block edits before claiming completion.',
-            };
-          }
-        }
-        if (decision.decision !== 'continue') {
-          const vf = checkVerificationFreshness(String(payload.transcript_path || payload.transcriptPath || routingRec.transcriptPath || '').trim());
-          const fFile = runtimeFile(conv, 'freshness');
-          if (vf.status === 'stale' || vf.status === 'fail') {
-            const sig = `${vf.status}:${vf.lastVerifyIdx}:${vf.lastEditIdx}:${vf.lastEditedTarget}`;
-            if ((readJson(fFile) || {}).sig !== sig) {
-              writeJson(fFile, { sig, status: vf.status, at: new Date().toISOString() });
-              const why = vf.status === 'stale'
-                ? `${vf.lastEditedTarget || '(modified)'} was edited after ${vf.lastVerifyCmd || 'verification'}`
-                : `${vf.lastVerifyCmd || 'verification'} failed`;
-              decision = { decision: 'continue', reason: `[oh-my-agy] Verification freshness check (${vf.status}): ${why}. Re-run verification before claiming completion.` };
+      if (!contActive) {
+        const msg = lastAssistantMessage(payload);
+        const justCompleted = roots.flatMap((r) => loadModeStates(r, conv)).some(
+          (s) => !s.foreignOwner && String(s.data.current_phase || '').toLowerCase() === 'complete' && Date.now() - updatedMs(s) < 60 * 1000,
+        );
+        if (justCompleted || (msg && COMPLETION_CLAIM_RE.test(msg))) {
+          const blockers = scanDiffBlockers(roots);
+          if (blockers.length) {
+            const driftFile = runtimeFile(conv, 'drift');
+            const sig = blockers.map((b) => `${b.file}:${b.line}:${b.kind}`).join('|');
+            const prev = readJson(driftFile) || {};
+            if (prev.sig !== sig) {
+              writeJson(driftFile, { sig, at: new Date().toISOString() });
+              const summary = blockers.slice(0, 4).map((b) => `${b.file}:${b.line} (${b.kind})`).join(', ');
+              decision = {
+                decision: 'continue',
+                reason: `[oh-my-agy] Completion drift guard: git diff still contains unfinished blocker pattern(s): ${summary}. ` +
+                  'Resolve or remove skipped/focused tests, placeholder TODO/stub implementations, unexempted checker suppressions (or document `-- <reason>` / `shortcut: <ceiling>, <upgrade>`), bare empty catches (or document `/* fail open: <reason> */`), and unauthorized protected-block edits before claiming completion.',
+              };
             }
-          } else if (vf.status === 'pass') {
-            try { fs.rmSync(fFile, { force: true }); } catch { /* fail open: missing latch */ }
+          }
+          if (decision.decision !== 'continue') {
+            const vf = checkVerificationFreshness(String(payload.transcript_path || payload.transcriptPath || routingRec.transcriptPath || '').trim());
+            const fFile = runtimeFile(conv, 'freshness');
+            if (vf.status === 'stale' || vf.status === 'fail') {
+              const sig = `${vf.status}:${vf.lastVerifyIdx}:${vf.lastEditIdx}:${vf.lastEditedTarget}`;
+              if ((readJson(fFile) || {}).sig !== sig) {
+                writeJson(fFile, { sig, status: vf.status, at: new Date().toISOString() });
+                const why = vf.status === 'stale'
+                  ? `${vf.lastEditedTarget || '(modified)'} was edited after ${vf.lastVerifyCmd || 'verification'}`
+                  : `${vf.lastVerifyCmd || 'verification'} failed`;
+                decision = { decision: 'continue', reason: `[oh-my-agy] Verification freshness check (${vf.status}): ${why}. Re-run verification before claiming completion.` };
+              }
+            } else if (vf.status === 'pass') {
+              try { fs.rmSync(fFile, { force: true }); } catch { /* fail open: missing latch */ }
+            }
           }
         }
       }
@@ -3148,7 +3181,7 @@ export async function stop(payload) {
 
 // ---------- notifications ----------
 export function loadNotificationConfig(roots, globalConfigPath = '') {
-  const gPath = globalConfigPath || path.join(os.homedir(), '.gemini', 'config', 'oh-my-agy', 'notifications.json');
+  const gPath = globalConfigPath || path.join(defaultPluginDataDir(), 'notifications.json');
   const rawGlobal = readJson(gPath);
   const globalCfg = (rawGlobal && typeof rawGlobal === 'object' && !Array.isArray(rawGlobal)) ? rawGlobal : {};
   const globalCommand = (globalCfg.command && typeof globalCfg.command === 'object' && !Array.isArray(globalCfg.command))
@@ -3279,10 +3312,10 @@ async function main() {
   try {
     if (normEvent === 'session-start') result = sessionStart(payload);
     else if (normEvent === 'pre-invocation') result = preInvocation(payload);
-    else if (normEvent === 'pre-tool-use') result = preToolUse(payload);
+    else if (normEvent === 'pre-tool-use') result = preToolUse(payload, { guardScope: parseGuardScope(rawArgs) });
     else if (normEvent === 'stop') result = await stop(payload);
     if (host !== 'antigravity') {
-      const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+      const pluginRoot = resolvePluginRoot(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), process.env);
       const bundleRoot = resolveBundleRoot(process.argv[1], pluginRoot);
       const extra = [];
       if (normEvent === 'session-start') {
@@ -3298,7 +3331,7 @@ async function main() {
         const ws = workspaceRoots(payload)[0] || process.cwd();
         const txt = String(payload.lastUserInput || payload.last_user_input || payload.prompt || rawPayload?.prompt || '');
         const hudAsk = detectSkills(txt).includes('hud')
-          || (result.injectSteps || []).some((s) => String(s?.ephemeralMessage || '').includes('$hud'));
+          || (result.injectSteps || []).some((s) => String(s?.systemMessage?.systemMessage || s?.ephemeralMessage || '').includes('$hud'));
         if (hudAsk || !fs.existsSync(desktopHudRegistryFile(ws))) {
           const hud = await ensureDesktopHudDaemon({ host, workspace: ws, pluginRoot, env: process.env, argv1: process.argv[1] });
           if (hud?.message) extra.push(hud.message);

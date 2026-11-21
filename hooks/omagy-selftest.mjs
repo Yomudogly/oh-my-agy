@@ -10,14 +10,19 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   buildCompactClaudeContract,
   checkHostBundleDrift,
+  defaultPluginDataDir,
   detectHost,
   defaultRuntimeDir,
   extractHostTranscriptRecords,
+  extractTranscriptReadPaths,
+  formatSystemMessageStep,
   hasClaudeRulesFile,
   isDesktopAppSession,
   normalizeLifecycleEvent,
   normalizeLifecyclePayload,
+  parseGuardScope,
   resolveCodexVersion,
+  resolvePluginRoot,
   serializeHookOutcome,
 } from './omagy-host.mjs';
 import {
@@ -827,11 +832,12 @@ export async function runSelftest() {
     const transcript = path.join(ws, 'transcript.jsonl');
     fs.writeFileSync(transcript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'please $autopilot then $code-review and $hud --handoff on packages/core/index.ts, plus $handoff $plan $design $omagy-setup /plan $nonexistent' })}\n`);
     const p1 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 1 });
-    const stepTexts = (p1.injectSteps || []).map((s) => s.ephemeralMessage || '');
+    const stepTexts = (p1.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '');
+    const p1NoLegacy = (p1.injectSteps || []).every((s) => s && s.ephemeralMessage === undefined);
     const routeMsg = stepTexts[0] || '';
     const wikiMsg = stepTexts.find((t) => t.includes('Project Wiki index')) || '';
     const subdirMsg = stepTexts.find((t) => t.includes('Subdirectory AGENTS.md')) || '';
-    check('pre-invocation routes $skills in order (including $hud --handoff) and ignores retired skills', routeMsg.includes('$autopilot, $code-review, $hud') && !routeMsg.includes('$handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('$design') && !routeMsg.includes('$omagy-setup') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
+    check('pre-invocation routes $skills in order (including $hud --handoff) and ignores retired skills', p1NoLegacy && routeMsg.includes('$autopilot, $code-review, $hud') && !routeMsg.includes('$handoff') && !routeMsg.includes('$plan') && !routeMsg.includes('$design') && !routeMsg.includes('$omagy-setup') && !routeMsg.includes('nonexistent'), routeMsg.slice(0, 100));
     check('pre-invocation injects working agreements + bounded wiki index (<=3500 chars)', wikiMsg.includes('Working Agreements') && wikiMsg.length <= MAX_WIKI_CONTEXT_CHARS && wikiMsg.includes('Wiki index truncated'), `len=${wikiMsg.length}`);
     check('pre-invocation discovers subdirectory AGENTS.md on touched path', subdirMsg.includes('packages/core/AGENTS.md') && subdirMsg.includes('Keep core zero-dependency'));
     check('pre-invocation injects once per user message', Object.keys(preInvocation({ ...base, transcriptPath: transcript, invocationNum: 2 })).length === 0);
@@ -839,8 +845,9 @@ export async function runSelftest() {
     // Next user message should not re-inject wiki index or already-seen subdirectory AGENTS.md in the same session
     fs.appendFileSync(transcript, `${JSON.stringify({ step_index: 2, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'now $analyze packages/core/index.ts' })}\n`);
     const p2 = preInvocation({ ...base, transcriptPath: transcript, invocationNum: 3 });
-    const p2Texts = (p2.injectSteps || []).map((s) => s.ephemeralMessage || '');
-    check('wiki index and subdirectory AGENTS.md inject at most once per conversation', p2Texts.some((t) => t.includes('$analyze')) && !p2Texts.some((t) => t.includes('Project Wiki index')) && !p2Texts.some((t) => t.includes('Subdirectory AGENTS.md')));
+    const p2Texts = (p2.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '');
+    const p2NoLegacy = (p2.injectSteps || []).every((s) => s && s.ephemeralMessage === undefined);
+    check('wiki index and subdirectory AGENTS.md inject at most once per conversation', p2NoLegacy && p2Texts.some((t) => t.includes('$analyze')) && !p2Texts.some((t) => t.includes('Project Wiki index')) && !p2Texts.some((t) => t.includes('Subdirectory AGENTS.md')));
 
     writeJson(path.join(ws, '.omagy', 'state', 'ralplan-state.json'), { mode: 'ralplan', active: true, current_phase: 'architect-review', updated_at: new Date().toISOString() });
     const g1 = preToolUse({ ...base, toolCall: { name: 'write_to_file', args: { TargetFile: path.join(ws, 'src', 'index.ts') } } });
@@ -929,9 +936,10 @@ export async function runSelftest() {
     const subTranscript = path.join(ws, 'subagent-transcript.jsonl');
     fs.writeFileSync(subTranscript, `${JSON.stringify({ step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', content: 'TEAM alpha — TASK 1: audit $autopilot and $cancel behavior' })}\n`);
     const subPre = preInvocation({ conversationId: `${conv}-sub`, workspacePaths: [ws], transcriptPath: subTranscript, invocationNum: 1 });
-    const subPreTexts = (subPre.injectSteps || []).map((s) => s.ephemeralMessage || '');
+    const subPreTexts = (subPre.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '');
+    const subPreNoLegacy = (subPre.injectSteps || []).every((s) => s && s.ephemeralMessage === undefined);
     const subStop = await stop({ conversationId: `${conv}-sub`, workspacePaths: [ws], terminationReason: 'NO_TOOL_CALL' });
-    check('subagent prompt suppresses quoted $skill routing and unowned parent stop nudges', !subPreTexts.some((t) => t.includes('Skill routing')) && subStop.decision === 'stop');
+    check('subagent prompt suppresses quoted $skill routing and unowned parent stop nudges', subPreNoLegacy && !subPreTexts.some((t) => t.includes('Skill routing')) && subStop.decision === 'stop');
     writeJson(stateFile, { mode: 'autopilot', active: false, current_phase: 'complete', completed_at: now, updated_at: now });
 
     // Symlink state & planning-guard escape protection
@@ -1044,13 +1052,25 @@ export async function runSelftest() {
     const qgInvalid = validateQualityGates(qgRoot);
     check('validateQualityGates rejects self-recursive controller skills, sunset skills, and legacy stage keys', qgInvalid.ok === false && qgInvalid.errors.length === 3);
 
-    // Verify hooks.json PreToolUse matcher covers Antigravity 2.0 write/edit/patch/read tools
+    // Verify hooks.json split PreToolUse matchers (write-guards enabled, planning-guard disabled, both write-only without read_file/view_file)
     const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const hooksCfg = readJson(path.join(pluginRoot, 'hooks.json')) || {};
-    const matcherStr = hooksCfg['oh-my-agy-planning-guard']?.PreToolUse?.[0]?.matcher || '';
-    const matcherRe = matcherStr ? new RegExp(`^(?:${matcherStr})$`) : null;
-    check('hooks.json PreToolUse matcher covers write_file, edit_file, apply_patch, read_file, and legacy tools',
-      Boolean(matcherRe && ['write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'apply_patch', 'patch', 'read_file', 'view_file'].every((t) => matcherRe.test(t))));
+    const wgHook = hooksCfg['oh-my-agy-write-guards'] || {};
+    const pgHook = hooksCfg['oh-my-agy-planning-guard'] || {};
+    const wgMatcher = wgHook.PreToolUse?.[0]?.matcher || '';
+    const pgMatcher = pgHook.PreToolUse?.[0]?.matcher || '';
+    const wgRe = wgMatcher ? new RegExp(`^(?:${wgMatcher})$`) : null;
+    const pgRe = pgMatcher ? new RegExp(`^(?:${pgMatcher})$`) : null;
+    const wgCmd = wgHook.PreToolUse?.[0]?.hooks?.[0]?.command || '';
+    const pgCmd = pgHook.PreToolUse?.[0]?.hooks?.[0]?.command || '';
+    const writeTools = ['write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'apply_patch', 'patch', 'delete_file', 'move_file', 'rename_file'];
+    const readTools = ['read_file', 'view_file'];
+    check('hooks.json splits write-guards (enabled) & planning-guard (disabled) with write-only matchers (no read_file/view_file)',
+      wgHook.enabled === true && pgHook.enabled === false
+      && wgCmd.includes('--guard-scope=write') && pgCmd.includes('--guard-scope=planning')
+      && Boolean(wgRe && pgRe)
+      && writeTools.every((t) => wgRe.test(t) && pgRe.test(t))
+      && readTools.every((t) => !wgRe.test(t) && !pgRe.test(t)));
 
     // Verify sidecars/hud/sidecar.json declares a single AUX_PANE web UI view (so Extensions menu shows one HUD item)
     const sidecarCfg = readJson(path.join(pluginRoot, 'sidecars', 'hud', 'sidecar.json')) || {};
@@ -1106,13 +1126,14 @@ export async function runSelftest() {
     const rtAfterPlain = readJson(runtimeFile(conv, 'routing')) || {};
     const pDirectSkill = preInvocation({ conversationId: conv, workspaceUris: [ws], lastUserInput: '$ralplan --light update docs' });
     const rtAfterSkill = readJson(runtimeFile(conv, 'routing')) || {};
-    const directSkillText = (pDirectSkill.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    const directSkillText = (pDirectSkill.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '').join('\n');
+    const directSkillNoLegacy = (pDirectSkill.injectSteps || []).every((s) => s && s.ephemeralMessage === undefined);
     check('sessionStart and preInvocation persist transcriptPath/artifactDirectoryPath and route lastUserInput fallback',
       rtAfterStart.transcriptPath === '/tmp/selftest-t1.jsonl' && rtAfterStart.artifactDirectoryPath === '/tmp/selftest-artifacts'
       && Array.isArray(rtAfterStart.workspaces) && rtAfterStart.workspaces.some((p) => p === ws || p === fs.realpathSync(ws))
       && rtAfterPlain.transcriptPath === '/tmp/selftest-t2.jsonl' && rtAfterSkill.transcriptPath === '/tmp/selftest-t2.jsonl'
       && Array.isArray(rtAfterSkill.workspaces) && rtAfterSkill.workspaces.some((p) => p === ws || p === fs.realpathSync(ws))
-      && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts' && directSkillText.includes('$ralplan'));
+      && rtAfterSkill.artifactDirectoryPath === '/tmp/selftest-artifacts' && directSkillNoLegacy && directSkillText.includes('$ralplan'));
 
     // T5: plugin.json strict JSON, official 10-key Antigravity schema allowlist, <=160 char description, CHANGELOG version sync, and logo PNG dimensions
     let strictPkg = null;
@@ -1256,6 +1277,7 @@ export async function runSelftest() {
     const hudRunSh = readFixture(path.join(pluginRoot, 'sidecars', 'hud', 'run.sh'));
     let minimalPathOk = false;
     let runShFailModesOk = false;
+    let nvmSortOk = process.platform === 'win32';
     let symlinkMainOk = false;
     let userSkillsCwdEvalOk = false;
     try {
@@ -1291,6 +1313,22 @@ export async function runSelftest() {
         && cliNoNodeStatus === 2
         && JSON.parse(cliNoNodeOut || '{}').error === 'node_not_found';
 
+      if (!isWin) {
+        const fakeHome = path.join(ws, 't8-fake-nvm-home');
+        for (const ver of ['v16.20.0', 'v18.19.0', 'v20.2.0', 'v20.11.0', 'v9.11.2']) {
+          const binDir = path.join(fakeHome, '.nvm', 'versions', 'node', ver, 'bin');
+          fs.mkdirSync(binDir, { recursive: true });
+          const nodeScript = path.join(binDir, 'node');
+          fs.writeFileSync(nodeScript, `#!/bin/sh\nif [ "$1" = "-v" ]; then echo "${ver}"; exit 0; fi\necho '{"selected":"${ver}"}'\n`, { mode: 0o755 });
+        }
+        const nvmOut = execFileSync('/bin/sh', [runShPath, 'session-start'], {
+          env: { PATH: '/bin', HOME: fakeHome, OMAGY_SKIP_SYSTEM_NODE: '1' },
+          input: '{}',
+          encoding: 'utf8',
+        });
+        nvmSortOk = JSON.parse(nvmOut.trim()).selected === 'v20.11.0';
+      }
+
       const symDir = path.join(ws, 'sym-bin');
       fs.mkdirSync(symDir, { recursive: true });
       const symHook = path.join(symDir, 'omagy-hook-link.mjs');
@@ -1316,8 +1354,8 @@ export async function runSelftest() {
       !hooksRunSh.includes('dirname ') && !hooksRunSh.includes('sort -V')
       && !hudRunSh.includes('dirname ') && !hudRunSh.includes('sort -V')
       && hooksRunSh.includes('*\\\\*)') && hudRunSh.includes('*\\\\*)')
-      && minimalPathOk && runShFailModesOk && symlinkMainOk && userSkillsCwdEvalOk && backslashSubdirOk,
-      `minPath=${minimalPathOk} noNode=${runShFailModesOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk} bsSubdir=${backslashSubdirOk}`);
+      && minimalPathOk && runShFailModesOk && nvmSortOk && symlinkMainOk && userSkillsCwdEvalOk && backslashSubdirOk,
+      `minPath=${minimalPathOk} noNode=${runShFailModesOk} nvmSort=${nvmSortOk} symMain=${symlinkMainOk} skillEvalCwd=${userSkillsCwdEvalOk} bsSubdir=${backslashSubdirOk}`);
 
     // T9 (T-DR-1): buildResearchMatrix across technical, business, idea, and implementation lenses
     const rmTech = buildResearchMatrix('Vector Indexing', '--technical');
@@ -1433,7 +1471,7 @@ export async function runSelftest() {
 
     // T24 (T-MAP-2 & T-MAP-3): sessionStart/preInvocation once-per-session codebase-map injection, OMAGY_MAP=0 opt-out, and extractGoalBrief map section
     const mapConv = `${conv}-map`;
-    const joinSteps = (r) => (r.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+    const joinSteps = (r) => (r.injectSteps || []).map((s) => (s && s.ephemeralMessage === undefined ? (s?.systemMessage?.systemMessage || '') : '')).join('\n');
     const sMap1Text = joinSteps(sessionStart({ conversationId: mapConv, workspacePaths: [mapWs] }));
     const pMap2Text = joinSteps(preInvocation({ conversationId: mapConv, workspacePaths: [mapWs], lastUserInput: 'check status' }));
     const prevOmagyMap = process.env.OMAGY_MAP;
@@ -2265,7 +2303,7 @@ export async function runSelftest() {
         JSON.stringify({ type: 'PLANNER_RESPONSE', source: 'MODEL', content: '<CONTEXT_SUMMARY>\nQuoted summary\n</CONTEXT_SUMMARY>' }),
       ].join('\n') + '\n', 'utf8');
       const turn2b = preInvocation({ conversationId: t46Conv, workspacePaths: [t46Ws], transcriptPath: t46Tx, invocationNum: 2 });
-      const turn2Joined = (turn2a.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+      const turn2Joined = (turn2a.injectSteps || []).map((s) => (s && s.ephemeralMessage === undefined ? (s?.systemMessage?.systemMessage || '') : '')).join('\n');
       const savedRouting = readJson(runtimeFile(t46Conv, 'routing')) || {};
 
       // Turn 3: trigger all 5 injection categories simultaneously to test W4 <=6,000-char cumulative & per-step cap
@@ -2279,7 +2317,7 @@ export async function runSelftest() {
         JSON.stringify({ step_index: 5, type: 'USER_INPUT', content: '$autopilot update packages/ui/view.ts' }),
       ].join('\n') + '\n', 'utf8');
       const capRes = preInvocation({ conversationId: t46CapConv, workspacePaths: [t46Ws], transcriptPath: t46CapTx, invocationNum: 1 });
-      const capSteps = (capRes.injectSteps || []).map((s) => s.ephemeralMessage || '');
+      const capSteps = (capRes.injectSteps || []).map((s) => (s && s.ephemeralMessage === undefined ? (s?.systemMessage?.systemMessage || '') : ''));
       const totalChars = capSteps.reduce((acc, m) => acc + m.length, 0);
       const notepadDirect = loadUltragoalNotepad([t46Ws]) || '';
 
@@ -3067,7 +3105,7 @@ export async function runSelftest() {
         else process.env.CLAUDE_CONFIG_DIR = prevClaudeCfgDir;
       }
       const agSess = sessionStart({ workspacePaths: [pluginRoot], conversationId: `${conv}-t53-agy` });
-      const agMsgLen = (agSess.injectSteps?.[0]?.ephemeralMessage || '').length;
+      const agMsgLen = (agSess.injectSteps?.[0]?.ephemeralMessage === undefined ? (agSess.injectSteps?.[0]?.systemMessage?.systemMessage || '') : '').length;
 
       const upPrompt = normalizeLifecyclePayload({ prompt: '$ralplan check auth', cwd: t53Dir, session_id: `${conv}-t53-up` }, 'claude');
       const upOut = serializeHookOutcome('user-prompt-submit', preInvocation(upPrompt), 'claude');
@@ -3572,8 +3610,8 @@ export async function runSelftest() {
       preToolUse({ conversationId: t56Conv, workspacePaths: [t56SubWs], toolCall: { name: 'read_file', args: { Path: path.join(payDir, 'card.js') } } });
       const inv1 = preInvocation({ conversationId: t56Conv, workspacePaths: [t56SubWs], lastUserInput: 'Check status' });
       const inv2 = preInvocation({ conversationId: t56Conv, workspacePaths: [t56SubWs], lastUserInput: 'Check again' });
-      const inv1Msg = (inv1.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
-      const inv2Msg = (inv2.injectSteps || []).map((s) => s.ephemeralMessage || '').join('\n');
+      const inv1Msg = (inv1.injectSteps || []).map((s) => (s && s.ephemeralMessage === undefined ? (s?.systemMessage?.systemMessage || '') : '')).join('\n');
+      const inv2Msg = (inv2.injectSteps || []).map((s) => (s && s.ephemeralMessage === undefined ? (s?.systemMessage?.systemMessage || '') : '')).join('\n');
       const outsideAgents = path.join(ws, 't56-outside-agents.md');
       fs.writeFileSync(outsideAgents, 'OUTSIDE_SYMLINK_AGENTS_LEAK\n', 'utf8');
       const escapeDir = path.join(t56SubWs, 'packages', 'escape');
@@ -3933,8 +3971,8 @@ export async function runSelftest() {
       fs.writeFileSync(agyTx, `${JSON.stringify({ step_index: 1, type: 'USER_INPUT', content: 'continue' })}\n`, 'utf8');
       const agy1 = preInvocation({ host: 'antigravity', conversationId: 't60-agy-1', transcriptPath: agyTx, workspacePaths: [liveWs] });
       const agy2 = preInvocation({ host: 'antigravity', conversationId: 't60-agy-1', transcriptPath: agyTx, workspacePaths: [liveWs] });
-      const livePromptOk = (clLive.injectSteps || []).some((s) => String(s.ephemeralMessage || '').includes('$analyze'))
-        && (cxLive.injectSteps || []).some((s) => String(s.ephemeralMessage || '').includes('$analyze'))
+      const livePromptOk = (clLive.injectSteps || []).some((s) => s.ephemeralMessage === undefined && String(s?.systemMessage?.systemMessage || '').includes('$analyze'))
+        && (cxLive.injectSteps || []).some((s) => s.ephemeralMessage === undefined && String(s?.systemMessage?.systemMessage || '').includes('$analyze'))
         && Object.keys(agy1).length >= 0
         && Object.keys(agy2).length === 0;
 
@@ -3945,7 +3983,7 @@ export async function runSelftest() {
       fs.writeFileSync(path.join(compWs, '.omagy', 'ultragoal', 'notepad.md'), '## Working Memory\nRotate API secret before cutover\n', 'utf8');
       sessionStart({ host: 'claude', hook_event_name: 'SessionStart', source: 'user', session_id: 't60-compact', cwd: compWs });
       const compRes = sessionStart({ host: 'claude', hook_event_name: 'SessionStart', source: 'compact', session_id: 't60-compact', cwd: compWs });
-      const compJoined = (compRes.injectSteps || []).map((s) => String(s.ephemeralMessage || '')).join('\n');
+      const compJoined = (compRes.injectSteps || []).map((s) => (s && s.ephemeralMessage === undefined ? String(s?.systemMessage?.systemMessage || '') : '')).join('\n');
       const compactOk = compJoined.includes('Rotate API secret before cutover') && compJoined.length <= MAX_EPHEMERAL_CHARS;
 
       const winClaudeHome = path.join(t60Root, 'win-cl-home');
@@ -4203,6 +4241,162 @@ export async function runSelftest() {
       t61Detail = e instanceof Error ? e.message : String(e);
     }
     check('T61: G3/G4 0o700 UID runtime dir, tmpdir-audit, docs-drift #anchor, plan-hash --source-spec, redactSecrets/polyglot blockers, --help/--, skill-validate --scope & log rotation/metrics pass', t61Ok, t61Detail);
+
+    // T62: G1 systemMessage + user_markdown, symmetric guardScope, lazy transcriptPath read-tracking, Stop continuationActive, PLUGIN_ROOT & defaultPluginDataDir
+    let t62Ok = false;
+    let t62Detail = '';
+    try {
+      const t62Root = path.join(ws, 't62-g1-ws');
+      fs.mkdirSync(path.join(t62Root, '.omagy', 'state'), { recursive: true });
+      fs.mkdirSync(path.join(t62Root, '.omagy', 'ultragoal'), { recursive: true });
+      fs.mkdirSync(path.join(t62Root, 'omagy_wiki'), { recursive: true });
+      fs.mkdirSync(path.join(t62Root, 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(t62Root, 'omagy_wiki', 'index.md'), '- [[alpha]] — Alpha guide\n', 'utf8');
+      fs.writeFileSync(path.join(t62Root, 'omagy_wiki', 'agreements.md'), '- Keep tests green [by:human]\n', 'utf8');
+      fs.writeFileSync(path.join(t62Root, '.omagy', 'ultragoal', 'ledger.jsonl'), '{"goal":"G1"}\n', 'utf8');
+      fs.writeFileSync(path.join(t62Root, '.omagy', 'ultragoal', 'notepad.md'), '## Working Memory\nKeep G1 lean.\n', 'utf8');
+      const subA = path.join(t62Root, 'sub', 'a.mjs');
+      const subB = path.join(t62Root, 'sub', 'b.mjs');
+      const subProt = path.join(t62Root, 'sub', 'prot.mjs');
+      fs.writeFileSync(subA, 'export const a = 1;\n', 'utf8');
+      fs.writeFileSync(subB, 'export const b = 2;\n', 'utf8');
+      fs.writeFileSync(subProt, '// omagy-ignore-start\nexport const locked = 1;\n// omagy-ignore-end\n', 'utf8');
+      fs.writeFileSync(path.join(t62Root, 'sub', 'AGENTS.md'), '# Sub Rules\nT62_SUB_TX_AGENTS_MARKER\n', 'utf8');
+
+      // 1. systemMessage + metadata.user_markdown (zero ephemeralMessage) & serializeHookOutcome backward compat
+      const t62Conv1 = `${conv}-t62-sysmsg`;
+      writeJson(path.join(t62Root, '.omagy', 'state', 'autopilot-state.json'), {
+        mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString(),
+      });
+      const ssRes = sessionStart({ conversationId: t62Conv1, workspacePaths: [t62Root], source: 'compact' });
+      const piRes = preInvocation({ conversationId: t62Conv1, workspacePaths: [t62Root], lastUserInput: '$analyze check sub/a.mjs' });
+      const allSteps = [...(ssRes.injectSteps || []), ...(piRes.injectSteps || [])];
+      const noEphemeralKeys = allSteps.length >= 2 && allSteps.every((s) => s && typeof s.systemMessage?.systemMessage === 'string' && s.ephemeralMessage === undefined);
+      const ssActiveBanner = (ssRes.injectSteps || []).find((s) => s.systemMessage.systemMessage.includes('Active workflow state'))?.systemMessage?.metadata?.user_markdown || '';
+      const ssCompactBanner = (ssRes.injectSteps || []).find((s) => s.systemMessage.systemMessage.includes('Context compaction recovery'))?.systemMessage?.metadata?.user_markdown || '';
+      const piRouteBanner = (piRes.injectSteps || []).find((s) => s.systemMessage.systemMessage.includes('Skill routing'))?.systemMessage?.metadata?.user_markdown || '';
+      const rawMapStep = (ssRes.injectSteps || []).find((s) => s.systemMessage.systemMessage.includes('Codebase map'));
+      const clSer = serializeHookOutcome('session-start', { injectSteps: [formatSystemMessageStep('new-sys-msg', { userMarkdown: 'banner' }), { ephemeralMessage: 'legacy-eph-msg' }] }, 'claude');
+      const cxSer = serializeHookOutcome('session-start', { injectSteps: [formatSystemMessageStep('new-sys-msg'), { ephemeralMessage: 'legacy-eph-msg' }] }, 'codex');
+      const sysMsgOk = noEphemeralKeys
+        && ssActiveBanner.includes('oh-my-agy') && !ssActiveBanner.includes('\n')
+        && ssCompactBanner.includes('Context compaction recovery') && !ssCompactBanner.includes('\n') && !ssCompactBanner.includes('Alpha guide')
+        && piRouteBanner.includes('$analyze') && !piRouteBanner.includes('\n')
+        && (!rawMapStep || rawMapStep.systemMessage.metadata === undefined)
+        && String(clSer?.hookSpecificOutput?.additionalContext || '').includes('new-sys-msg')
+        && String(clSer?.hookSpecificOutput?.additionalContext || '').includes('legacy-eph-msg')
+        && String(cxSer?.hookSpecificOutput?.additionalContext || '').includes('new-sys-msg')
+        && String(cxSer?.hookSpecificOutput?.additionalContext || '').includes('legacy-eph-msg');
+      fs.rmSync(path.join(t62Root, '.omagy', 'state', 'autopilot-state.json'), { force: true });
+
+      // 2. Symmetric guardScope (write vs planning vs all) + notifications-guard protecting PLUGIN_DATA/notifications.json
+      const prevPluginData = process.env.PLUGIN_DATA;
+      const customPluginData = path.join(ws, 't62-plugin-data');
+      fs.mkdirSync(customPluginData, { recursive: true });
+      const customNotifFile = path.join(customPluginData, 'notifications.json');
+      writeJson(customNotifFile, { enabled: true, events: ['session-idle'] });
+      let guardScopeOk = false;
+      let envPathsOk = false;
+      try {
+        process.env.PLUGIN_DATA = customPluginData;
+        writeJson(path.join(t62Root, '.omagy', 'state', 'ralplan-state.json'), {
+          mode: 'ralplan', active: true, current_phase: 'architect-review', updated_at: new Date().toISOString(),
+        });
+        const t62Conv2 = `${conv}-t62-scope`;
+        preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'read_file', args: { Path: subA } } });
+        const wgReadOverwrite = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 2;\n' } } }, { guardScope: 'write' });
+        const wgNotif = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: customNotifFile, Overwrite: true, Content: '{}' } } }, { guardScope: 'write' });
+        const wgLedger = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(t62Root, '.omagy', 'ultragoal', 'ledger.jsonl'), Overwrite: true, Content: '{}' } } }, { guardScope: 'write' });
+        const wgAgree = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(t62Root, 'omagy_wiki', 'agreements.md'), Overwrite: true, Content: '# wiped\n' } } }, { guardScope: 'write' });
+        const wgProt = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subProt, Overwrite: true, Content: 'export const locked = 9;\n' } } }, { guardScope: 'write' });
+        const wgUnread = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subB, Overwrite: true, Content: 'export const b = 3;\n' } } }, { guardScope: 'write' });
+        const pgOutside = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 2;\n' } } }, { guardScope: 'planning' });
+        const pgSkipsWriteGuard = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: path.join(t62Root, 'omagy_wiki', 'agreements.md'), Overwrite: true, Content: '# wiped\n' } } }, { guardScope: 'planning' });
+        const allScopeBlocks = preToolUse({ conversationId: t62Conv2, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 2;\n' } } }, { guardScope: 'all' });
+        guardScopeOk = parseGuardScope(['--guard-scope=write']) === 'write'
+          && parseGuardScope(['--guard-scope', 'planning']) === 'planning'
+          && parseGuardScope([]) === 'all'
+          && !wgReadOverwrite.decision
+          && wgNotif.decision === 'force_ask' && String(wgNotif.reason || '').includes('notifications-guard')
+          && wgLedger.decision === 'force_ask' && String(wgLedger.reason || '').includes('append-only-guard')
+          && wgAgree.decision === 'force_ask' && String(wgAgree.reason || '').includes('agreements-guard')
+          && wgProt.decision === 'force_ask' && String(wgProt.reason || '').includes('protected-block-guard')
+          && wgUnread.decision === 'force_ask' && String(wgUnread.reason || '').includes('write-existing-file-guard')
+          && pgOutside.decision === 'force_ask'
+          && !pgSkipsWriteGuard.decision
+          && allScopeBlocks.decision === 'force_ask';
+
+        // 5. resolvePluginRoot, defaultPluginDataDir, loadNotificationConfig & unchanged defaultRuntimeDir
+        const fakePlugA = path.join(ws, 't62-plug-a');
+        const fakePlugB = path.join(ws, 't62-plug-b');
+        const fakePlugNoJson = path.join(ws, 't62-plug-empty');
+        fs.mkdirSync(fakePlugA, { recursive: true });
+        fs.mkdirSync(fakePlugB, { recursive: true });
+        fs.mkdirSync(fakePlugNoJson, { recursive: true });
+        writeJson(path.join(fakePlugA, 'plugin.json'), { name: 'a' });
+        writeJson(path.join(fakePlugB, 'plugin.json'), { name: 'b' });
+        const loadedNotifCfg = loadNotificationConfig([t62Root]);
+        envPathsOk = resolvePluginRoot(pluginRoot, { OMAGY_PLUGIN_ROOT: fakePlugA, PLUGIN_ROOT: fakePlugB }) === path.resolve(fakePlugA)
+          && resolvePluginRoot(pluginRoot, { PLUGIN_ROOT: fakePlugB }) === path.resolve(fakePlugB)
+          && resolvePluginRoot(pluginRoot, { PLUGIN_ROOT: fakePlugNoJson }) === path.resolve(pluginRoot)
+          && defaultPluginDataDir({ PLUGIN_DATA: customPluginData }) === path.resolve(customPluginData)
+          && defaultPluginDataDir({}) === path.join(os.homedir(), '.gemini', 'config', 'oh-my-agy')
+          && loadedNotifCfg.enabled === true
+          && defaultRuntimeDir() === path.resolve(process.env.OMAGY_RUNTIME_DIR)
+          && defaultRuntimeDir() !== path.resolve(customPluginData);
+      } finally {
+        if (prevPluginData === undefined) delete process.env.PLUGIN_DATA;
+        else process.env.PLUGIN_DATA = prevPluginData;
+        fs.rmSync(path.join(t62Root, '.omagy', 'state', 'ralplan-state.json'), { force: true });
+      }
+
+      // 3. Lazy transcriptPath read-tracking (direct + routing.transcriptPath fallback) in preToolUse AND preInvocation
+      const t62Tx = path.join(t62Root, 'lazy-reads.jsonl');
+      fs.writeFileSync(t62Tx, [
+        JSON.stringify({ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'review changes' }),
+        JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', source: 'MODEL', tool_calls: [{ name: 'read_file', args: { Path: 'sub/a.mjs' } }] }),
+      ].join('\n') + '\n', 'utf8');
+      const extractedReads = extractTranscriptReadPaths(t62Tx, [t62Root], 'antigravity');
+      const t62ConvDirect = `${conv}-t62-tx-direct`;
+      const directAllowA = preToolUse({ conversationId: t62ConvDirect, workspacePaths: [t62Root], transcriptPath: t62Tx, toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 3;\n' } } }, { guardScope: 'write' });
+      const directBlockB = preToolUse({ conversationId: t62ConvDirect, workspacePaths: [t62Root], transcriptPath: t62Tx, toolCall: { name: 'write_file', args: { Path: subB, Overwrite: true, Content: 'export const b = 3;\n' } } }, { guardScope: 'write' });
+      const t62ConvFallback = `${conv}-t62-tx-fallback`;
+      sessionStart({ conversationId: t62ConvFallback, workspacePaths: [t62Root], transcriptPath: t62Tx });
+      const fallbackAllowA = preToolUse({ conversationId: t62ConvFallback, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subA, Overwrite: true, Content: 'export const a = 4;\n' } } }, { guardScope: 'write' });
+      const fallbackBlockB = preToolUse({ conversationId: t62ConvFallback, workspacePaths: [t62Root], toolCall: { name: 'write_file', args: { Path: subB, Overwrite: true, Content: 'export const b = 4;\n' } } }, { guardScope: 'write' });
+      const piSubdirRes = preInvocation({ conversationId: `${conv}-t62-tx-pi`, workspacePaths: [t62Root], transcriptPath: t62Tx, invocationNum: 1 });
+      const piSubdirText = (piSubdirRes.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '').join('\n');
+      const lazyTxOk = extractedReads.includes(canonicalizePath(subA))
+        && !directAllowA.decision && directBlockB.decision === 'force_ask'
+        && !fallbackAllowA.decision && fallbackBlockB.decision === 'force_ask'
+        && piSubdirText.includes('T62_SUB_TX_AGENTS_MARKER');
+
+      // 4. stop({ continuationActive: true }) prevents repeat nudges (active unchanged mode + idle drift branch)
+      const t62StopConv = `${conv}-t62-stop-active`;
+      const t62StopState = path.join(t62Root, '.omagy', 'state', 'autopilot-state.json');
+      writeJson(t62StopState, { mode: 'autopilot', active: true, current_phase: 'ultragoal', updated_at: new Date().toISOString() });
+      const stop1 = await stop({ conversationId: t62StopConv, workspacePaths: [t62Root], terminationReason: 'NO_TOOL_CALL' });
+      const stop2Cont = await stop({ conversationId: t62StopConv, workspacePaths: [t62Root], terminationReason: 'NO_TOOL_CALL', continuationActive: true });
+      fs.rmSync(t62StopState, { force: true });
+      let stopIdleContOk = true;
+      try {
+        const t62Git = path.join(ws, 't62-stop-git');
+        initTestGit(t62Git);
+        fs.writeFileSync(path.join(t62Git, 'a.test.js'), 'test("ok", () => {});\n');
+        execFileSync('git', ['add', 'a.test.js'], { cwd: t62Git });
+        execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'init'], { cwd: t62Git });
+        fs.appendFileSync(path.join(t62Git, 'a.test.js'), `${'test' + '.skip'}("x", () => {});\n`);
+        const stopIdleCont = await stop({ conversationId: `${conv}-t62-stop-idle`, workspacePaths: [t62Git], terminationReason: 'NO_TOOL_CALL', lastAssistantMessage: 'All done and ready.', continuationActive: true });
+        stopIdleContOk = stopIdleCont.decision === 'stop';
+      } catch { /* fail open: skip git branch if git unavailable */ }
+      const stopContOk = stop1.decision === 'continue' && stop2Cont.decision === 'stop' && stopIdleContOk;
+
+      t62Ok = sysMsgOk && guardScopeOk && lazyTxOk && stopContOk && envPathsOk;
+      t62Detail = `sysMsg=${sysMsgOk} scope=${guardScopeOk} lazyTx=${lazyTxOk} stopCont=${stopContOk} envPaths=${envPathsOk}`;
+    } catch (e) { /* fail open: capture T62 error detail */
+      t62Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T62: G1 systemMessage + user_markdown, symmetric guardScope, lazy transcriptPath read-tracking, Stop continuationActive & PLUGIN_ROOT/PLUGIN_DATA pass', t62Ok, t62Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
