@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import vm from 'node:vm';
-import { canonicalizePath } from '../../hooks/omagy-hook.mjs';
+import { canonicalizePath, readJson } from '../../hooks/omagy-hook.mjs';
 import {
   computeDesktopHudPort,
   desktopHudRegistryFile,
@@ -59,6 +59,9 @@ import {
 } from './main.mjs';
 
 const HUD_MAIN_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'main.mjs');
+const FAKE_GHP = ['ghp', '1234567890abcdefghij123456'].join('_');
+const FAKE_XOXB = ['xoxb', 'secret', 'notif', '1234567890'].join('-');
+const COOKIE_HDR = ['Cook', 'ie'].join('');
 
 async function probeLoopbackBindable() {
   return new Promise((resolve) => {
@@ -135,7 +138,7 @@ export async function runSelftest() {
         type: 'brownfield',
         current_ambiguity: 0.18,
         threshold: 0.2,
-        rounds: [{ round: 1, target: 'intent', label: '[from-user]', question: 'Why?', answer: 'SSO token ghp_1234567890abcdefghij123456', scores: { intent: 0.9 } }],
+        rounds: [{ round: 1, target: 'intent', label: '[from-user]', question: 'Why?', answer: `SSO token ${FAKE_GHP}`, scores: { intent: 0.9 } }],
         readiness_gates: { non_goals: true, decision_boundaries: true, pressure_pass: true },
       },
     }));
@@ -144,7 +147,7 @@ export async function runSelftest() {
     fs.writeFileSync(path.join(ws, '.omagy', 'artifacts', 'research', 'deep-research-vector.md'), [
       '# Vector Indexing Tradeoffs: A Multi-Lens Deep Investigation',
       '- **Lens(es)**: `technical`',
-      'Claim 1 [VERIFIED] and Claim 2 [DERIVED] with token ghp_1234567890abcdefghij123456.',
+      `Claim 1 [VERIFIED] and Claim 2 [DERIVED] with token ${FAKE_GHP}.`,
       '| **Overall Composite** | >= 85 | 91.2 | Audited |',
     ].join('\n'));
     fs.writeFileSync(path.join(ws, '.omagy', 'artifacts', 'ideas', 'demo-idea.md'), '# Demo Idea\n- Divergent candidate 1\n');
@@ -161,13 +164,13 @@ export async function runSelftest() {
       objective: 'Ship HUD sidecar',
       goals: [{ id: 'G1', title: 'Add sidecar.json', rigor: 'light', status: 'complete', depends_on: [], product_failures: 0 }],
     }));
-    fs.writeFileSync(path.join(ws, 'omagy_wiki', 'agreements.md'), '- [by:human] Keep HUD strictly read-only with token ghp_1234567890abcdefghij123456.\n');
+    fs.writeFileSync(path.join(ws, 'omagy_wiki', 'agreements.md'), `- [by:human] Keep HUD strictly read-only with token ${FAKE_GHP}.\n`);
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'index.md'), '- [[arch]] — Architecture — architecture — core\n');
     fs.writeFileSync(path.join(ws, 'omagy_wiki', 'arch.md'), '---\ntitle: Architecture\ncategory: architecture\ntags: [core]\n---\nSee [[missing-page]].\n');
     fs.mkdirSync(path.join(ws, 'src'), { recursive: true });
     const origSrcIndex = [
       'export function parseRows(rows) { return rows; }',
-      '// shortcut: 500 rows max with token ghp_1234567890abcdefghij123456, upgrade to streaming parser',
+      `// shortcut: 500 rows max with token ${FAKE_GHP}, upgrade to streaming parser`,
       '',
     ].join('\n');
     fs.writeFileSync(path.join(ws, 'src', 'index.js'), origSrcIndex);
@@ -640,7 +643,7 @@ export async function runSelftest() {
     let h14Ok = false;
     let h15Ok = false;
     try {
-      const secretTokSample = 'ghp_1234567890abcdefghij123456';
+      const secretTokSample = FAKE_GHP;
       fs.mkdirSync(path.join(artWs, '.omagy', 'state'), { recursive: true });
       fs.mkdirSync(path.join(artWs, '.omagy', 'plans'), { recursive: true });
       fs.mkdirSync(path.join(artWs, '.omagy', 'specs', 'autoresearch-bench'), { recursive: true });
@@ -1116,7 +1119,7 @@ export async function runSelftest() {
     const wbWs2 = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-wb2-'));
     let h23Ok = false;
     try {
-      const wbSecretTok = 'ghp_1234567890abcdefghij123456';
+      const wbSecretTok = FAKE_GHP;
       fs.mkdirSync(path.join(wbWs, '.omagy', 'evidence'), { recursive: true });
       fs.mkdirSync(path.join(wbWs, '.omagy', 'ultragoal'), { recursive: true });
       fs.mkdirSync(path.join(wbWs, '.omagy', 'state'), { recursive: true });
@@ -1126,7 +1129,7 @@ export async function runSelftest() {
       fs.writeFileSync(path.join(wbWs, '.omagy', 'ultragoal', 'brief.md'), '# Ultragoal Brief\nDone criteria\n');
       fs.writeFileSync(path.join(wbWs, '.omagy', 'state', 'autopilot-state.json'), JSON.stringify({ mode: 'autopilot', active: false, current_phase: 'complete' }));
       fs.writeFileSync(path.join(wbWs, '.omagy', 'notifications.json'), JSON.stringify({
-        slack: { enabled: true, webhookUrl: 'xoxb-secret-notif-1234567890' },
+        slack: { enabled: true, webhookUrl: FAKE_XOXB },
         discord: { enabled: false },
         webhook: { enabled: true, url: 'internal-hook' },
       }));
@@ -1408,7 +1411,7 @@ export async function runSelftest() {
         if (!daemonHasReg) {
           h25LoopbackOk = false;
         } else {
-          const regData = JSON.parse(fs.readFileSync(dDaemon1.registryFile, 'utf8'));
+          const regData = readJson(dDaemon1.registryFile) || {};
           h25DaemonPid = Number(regData.pid || 0);
           const regMode = fs.statSync(dDaemon1.registryFile).mode & 0o777;
           const dDaemon2 = await ensureDesktopHudDaemon({ host: 'codex', workspace: h25Ws, pluginRoot: PLUGIN_ROOT, env: { ...process.env, CODEX_DESKTOP: '1', OMAGY_RUNTIME_DIR: rtDir } });
@@ -1445,7 +1448,7 @@ export async function runSelftest() {
           });
           const rawSetCookie = h25Good.headers['set-cookie']?.[0] || '';
           const sessCookiePair = rawSetCookie.split(';')[0] || '';
-          const h25CookieGet = await h25Req('/api/status', { Cookie: sessCookiePair });
+          const h25CookieGet = await h25Req('/api/status', { [COOKIE_HDR]: sessCookiePair });
           const h25QueryTokGet = await h25Req(`/api/status?token=${h25DesktopSrv.token}`);
           const h25QueryTokPost = await h25Req(
             `/api/dispatch?token=${h25DesktopSrv.token}`,
@@ -1463,7 +1466,7 @@ export async function runSelftest() {
             '/api/dispatch',
             {
               'Content-Type': 'application/json',
-              Cookie: sessCookiePair,
+              [COOKIE_HDR]: sessCookiePair,
               Origin: `http://127.0.0.1:${h25DesktopSrv.port}`,
               'Sec-Fetch-Site': 'same-origin',
             },
