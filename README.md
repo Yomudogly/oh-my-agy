@@ -39,7 +39,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 oh-my-agy/
 ├── .gitattributes            # LF line-ending normalization across POSIX & Windows checkouts
 ├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 24)
-├── plugin.json               # Antigravity manifest (v0.9.1, strict 10-key JSON · hooks 4 · mcpServers 1)
+├── plugin.json               # Antigravity manifest (v0.10.0, strict 10-key JSON · hooks 4 · mcpServers 1)
 ├── assets/
 │   ├── logo.png              # Transparent plugin icon (346x346)
 │   └── sidecar-hud.webp      # Live Aux Pane HUD showcase screenshot (<=2 MB WebP)
@@ -57,11 +57,11 @@ oh-my-agy/
 │   ├── omagy-host-setup.mjs  # lazy-loaded `host-setup` & `host-validate` generator for Claude Code & OpenAI Codex
 │   ├── omagy-skill.mjs       # lazy-loaded non-lifecycle CLI dispatcher + zero-dep `skill-validate` (`disable-slash-command`) & `skill-init` (`39` CLI subcommands)
 │   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<93.7 KB; 13 COLD_CLI_EVENTS)
-│   ├── omagy-audit.mjs       # lazy-loaded repo audit CLIs (`docs-drift`, `coverage-map`, `dep-license-diff`, `mcp-audit`, `tmpdir-audit`)
-│   ├── omagy-selftest.mjs    # lazy-loaded 99-check offline selftest suite (`T1`–`T10`, `T20`–`T64`)
+│   ├── omagy-audit.mjs       # lazy-loaded repo audit CLIs (`docs-drift [--git-staleness]`, `coverage-map`, `dep-license-diff`, `mcp-audit`, `tmpdir-audit`)
+│   ├── omagy-selftest.mjs    # lazy-loaded 104-check offline selftest suite (`T1`–`T10`, `T20`–`T68`)
 │   └── skill-eval-cases.json # 23-skill positive + owner-paired negative routing benchmark corpus (100% rank-1, 0 collisions)
 ├── sidecars/hud/             # Modular Desktop-only HUD (`main.mjs` <175 KB + lazy `selftest.mjs` + `dispatch.mjs` + `ui.mjs` + `client.mjs`; `on-failure` restart)
-├── agents/                   # 18 role subagents (`subagent`/`mainAgent`/`tools` + `call_mcp_tool` + Gemini 4 `inherit`-first + `commandExecutionPolicy: sandbox`)
+├── agents/                   # 18 role subagents (`subagent`/`mainAgent`/`tools` + Gemini 4 `inherit`-first + `commandExecutionPolicy: sandbox`)
 └── skills/                   # 23 workflow skills (`5,488`-char descriptions, 100% `skill-eval`) + progressive-disclosure `references/`
 ```
 
@@ -233,7 +233,7 @@ In Antigravity, trigger skills with `/<skill>` in chat (for example `/autopilot 
 - **Split Write-Only `PreToolUse` Guards**: `hooks.json` splits `PreToolUse` into **`oh-my-agy-write-guards`** (enabled by default, `--guard-scope=write`, write-only matcher — zero `read_file`/`view_file` hot-path overhead, using lazy `transcriptPath` read-tracking to enforce `notifications-guard`, `append-only-guard`, `agreements-guard`, `protected-block-guard`, and `write-existing-file-guard`) and **`oh-my-agy-planning-guard`** (opt-in, `--guard-scope=planning`, enforcing planning-phase & `ralplan_gate` write boundaries).
 - **Zero-Dep Strictly Read-Only MCP Server (`oh-my-agy_state`)**: `mcp_config.json` + `mcp/run.sh` + `mcp/server.mjs` expose 6 read-only, zero-shell, workspace-contained JSON-RPC 2.0 tools (`omagy_status`, `omagy_wiki_query`, `omagy_wiki_lint`, `omagy_plan_hash`, `omagy_codebase_map`, `omagy_verify_evidence`) audited by `mcp-audit`, while `sh <plugin>/hooks/run.sh` remains available as the cross-host CLI fallback.
 - **Live Aux Pane HUD, Slide-Over Drawer & Workbench Telemetry**: `sidecars/hud/{main,ui,client,dispatch}.mjs` (with lazy-loaded `sidecars/hud/selftest.mjs` keeping `main.mjs < 175 KB` and `"restart_policy": "on-failure"`) serve the live 5-tab `sidecar://oh-my-agy/hud/` web UI (`Overview`, `Workflows`, `Skills`, `Subagents`, `Wiki`) with **11** declarative `WORKFLOW_BLUEPRINTS`, debounced `GET /api/events` SSE (`150 ms` watcher debounce + `15 s` poll fallback + digest-diffed DOM preservation), `?activeRoot=` workspace & scope filtering, `Cmd/Ctrl+K` Command Palette, a Slide-Over `#artifact-drawer` (JSON `Receipt` previews, 3-mode Visual Ralph comparator, opaque-origin `srcdoc` Loft `<iframe sandbox="allow-scripts">` with relative ES module bundling and `omagy-loft-error` banner bridge, `GET /api/skill-doc` previews for `SKILL.md` + `references/*.md` with SDO tag headings, and secret-redacted XSS-safe Markdown previews across `.omagy/{artifacts,plans,specs,evidence,ultragoal,goals}`), `GET /api/wiki-search` + TOC chips + backlinks, interactive `--flag` chips & `Model` pills, Antigravity light/dark CSS tokens (`>= 12px`), Team DAG wave bars, and Governance cards (`Code Health`, `Stitch DESIGN.md`, `Session Forensics`, `Notifications`, `Diagnostics & Runtime Health`).
-- **18 Subagents & Scoped Tooling**: `agents/*.md` defines 18 specialized subagents with `subagent: true`, `mainAgent: false`, 3-tier `tools:` YAML arrays (`6` write roles, `10` repo-inspecting read-only roles with `commandExecutionPolicy: sandbox`, `2` pure read/web roles), `call_mcp_tool` on MCP-using roles (`explore`, `debugger`, `tracer`, `researcher`, `designer`), Gemini 4 `inherit`-first routing (`model: flash` on `explore`/`doc-steward` only, zero `model: pro` pins), `context7` and `codegraph_explore` fast paths, and built-in `self` / `research` fallback support.
+- **18 Subagents & Scoped Tooling**: `agents/*.md` defines 18 specialized subagents with `subagent: true`, `mainAgent: false`, 3-tier `tools:` YAML arrays (`6` write roles, `10` repo-inspecting read-only roles with `commandExecutionPolicy: sandbox`, `2` pure read/web roles), Gemini 4 `inherit`-first routing (`model: flash` on `explore`/`doc-steward` only, zero `model: pro` pins), `context7` and `codegraph_explore` fast paths, and built-in `self` / `research` fallback support.
 
 ## License
 

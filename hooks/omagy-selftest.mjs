@@ -4931,7 +4931,7 @@ export async function runSelftest() {
       fs.writeFileSync(modeFilePres, '{"old":1}\n', { mode: 0o640 });
       if (process.platform !== 'win32') fs.chmodSync(modeFilePres, 0o640);
       writeFileAtomicWithMode(modeFilePres, '{"new":2}\n');
-      let modeOk = fs.readFileSync(modeFilePres, 'utf8').includes('"new":2');
+      let modeOk = JSON.parse(readFixture(modeFilePres)).new === 2;
       if (process.platform !== 'win32') {
         modeOk = modeOk && (fs.statSync(modeFileNew).mode & 0o777) === 0o600 && (fs.statSync(modeFilePres).mode & 0o777) === 0o640;
         const symDest = path.join(t66Ws, 'sym-dest.json');

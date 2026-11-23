@@ -1,6 +1,6 @@
 # How to Use `oh-my-agy`
 
-This guide covers every workflow skill, role subagent, live HUD sidecar tab, read-only MCP tool, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.9.1`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
+This guide covers every workflow skill, role subagent, live HUD sidecar tab, read-only MCP tool, hook, state file, CLI utility, and practical recipe in **`oh-my-agy` (`v0.10.0`)** for Google Antigravity (and experimental adapters for Anthropic Claude Code / Claude Desktop and OpenAI Codex / Codex Desktop).
 
 ---
 
@@ -347,7 +347,7 @@ Cleanly terminates active workflow modes (`autopilot`, `deep-interview`, `ralpla
 
 #### `/doctor` — Diagnostics, Setup, Notifications, Deep Init & Session Forensics
 All-in-one operational health, setup, notification, and transcript forensics toolkit:
-- **Default (`/doctor`)**: Verifies plugin placement, `agy plugin validate --strict` (`hooks 4 · mcpServers 1 · skills 23 · agents 18`), `hooks/run.sh selftest` (`99/99`), `hooks/run.sh skill-validate skills --strict` (supporting `disable-slash-command`), `hooks/run.sh skill-eval --min-rank1 95` (`23` skills, `100%` rank-1), `hooks/run.sh floor-guard`, `docs-drift`, `wiki-lint`, `dep-license-diff`, `mcp-audit` (scanning `mcp_config.json`), `tmpdir-audit`, `sidecars/hud/run.sh selftest` (`H1`–`H29`, sandbox-aware `H25`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93.7 KB`, `sidecars/hud/main.mjs < 175 KB` with lazy `selftest.mjs`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md <= 14.5 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 18-agent `tools:` + `call_mcp_tool` YAML frontmatter, `plugin.json` `v0.9.1` parity, cross-host bundle drift (`host-validate`, experimental), and stale/waiting `.omagy/state/` files.
+- **Default (`/doctor`)**: Verifies plugin placement, `agy plugin validate --strict` (`hooks 4 · mcpServers 1 · skills 23 · agents 18`), `hooks/run.sh selftest` (`104/104`), `hooks/run.sh skill-validate skills --strict` (supporting `disable-slash-command`), `hooks/run.sh skill-eval --min-rank1 95` (`23` skills, `100%` rank-1), `hooks/run.sh floor-guard`, `docs-drift [--git-staleness]`, `wiki-lint`, `dep-license-diff`, `mcp-audit` (scanning `mcp_config.json`), `tmpdir-audit`, `sidecars/hud/run.sh selftest` (`H1`–`H29`, sandbox-aware `H25`), module byte ceilings (`omagy-hook.mjs < 170 KB`, `omagy-cli.mjs < 93.7 KB`, `sidecars/hud/main.mjs < 175 KB` with lazy `selftest.mjs`, `sidecars/hud/{ui,client}.mjs each < 256 KB`, `AGENTS.md <= 14.5 KB`, `SKILL.md <= 19 KB` strict / `< 20 KB`), 18-agent `tools:` YAML frontmatter, `plugin.json` `v0.10.0` parity, cross-host bundle drift (`host-validate`, including `.claude/settings.local.json` conflict checks, experimental), and stale/waiting `.omagy/state/` files.
 - **Flags**:
   - `--setup`: Verifies user/project plugin installation, safely bootstraps project `AGENTS.md`, and updates `.gitignore` (`references/setup-and-init-deep.md`).
   - `--init-deep`: Runs `hooks/run.sh init-deep-scan` to score subdirectories by code density, git churn, and infra/migration/CI boundaries (`migrations`, `workflows`, `containers`, `infra`) and generates non-duplicative child `AGENTS.md` files where warranted.
@@ -383,28 +383,28 @@ Self-contained skill authoring, SDO governance, supply-chain hardening (blocking
 
 ## 4. All 18 Role Subagents & How Delegation Works
 
-`oh-my-agy` ships 18 specialized subagents in [`agents/`](agents/), each carrying verified `subagent: true`, `mainAgent: false`, Gemini 4 `inherit`-first model routing (`model: flash` on `explore` & `doc-steward` only, zero hardcoded `model: pro` pins), `commandExecutionPolicy: sandbox` on repo-inspecting read-only roles, `call_mcp_tool` on MCP-using roles (`explore`, `debugger`, `tracer`, `researcher`, `designer`), and a 3-tier `tools:` YAML allowlist. Skills invoke them via `invoke_subagent`, or you can request them directly in chat.
+`oh-my-agy` ships 18 specialized subagents in [`agents/`](agents/), each carrying verified `subagent: true`, `mainAgent: false`, Gemini 4 `inherit`-first model routing (`model: flash` on `explore` & `doc-steward` only, zero hardcoded `model: pro` pins), `commandExecutionPolicy: sandbox` on repo-inspecting read-only roles, and a 3-tier `tools:` YAML allowlist. Skills invoke them via `invoke_subagent`, or you can request them directly in chat.
 
 | Subagent (`TypeName`) | Role & Folded Capabilities | Default Model | `tools:` Tier |
 |---|---|---|---|
-| `explore` | Repo-local file, symbol, and dependency lookup (`codegraph_explore` fast path -> `read_file`) | `flash` | Repo-inspecting read-only (`sandbox`, + `call_mcp_tool`) |
-| `researcher` | Official docs (`context7` first), version-aware citations (`UNVERIFIED:` guard), plus folded SDK/package comparison, license/CVE audit & migration playbooks | `inherit` | Pure read + web (`read_file`, `search_web`, `call_mcp_tool`) |
-| `planner` | Folded pre-planning requirements analysis (Capability Map DAG, XY probe, `Always/Ask/Never`, `Must/Should/Might Be True`) + right-sized plans under `.omagy/plans/` | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `explore` | Repo-local file, symbol, and dependency lookup (`codegraph_explore` fast path -> `read_file`) | `flash` | Repo-inspecting read-only (`sandbox`) |
+| `researcher` | Official docs (`context7` & `<origin>/llms.txt` first), version-aware citations (`UNVERIFIED:` guard), plus folded SDK/package comparison, license/CVE audit & migration playbooks | `inherit` | Pure read + web (`read_file`, `search_web`) |
+| `planner` | Folded pre-planning requirements analysis (Capability Map DAG, XY probe, `Always/Ask/Never`, `Must/Should/Might Be True`, write-set DAGs & `V[N]`/delta specs) + right-sized plans under `.omagy/plans/` | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `architect` | Architectural review, Steelman Antithesis, Demolition/ADR Tests, Expand/Contract & Idempotency checks, `CLEAR / WATCH / BLOCK` | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `critic` | Sequential plan & arena review gate (`APPROVE / ITERATE / REJECT`) with concrete alternatives | `inherit` | Repo-inspecting read-only (`sandbox`) |
-| `executor` | Bounded implementation slices, folded `<team_protocol>` (`VERIFICATION_VERDICTS`, `verified_head`), folded simplification (`Chesterton's Fence`, `Rule of 500`), `ESCALATE_MODEL: pro`, and `Decision:`/`Rejected:`/`Constraint:` trailers | `inherit` (`flash` for trivial) | Implementation write |
-| `debugger` | 4-Phase Iron Law root-cause isolation (`codegraph_explore` fast path), `find-polluter` bisection, LLM01 log quarantine, minimal fix | `inherit` | Implementation write (+ `call_mcp_tool`) |
-| `tracer` | Competing-hypothesis causal tracing (`H1..Hn`, `codegraph_explore` fast path), 6-tier evidence ranking, rebuttal probes | `inherit` | Repo-inspecting read-only (`sandbox`, + `call_mcp_tool`) |
-| `test-engineer` | Integration/e2e test strategy, `R/F/C/D` & 2×2 mutation proof, flaky-test hardening, TDD | `inherit` | Implementation write |
-| `verifier` | Independent completion verification and Blind-Claim `AdversarialVerify` (`product` vs `harness` triage) | `inherit` | Repo-inspecting read-only (`sandbox`, + test runs) |
-| `code-reviewer` | Severity- & `Confidence: HIGH\|MEDIUM\|LOW`-rated diff review across Spec and Standards axes + `Lean: -<N> lines` | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `executor` | Bounded implementation slices (complete owning-boundary repair), folded `<team_protocol>` (`VERIFICATION_VERDICTS`, `verified_head`), folded simplification (`Chesterton's Fence`, `Rule of 500`), `ESCALATE_MODEL: pro`, and `Decision:`/`Rejected:`/`Constraint:` trailers | `inherit` (`flash` for trivial) | Implementation write |
+| `debugger` | 4-Phase Iron Law root-cause isolation (`codegraph_explore` fast path), `find-polluter` bisection, LLM01 log quarantine, minimal fix | `inherit` | Implementation write |
+| `tracer` | Competing-hypothesis causal tracing (`H1..Hn`, `codegraph_explore` fast path), 6-tier evidence ranking, rebuttal probes | `inherit` | Repo-inspecting read-only (`sandbox`) |
+| `test-engineer` | Integration/e2e test strategy, crash/rollback real boundaries & fake clocks, `R/F/C/D` & 2×2 mutation proof, flaky-test hardening, TDD | `inherit` | Implementation write |
+| `verifier` | Independent completion verification and Blind-Claim `AdversarialVerify` (artifact-backed `INCONCLUSIVE` matrix, `product` vs `harness` triage) | `inherit` | Repo-inspecting read-only (`sandbox`, + test runs) |
+| `code-reviewer` | Severity- & `Confidence: HIGH\|MEDIUM\|LOW`-rated diff review across Spec and Standards axes, clean-checkout/ref-match check, source-bound receipts + `Lean: -<N> lines` | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `security-reviewer` | `STRIDE`, OWASP Top 10 & LLM01–LLM10, lifecycle scripts, DNS SSRF, authn/authz, and `lookout` hazard review | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `supply-chain-auditor` | Read-only SPDX `dep-license-diff`, `mcp-audit`, `skill-validate` Trojan checks, lockfile provenance & pinned CI workflow audits | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `runtime-qa` | Read-only black-box CLI/process/API edge-case probing, `coverage-map` gaps, zero-assertion test audits, and timeout/signal repros | `inherit` | Repo-inspecting read-only (`sandbox`) |
 | `devops-engineer` | CI/CD pipelines, Dockerfiles, runtime alignment, dry-run `host-setup` packaging, and canary/rollback automation | `inherit` | Implementation write |
-| `doc-steward` | Documentation drift (`docs-drift`), `wiki-lint` cross-link hygiene (`0` `isolatedPages`), README/CLI sync, key-only `.env.example`, and release notes | `flash` | Implementation write |
-| `designer` | UI/UX design decisions and polished frontend implementation grounded in Stitch 2-Layer `DESIGN.md` & Craft Floor | `inherit` | Implementation write (+ `call_mcp_tool`) |
-| `vision` | Screenshot, mockup, PDF, and diagram analysis, including `/visual-ralph` 6-category rubric scoring | `inherit` | Pure read + web (`read_file`, `search_web`) |
+| `doc-steward` | Documentation drift (`docs-drift --git-staleness`), `wiki-lint` cross-link hygiene (`0` `isolatedPages`), append-only changelogs, README/CLI sync, key-only `.env.example`, and release notes | `flash` | Implementation write |
+| `designer` | UI/UX design decisions and polished frontend implementation grounded in Stitch 2-Layer `DESIGN.md`, Craft Floor & WCAG 2.2 AA (`SC 2.5.8`/`3.3.2`) | `inherit` | Implementation write |
+| `vision` | Screenshot, mockup, PDF, and diagram analysis, including `/visual-ralph` 6-category rubric scoring & scaled-screenshot viewport-evidence guard | `inherit` | Pure read + web (`read_file`, `search_web`) |
 
 ### Subagent Workspace Isolation & Work Preservation
 - Parallel writers (`/team`, `/loft --arena`, or parallel `executor` subagents) use `Workspace: "share"` so worker branch commits share the parent repository's git object store and survive subagent shutdown.
