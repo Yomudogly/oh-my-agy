@@ -423,7 +423,7 @@ export function redactSecrets(text) {
     .replace(/(\bcurl\b[^\r\n]*?(?:\s--user=|\s--user\s+|\s-u\s*)(["']?)(?!\$)([^"'\s:]+):)(?!\$|\{\{|\[REDACTED)([^"'\s]+)(\2)/gi, '$1[REDACTED_SECRET]$5')
     .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|client[-_]?secret|secret|password)=['"]?)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}(['"]?)/gi, '$1[REDACTED_SECRET]$2')
     .replace(/(\bAuthorization\s*:\s*Bearer\s+)(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[A-Za-z0-9._~+/=-]{12,}/gi, '$1[REDACTED_TOKEN]')
-    .replace(/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|password|secret|token)\b\s*[:=]\s*['"])(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[^'"\r\n]{12,}(['"])/gi, '$1[REDACTED_SECRET]$2');
+    .replace(/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|password|secret|token)\b['"]?\s*[:=]\s*['"])(?!\$|\{\{|\[REDACTED|process\.env\.|null\b|example\b|placeholder\b)[^'"\r\n]{12,}(['"])/gi, '$1[REDACTED_SECRET]$2');
 }
 function filterAndRedactWikiLines(raw, maxLines, nowMs = Date.now()) {
   const text = String(raw || '').trim();
@@ -2800,32 +2800,41 @@ export function isPathInsideAllowedOmagy(roots, rawTarget) {
   if (!rawStr) return false;
   const isNotif = (p) => /(?:^|[/\\])\.omagy[/\\]notifications\.json$/i.test(p);
   if (isNotif(rawStr)) return false;
-  return roots.some((r) => {
+  const isAbs = path.isAbsolute(rawStr);
+  let allowed = false;
+  for (const r of roots) {
     const sr = canonicalizePath(stateRoot(r));
     const wr = canonicalizePath(r);
     const kp = walkKernelPath(rawStr, r, { watchRoots: [r, sr, wr] });
-    if (!kp.ok || kp.sawWatchedSymlink || isNotif(kp.path)) return false;
+    if (!kp.ok || kp.sawWatchedSymlink || isNotif(kp.path) || (kp.leafPath && isNotif(kp.leafPath))) {
+      if (!isAbs && (!kp.ok || kp.sawWatchedSymlink)) return false;
+      continue;
+    }
     const resolved = kp.path;
-    const lexResolved = path.isAbsolute(rawStr) ? path.resolve(rawStr) : path.resolve(r, rawStr);
+    const lexResolved = isAbs ? path.resolve(rawStr) : path.resolve(r, rawStr);
     if (isNotif(lexResolved)) return false;
-    if (hasSymlinkSegment(r, resolved) || hasSymlinkSegment(sr, resolved) || hasSymlinkSegment(wr, resolved)) return false;
+    if (hasSymlinkSegment(r, resolved) || hasSymlinkSegment(sr, resolved) || hasSymlinkSegment(wr, resolved)) {
+      if (!isAbs) return false;
+      continue;
+    }
     if (
       resolved.startsWith(path.join(sr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(wr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(sr, 'omagy_wiki') + path.sep)
       || resolved.startsWith(path.join(wr, 'omagy_wiki') + path.sep)
     ) {
-      return true;
+      allowed = true;
+      continue;
     }
     if (resolved.startsWith(wr + path.sep)) {
       const rel = path.relative(wr, resolved).split(path.sep);
       const omagyIdx = Math.max(rel.indexOf('.omagy'), rel.indexOf('omagy_wiki'));
       if (omagyIdx >= 0 && omagyIdx < rel.length - 1 && !rel.includes('..')) {
-        return true;
+        allowed = true;
       }
     }
-    return false;
-  });
+  }
+  return allowed;
 }
 export function preToolUse(payload, opts = {}) {
   const host = detectHost(payload);
@@ -2840,24 +2849,33 @@ export function preToolUse(payload, opts = {}) {
   const args = call.args || call.arguments || {};
   const targets = extractToolTargets(toolName, args);
   const seenFile = runtimeFile(conv, 'seen');
-  const resolveRawTargetPath = (rawTarget) => {
-    if (path.isAbsolute(rawTarget)) return path.resolve(rawTarget);
-    const found = roots.map((r) => path.resolve(r, rawTarget)).find((p) => {
-      try { fs.lstatSync(p); return true; } catch { return false; }
-    });
-    return found || (roots[0] ? path.resolve(roots[0], rawTarget) : path.resolve(rawTarget));
+  const allWatchRoots = [...roots, ...roots.map((r) => stateRoot(r))];
+  const resolveTargetInfo = (rawTarget) => {
+    const rawStr = String(rawTarget || '').trim();
+    if (!rawStr) return { ok: false, error: 'invalid_path', path: '', leafPath: '', leafIsSymlink: false, sawWatchedSymlink: false };
+    if (path.isAbsolute(rawStr)) return walkKernelPath(rawStr, roots[0] || process.cwd(), { watchRoots: allWatchRoots });
+    const searchRoots = roots.length ? roots : [process.cwd()];
+    let firstKp = null;
+    let existingKp = null;
+    for (const r of searchRoots) {
+      const kp = walkKernelPath(rawStr, r, { watchRoots: allWatchRoots });
+      if (!kp.ok || kp.sawWatchedSymlink || kp.leafIsSymlink) return kp;
+      if (!firstKp) firstKp = kp;
+      if (!existingKp && fs.existsSync(kp.path)) existingKp = kp;
+    }
+    return existingKp || firstKp;
   };
   const resolveTargetPath = (rawTarget) => {
-    if (path.isAbsolute(rawTarget)) return canonicalizePath(rawTarget);
-    const found = roots.map((r) => path.resolve(r, rawTarget)).find((p) => fs.existsSync(p));
-    if (found) return canonicalizePath(found);
-    return canonicalizePath(roots[0] ? path.resolve(roots[0], rawTarget) : rawTarget);
+    const kp = resolveTargetInfo(rawTarget);
+    return kp.ok ? kp.path : canonicalizePath(rawTarget);
   };
   let cachedRouting = null;
   const getRoutingRec = () => (cachedRouting ??= (readJson(runtimeFile(conv, 'routing')) || {}));
   const artifactDir = String(payload.artifactDirectoryPath || payload.artifact_directory_path || getRoutingRec().artifactDirectoryPath || '').trim();
   const isWithinSafeRoot = (rawTarget) => {
-    const res = resolveTargetPath(rawTarget);
+    const kp = resolveTargetInfo(rawTarget);
+    if (!kp.ok) return false;
+    const res = kp.path;
     if (artifactDir) {
       const ad = canonicalizePath(artifactDir);
       if (res === ad || res.startsWith(ad + path.sep)) return true;
@@ -2915,30 +2933,43 @@ export function preToolUse(payload, opts = {}) {
     && (args.Overwrite === true || args.overwrite === true)
     && args.Append !== true && args.append !== true;
 
-  // Notifications, Working Agreements ([by:human]), and Protected-Block guards run across ALL mutation tools & targets
-  // BEFORE the .omagy/ / omagy_wiki/ planning exemption check.
+  // Notifications, Working Agreements ([by:human]), Protected-Block, and Symlink-Escape guards run across ALL mutation
+  // tools & targets BEFORE the .omagy/ / omagy_wiki/ planning exemption check.
   if (runWriteGuards && FILE_MUTATION_TOOLS_RE.test(toolName)) {
     const globalNotifPath = canonicalizePath(path.join(defaultPluginDataDir(), 'notifications.json'));
+    const notifRe = /(?:^|[/\\])(?:\.omagy|oh-my-agy)[/\\]notifications\.json$/i;
+    const appendOnlyRe = /(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i;
     for (const rawTarget of targets) {
-      const targetResolved = resolveTargetPath(rawTarget);
-      if (targetResolved === globalNotifPath || /(?:^|[/\\])(?:\.omagy|oh-my-agy)[/\\]notifications\.json$/i.test(targetResolved)) {
+      const kp = resolveTargetInfo(rawTarget);
+      if (!kp.ok) {
+        return {
+          decision: 'force_ask',
+          reason: `oh-my-agy: path-guard — could not safely resolve ${rawTarget} (${kp.error}). Approve explicitly if intended.`,
+        };
+      }
+      const targetResolved = kp.path;
+      const rawLeaf = kp.leafPath || targetResolved;
+      if (targetResolved === globalNotifPath || rawLeaf === globalNotifPath || notifRe.test(targetResolved) || notifRe.test(rawLeaf)) {
         return {
           decision: 'force_ask',
           reason: `oh-my-agy: notifications-guard — ${toolName} on ${targetResolved} modifies outbound notification webhooks or command settings. Approve explicitly if intended.`,
         };
       }
-      if (isFullOverwrite && (/(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i.test(targetResolved) || /(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i.test(rawTarget))) {
-        const rawLogPath = resolveRawTargetPath(rawTarget);
-        try {
-          if (fs.lstatSync(rawLogPath).isSymbolicLink()) {
-            return { decision: 'force_ask', reason: `oh-my-agy: append-only-guard — refusing full Overwrite through symlink ${rawLogPath}.` };
-          }
-        } catch { /* fail open: new log */ }
+      if (isFullOverwrite && (appendOnlyRe.test(targetResolved) || appendOnlyRe.test(rawLeaf) || appendOnlyRe.test(rawTarget))) {
+        if (kp.leafIsSymlink || kp.sawWatchedSymlink) {
+          return { decision: 'force_ask', reason: `oh-my-agy: append-only-guard — refusing full Overwrite through symlink ${rawLeaf}.` };
+        }
         let nonEmpty = false;
         try { const st = fs.lstatSync(targetResolved); nonEmpty = st.isFile() && st.size > 0; } catch { /* fail open: new log */ }
         if (nonEmpty) {
           return { decision: 'force_ask', reason: `oh-my-agy: append-only-guard — refusing full Overwrite of non-empty append-only log ${targetResolved} (use Append: true or hooks/run.sh append-jsonl).` };
         }
+      }
+      if (kp.sawWatchedSymlink && !isWithinSafeRoot(rawTarget)) {
+        return {
+          decision: 'force_ask',
+          reason: `oh-my-agy: symlink-escape-guard — ${toolName} on ${rawTarget} traverses a workspace symlink to ${targetResolved} outside safe roots. Approve explicitly if intended.`,
+        };
       }
       let prevText = null;
       try {
@@ -2999,7 +3030,8 @@ export function preToolUse(payload, opts = {}) {
   };
   const outsideTarget = targets.find((t) => !isPathInsideAllowedOmagy(roots, t) && !isSwarmOverviewPlan(t));
   if (!outsideTarget) return passThrough();
-  const resolved = resolveTargetPath(outsideTarget);
+  const outKp = resolveTargetInfo(outsideTarget);
+  const resolved = outKp.ok ? outKp.path : canonicalizePath(outsideTarget);
 
   if (runPlanningGuards && s) {
     const reason = ralplanGate && s === ralplanGate
@@ -3013,19 +3045,19 @@ export function preToolUse(payload, opts = {}) {
   // Write-existing-file guard:
   // Escalates full-file Overwrite on a symlink or non-empty existing code file that has not been read in this session.
   if (runWriteGuards && isFullOverwrite) {
-    const rawOutPath = resolveRawTargetPath(outsideTarget);
+    const rawOutPath = outKp.leafPath || resolved;
     const isCodeExt = CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase()) || CODE_EXTENSIONS.has(path.extname(rawOutPath).toLowerCase());
     if (isCodeExt) {
+      if (outKp.leafIsSymlink) {
+        return {
+          decision: 'force_ask',
+          reason: `oh-my-agy: write-existing-file-guard — refusing Overwrite through symlink ${rawOutPath}. Inspect the real target or approve explicitly.`,
+        };
+      }
       let existsNonEmpty = false;
       try {
-        const rawSt = fs.lstatSync(rawOutPath);
-        if (rawSt.isSymbolicLink()) {
-          return {
-            decision: 'force_ask',
-            reason: `oh-my-agy: write-existing-file-guard — refusing Overwrite through symlink ${rawOutPath}. Inspect the real target or approve explicitly.`,
-          };
-        }
-        existsNonEmpty = rawSt.isFile() && rawSt.size > 0;
+        const targetSt = fs.lstatSync(resolved);
+        existsNonEmpty = targetSt.isFile() && targetSt.size > 0;
       } catch { /* fail open: file does not exist */ existsNonEmpty = false; }
       if (existsNonEmpty) {
         const seen = readJson(seenFile) || { readFiles: [] };

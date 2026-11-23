@@ -64,6 +64,7 @@ import {
   verifyAntigravityTargetConversation,
 } from './dispatch.mjs';
 import {
+  cleanGitEnv,
   computeDesktopHudPort,
   defaultPluginDataDir,
   defaultRuntimeDir,
@@ -722,6 +723,7 @@ export function collectGitWorktrees(primaryRoot) {
   try {
     const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd: primaryRoot,
+      env: cleanGitEnv(process.env),
       encoding: 'utf8',
       timeout: 3000,
       windowsHide: true,

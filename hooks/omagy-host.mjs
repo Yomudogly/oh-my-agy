@@ -1095,7 +1095,7 @@ export function sanitizeUntrustedContext(text) {
 /** Walk raw path component-by-component following symlinks in kernel order (40-hop cap) without lexical .. collapse. */
 export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40, watchRoots = [] } = {}) {
   const input = String(rawPath || '').trim();
-  if (!input || input.includes('\0')) return { ok: false, error: 'invalid_path', path: '', sawWatchedSymlink: false };
+  if (!input || input.includes('\0')) return { ok: false, error: 'invalid_path', path: '', leafPath: '', leafIsSymlink: false, sawWatchedSymlink: false };
   const normDrive = (s) => (process.platform === 'win32' ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
   const canonWatches = watchRoots.map((w) => canonWsPath(w));
   const isWatched = (p) => {
@@ -1103,13 +1103,25 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
     return canonWatches.some((w) => np === w || np.startsWith(w.endsWith(path.sep) ? w : `${w}${path.sep}`));
   };
   const splitPrefix = (str) => {
-    const norm = normDrive(str).replace(/\\/g, '/');
+    let norm = String(str || '').replace(/\\/g, '/');
+    let fromUncPrefix = false;
+    if (/^\/\/\?\/UNC\//i.test(norm)) {
+      norm = `//${norm.slice(8)}`;
+      fromUncPrefix = true;
+    } else if (norm.startsWith('//?/')) {
+      norm = norm.slice(4);
+    }
+    norm = normDrive(norm);
+    if (fromUncPrefix || (process.platform === 'win32' && norm.startsWith('//'))) {
+      const unc = /^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(norm);
+      if (unc) return { root: `${path.sep}${path.sep}${unc[1]}${path.sep}${unc[2]}${path.sep}`, parts: (unc[3] || '').split('/').filter(Boolean), abs: true };
+    }
     const drv = /^([A-Za-z]:)(?:\/(.*))?$/.exec(norm);
     if (drv) return { root: `${drv[1]}${path.sep}`, parts: (drv[2] || '').split('/').filter(Boolean), abs: true };
     if (norm.startsWith('/')) return { root: path.sep, parts: norm.slice(1).split('/').filter(Boolean), abs: true };
     return { root: '', parts: norm.split('/').filter(Boolean), abs: false };
   };
-  const joinParts = (root, parts) => (parts.length ? path.join(root, ...parts) : root);
+  const joinParts = (root, parts) => (parts.length ? `${root}${parts.join(path.sep)}` : root);
 
   const parsed = splitPrefix(input);
   let rootPrefix;
@@ -1128,6 +1140,8 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
 
   let hops = 0;
   let sawWatchedSymlink = false;
+  let leafPath = '';
+  let leafIsSymlink = false;
   while (queue.length > 0) {
     const seg = queue.shift();
     if (!seg || seg === '.') continue;
@@ -1136,22 +1150,28 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
       continue;
     }
     const candidate = joinParts(rootPrefix, [...resolvedParts, seg]);
+    const isFinalSeg = !leafPath && queue.every((q) => !q || q === '.');
     let st = null;
     try {
       st = fs.lstatSync(candidate);
     } catch (err) {
       if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+        if (isFinalSeg) leafPath = normDrive(candidate);
         resolvedParts.push(seg);
         continue;
       }
-      return { ok: false, error: err?.code || 'lstat_error', path: '', sawWatchedSymlink };
+      return { ok: false, error: err?.code || 'lstat_error', path: '', leafPath, leafIsSymlink, sawWatchedSymlink };
     }
     if (st.isSymbolicLink()) {
+      if (isFinalSeg) {
+        leafPath = normDrive(candidate);
+        leafIsSymlink = true;
+      }
       if (isWatched(candidate)) sawWatchedSymlink = true;
       hops += 1;
-      if (hops > maxHops) return { ok: false, error: 'ELOOP', path: '', sawWatchedSymlink };
+      if (hops > maxHops) return { ok: false, error: 'ELOOP', path: '', leafPath, leafIsSymlink, sawWatchedSymlink };
       let target;
-      try { target = fs.readlinkSync(candidate); } catch { return { ok: false, error: 'readlink_error', path: '', sawWatchedSymlink }; }
+      try { target = fs.readlinkSync(candidate); } catch { return { ok: false, error: 'readlink_error', path: '', leafPath, leafIsSymlink, sawWatchedSymlink }; }
       const tp = splitPrefix(target);
       if (tp.abs) {
         rootPrefix = tp.root;
@@ -1161,16 +1181,27 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
         queue = [...tp.parts, ...queue];
       }
     } else {
+      if (isFinalSeg) leafPath = normDrive(candidate);
       resolvedParts.push(seg);
     }
   }
-  return { ok: true, path: normDrive(joinParts(rootPrefix, resolvedParts)), sawWatchedSymlink, hops };
+  const finalPath = normDrive(joinParts(rootPrefix, resolvedParts));
+  return { ok: true, path: finalPath, leafPath: leafPath || finalPath, leafIsSymlink, sawWatchedSymlink, hops };
 }
 
 const KEY_SHAPE_NAME_RE = /^(?:[A-Za-z0-9_-]*(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|signing[_-]?key|webhook[_-]?secret|session[_-]?secret|password|passwd)|secret|token)$/i;
 const PLACEHOLDER_VAL_RE = /^(?:\$|\{\{|\[REDACTED|<|process\.env\.|os\.environ|null\b|undefined\b|true\b|false\b|example\b|placeholder\b|your[_-]|changeme\b|dummy\b)/i;
+const TRUNC_TOKEN_PFX_RE = /^(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{12,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{12,}|gh[pousr]_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{16,}|hf_[A-Za-z0-9]{12,})/;
+const JWT_FULL_RE = /^eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/;
+const classifyRedactedLabel = (val) => {
+  if (JWT_FULL_RE.test(val)) return '[REDACTED_JWT]';
+  if (/^(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}|AIza[0-9A-Za-z_-]{35}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})$/.test(val)) return '[REDACTED_KEY]';
+  if (/^(?:(?:gh[pousr]|github_pat|pypi)_[A-Za-z0-9_-]{16,}|(?:glpat|xox[baprs]|pypi)-[A-Za-z0-9_-]{16,}|hf_[A-Za-z0-9]{20,}|npm_[0-9A-Za-z]{36})$/.test(val)) return '[REDACTED_TOKEN]';
+  if (/^A(?:KIA|SIA)[0-9A-Z]{16}$/.test(val)) return '[REDACTED_AWS_KEY]';
+  return '[REDACTED_SECRET]';
+};
 
-/** Bounded linear-pass key-shape redaction: assignment-before-prefix precedence, unquoted KEY=val, and truncated quotes. */
+/** Bounded linear-pass key-shape redaction: assignment-before-prefix precedence, unquoted KEY=val, JSON keys, and truncated quotes. */
 export function redactKeyShapeSecrets(text) {
   const s = String(text ?? '');
   if (!s) return '';
@@ -1181,23 +1212,19 @@ export function redactKeyShapeSecrets(text) {
 
   while (i < n) {
     // Check quoted truncated known-prefix token previews at EOF/EOL
-    if ((s[i] === '"' || s[i] === "'") && i + 12 < n) {
+    if ((s[i] === '"' || s[i] === "'") && i + 12 < n && TRUNC_TOKEN_PFX_RE.test(s.slice(i + 1, Math.min(n, i + 64)))) {
       const q = s[i];
       let end = i + 1;
-      const limit = Math.min(n, i + 257);
       let closed = false;
-      while (end < limit && s[end] !== '\n' && s[end] !== '\r') {
-        if (q === '"' && s[end] === '\\' && end + 1 < limit) { end += 2; continue; }
+      while (end < n && s[end] !== '\n' && s[end] !== '\r') {
+        if (q === '"' && s[end] === '\\' && end + 1 < n) { end += 2; continue; }
         if (s[end] === q) { closed = true; break; }
         end += 1;
       }
-      if (!closed && end > i + 12) {
-        const inner = s.slice(i + 1, end);
-        if (/^(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{12,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{12,}|gh[pousr]_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{16,}|hf_[A-Za-z0-9]{12,})/.test(inner)) {
-          out.push(q, '[REDACTED_SECRET]');
-          i = end;
-          continue;
-        }
+      if (!closed) {
+        out.push(q, '[REDACTED_SECRET]');
+        i = end;
+        continue;
       }
     }
 
@@ -1207,36 +1234,39 @@ export function redactKeyShapeSecrets(text) {
       const key = s.slice(i, kEnd);
       if (KEY_SHAPE_NAME_RE.test(key)) {
         let p = kEnd;
+        if (i > 0 && (s[i - 1] === '"' || s[i - 1] === "'") && p < n && s[p] === s[i - 1]) p += 1;
         while (p < n && (s[p] === ' ' || s[p] === '\t')) p += 1;
         if (p < n && (s[p] === '=' || s[p] === ':')) {
-          const sep = s[p];
           p += 1;
           while (p < n && (s[p] === ' ' || s[p] === '\t')) p += 1;
           if (p < n && (s[p] === '"' || s[p] === "'")) {
             const q = s[p];
             let vEnd = p + 1;
-            const vLim = Math.min(n, p + 257);
             let closed = false;
-            while (vEnd < vLim && s[vEnd] !== '\n' && s[vEnd] !== '\r') {
-              if (q === '"' && s[vEnd] === '\\' && vEnd + 1 < vLim) { vEnd += 2; continue; }
+            while (vEnd < n && s[vEnd] !== '\n' && s[vEnd] !== '\r') {
+              if (q === '"' && s[vEnd] === '\\' && vEnd + 1 < n) { vEnd += 2; continue; }
               if (s[vEnd] === q) { closed = true; break; }
               vEnd += 1;
             }
             const val = s.slice(p + 1, vEnd);
             if (val.length >= 8 && !PLACEHOLDER_VAL_RE.test(val)) {
-              out.push(s.slice(i, p + 1), '[REDACTED_SECRET]', closed ? q : '');
+              out.push(s.slice(i, p + 1), classifyRedactedLabel(val), closed ? q : '');
               i = closed ? vEnd + 1 : vEnd;
               continue;
             }
           } else if (p < n && s[p] !== '\n' && s[p] !== '\r') {
             let vEnd = p;
-            const vLim = Math.min(n, p + 256);
-            while (vEnd < vLim && !/[\s,;'"`()[\]{}<>]/.test(s[vEnd])) vEnd += 1;
+            while (vEnd < n && !/[\s,;'"`()[\]{}<>]/.test(s[vEnd])) vEnd += 1;
             const val = s.slice(p, vEnd);
             const nextCh = vEnd < n ? s[vEnd] : '';
-            const looksCallOrExpr = nextCh === '(' || (sep === ':' && !/[0-9_-]/.test(val) && /^[a-z]+$/i.test(val));
+            const label = classifyRedactedLabel(val);
+            const looksCallOrExpr = label === '[REDACTED_SECRET]' && (
+              nextCh === '('
+              || (!/^SG\./.test(val) && /^[A-Za-z_$][A-Za-z0-9_$]*(?:\??\.[A-Za-z_$][A-Za-z0-9_$]*)+$/.test(val))
+              || (val.length <= 48 && /^[A-Za-z_$][A-Za-z_$]*$/.test(val))
+            );
             if (val.length >= 8 && !looksCallOrExpr && !PLACEHOLDER_VAL_RE.test(val)) {
-              out.push(s.slice(i, p), '[REDACTED_SECRET]');
+              out.push(s.slice(i, p), label);
               i = vEnd;
               continue;
             }
