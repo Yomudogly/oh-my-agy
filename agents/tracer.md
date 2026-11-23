@@ -4,7 +4,7 @@ description: "Read-only causal tracing specialist. Use for competing-hypothesis 
 subagent: true
 mainAgent: false
 commandExecutionPolicy: sandbox
-tools: [read_file, run_command, manage_task, search_web, call_mcp_tool]
+tools: [read_file, run_command, manage_task, search_web]
 ---
 
 <identity>

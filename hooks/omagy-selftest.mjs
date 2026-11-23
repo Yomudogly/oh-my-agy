@@ -1848,7 +1848,6 @@ export async function runSelftest() {
       const writeRoles = ['executor', 'debugger', 'designer', 'test-engineer', 'devops-engineer', 'doc-steward'];
       const repoReadRoles = ['architect', 'code-reviewer', 'critic', 'explore', 'planner', 'security-reviewer', 'tracer', 'verifier', 'supply-chain-auditor', 'runtime-qa'];
       const pureReadRoles = ['researcher', 'vision'];
-      const mcpRoles = new Set(['explore', 'debugger', 'tracer', 'researcher', 'designer']);
       const flashRoles = new Set(['explore', 'doc-steward']);
       const allRolesT41 = [...writeRoles, ...repoReadRoles, ...pureReadRoles];
       const roleToolsParityOk = writeRoles.every((r) => {
@@ -1859,13 +1858,12 @@ export async function runSelftest() {
         return fm.ok && fm.fields.tools.includes('run_command') && !fm.fields.tools.includes('edit_file') && !fm.fields.tools.includes('write_file') && fm.fields.commandExecutionPolicy === 'sandbox';
       }) && pureReadRoles.every((r) => {
         const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
-        const expected = r === 'researcher' ? ['read_file', 'search_web', 'call_mcp_tool'] : ['read_file', 'search_web'];
-        return fm.ok && JSON.stringify(fm.fields.tools) === JSON.stringify(expected);
+        return fm.ok && JSON.stringify(fm.fields.tools) === JSON.stringify(['read_file', 'search_web']);
       }) && allRolesT41.every((r) => {
         const fm = validateFrontmatterYaml(rTxt(`agents/${r}.md`), agentAllowed, ['name', 'description'], agentOpts);
-        const mcpMatch = mcpRoles.has(r) ? fm.fields.tools.includes('call_mcp_tool') : !fm.fields.tools.includes('call_mcp_tool');
+        const noInvalidMcpTool = !fm.fields.tools.includes('call_mcp_tool');
         const modelMatch = flashRoles.has(r) ? fm.fields.model === 'flash' : !fm.fields.model;
-        return fm.ok && mcpMatch && modelMatch && fm.fields.model !== 'pro';
+        return fm.ok && noInvalidMcpTool && modelMatch && fm.fields.model !== 'pro';
       });
 
       t41Ok = parserOk && deletedAbsent && foldedOk && hudSubagentsOk && roleToolsParityOk;

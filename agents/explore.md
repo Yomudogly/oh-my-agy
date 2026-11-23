@@ -5,7 +5,7 @@ subagent: true
 mainAgent: false
 model: flash
 commandExecutionPolicy: sandbox
-tools: [read_file, run_command, manage_task, search_web, call_mcp_tool]
+tools: [read_file, run_command, manage_task, search_web]
 ---
 
 <identity>

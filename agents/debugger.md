@@ -3,7 +3,7 @@ name: debugger
 description: "Root-cause analysis specialist. Use for regression isolation, stack-trace analysis, and failing-test diagnosis."
 subagent: true
 mainAgent: false
-tools: [read_file, edit_file, write_file, run_command, manage_task, search_web, call_mcp_tool]
+tools: [read_file, edit_file, write_file, run_command, manage_task, search_web]
 ---
 
 <identity>
