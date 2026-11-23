@@ -44,9 +44,10 @@ The **repo ledger is the single source of truth**. Antigravity's `/goal` slash c
 }
 ```
 
-**Goal rigor classification (`rigor`)**:
+**Goal rigor classification (`rigor`) & `--light` execution profile**:
 - `"light"`: narrow change inside an existing module/pattern with no schema, auth, security, or public API contract change. Verified by targeted tests + acceptance check.
 - `"heavy"`: cross-cutting change, new boundary/schema/auth/security surface, or state machine change. Requires targeted tests + at least 1 adversarial probe + independent `verifier` (`AdversarialVerify`) check before checkpointing.
+- **`$ultragoal --light` profile (`"profile": "light"` in `goals.json`/state)**: for bounded, low-risk plans, keep `goals.json`, state tracking, and parallel delegation where useful, execute in a single workspace without per-step `.omagy/evidence/goal-<id>.json` receipt files or per-goal `verifier` loops, and run one consolidated verification pass against all acceptance criteria at the end (stopping after 2 identical failures or 3 failed verification passes).
 
 Ledger entry shape (append; never rewrite earlier lines):
 ```json

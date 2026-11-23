@@ -35,6 +35,10 @@
         {
           "prompt": "Clean up and deslop this bloated repetitive module with dead-code and duplication passes",
           "owner": "ai-slop-cleaner"
+        },
+        {
+          "prompt": "Review this inline diff `if (token == undefined) return true;` for merge readiness with reviewer and architect lanes",
+          "owner": "code-review"
         }
       ]
     },
@@ -108,6 +112,14 @@
         {
           "prompt": "Build an adversarial dynamic end-to-end QA scenario matrix and run up to 5 QA cycles",
           "owner": "ultraqa"
+        },
+        {
+          "prompt": "Why does this inline stack trace fail? TypeError: Cannot read properties of undefined at verifySession (src/auth.ts:42) during root-cause investigation",
+          "owner": "analyze"
+        },
+        {
+          "prompt": "Simplify and deslop this working bloated helper function by removing dead fallback code after locking tests",
+          "owner": "ai-slop-cleaner"
         }
       ]
     },

@@ -18,7 +18,17 @@ Use this explicit opt-in for a merge-readiness review. It is read-only and never
 - Scope: the requested files, commit, PR, pasted unified diff, or whole diff.
 - Requirements/spec, acceptance criteria, and relevant test/CI evidence.
 - Existing review artifacts and known risks, if any.
-- If the user says `continue`, advance the current review step rather than restarting.
+- If the user says `continue`, use the **Continuation Decision Table** below rather than restarting blindly:
+
+| Case | Condition | Action |
+| :--- | :--- | :--- |
+| **Fresh Review** | No prior review receipt, or source/requirements/`qualityGates["code-review"]` changed | Run full `code-reviewer` + `architect` (+ `security-reviewer` if triggered) lanes and validation |
+| **Resuming Missing Lane** | Source-bound receipt matches current HEAD/diff, one lane missing or failed | Run only the missing lane, then synthesize final verdict |
+| **Resuming Missing Validation** | Both review lanes match current source, validation command unrun | Run validation only and bind into receipt |
+| **Repair Re-review** | Prior `REQUEST CHANGES` fixed via new commits (`--re-review <fix_base_sha>`) | Review `<fix_base_sha>..HEAD` against prior findings + new defects only |
+| **Complete Evidence** | Bound receipt matches current source, requirements, and gates | Reuse existing verdict and cite the bound receipt |
+
+- **Clean-Checkout & Ref-Match Guard**: before running local tests or probes against a PR/commit ref, verify `git status --short` is empty and `git rev-parse HEAD` matches the target ref, and cite that exact ref in the report so dirty edits from another session never masquerade as reviewed code.
 
 Record the scope first (prefer generating a file-based review package so diffs never bloat the leader context window):
 ```sh
@@ -106,7 +116,7 @@ ARCHITECTURE WATCHLIST: concern, status, recommendation (or none)
 RECOMMENDATION: <APPROVE | REQUEST CHANGES | COMMENT>
 ```
 
-Fill in observed values, include scope, lane evidence references, unresolved risks, and validation gaps, and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` when `.omagy/artifacts/code-review-<slug>-<timestamp>.md` is written.
+Fill in observed values, include scope, lane evidence references, unresolved risks, validation gaps, and a **Source-Bound Review Receipt** (`Base Commit`, `Reviewed Ref`, `Uncommitted Changes` + file hashes if dirty, `Requirements & Gates` hash, per-lane `Artifact`, `Validation`, `Binding Status: bound | unbound` — invalidating reuse whenever source, requirements, or `qualityGates["code-review"]` change), and surface `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)` when `.omagy/artifacts/code-review-<slug>-<timestamp>.md` is written.
 
 ## Receiving review feedback (`receiving-code-review` discipline)
 

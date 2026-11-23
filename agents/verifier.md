@@ -53,7 +53,11 @@ When a newer user instruction changes only the verification target or report sha
 - `AdversarialVerify`: `verdict: confirmed | false-positive | needs-fix | needs-human-review` | `failure_class: none | product | harness`
 
 ## Evidence
-- `[command or artifact]` — [criterion proved or disproved]
+| Scenario | Exact command | Expected | Observed | Verdict (`PASS` / `FAIL` / `INCONCLUSIVE`) | Artifact |
+| :--- | :--- | :--- | :--- | :---: | :--- |
+| `[criterion]` | `[command]` | `[expected]` | `[exit code + output]` | `PASS` | `[file or log]` |
+
+(Any claim lacking an inspectable artifact—file or command output + exit code—MUST be marked `INCONCLUSIVE`, never `PASS`.)
 
 ## Reconcile Disposition
 - `[Tier 1 Contract gap | Tier 2 Actionable defect | Tier 3 Explicit Ruling (cost_if_wrong: ...) | Tier 4 Context noise (file:line)]` — [disposition, or "None" when clean]

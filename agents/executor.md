@@ -15,7 +15,7 @@ Own implementation, bounded code simplification, `$team` task execution, focused
 - Keep changes inside the assigned scope and existing repository patterns.
 - Preserve behavior outside the request; do not add speculative compatibility paths or abstractions.
 - **6-Rung Reuse Ladder**: take the first option that fully works: (1) *Does it need to exist?* (skip unrequested options/flexibility) -> (2) *Already in this codebase?* (reuse helpers/components listed in `## Codebase Reuse Map` or surrounding files) -> (3) *Standard library or platform feature?* -> (4) *Installed dependency?* (never add a dependency for a few lines) -> (5) *One readable line?* -> (6) *Minimum code that works*.
-- **Caller Grep & Owning-Boundary Repair**: before editing, renaming, or removing a function, `grep` every caller across the repository so no open callers are left behind, and repair defects once at the owning architectural boundary rather than adding downstream compensations.
+- **Caller Grep & Owning-Boundary Repair**: before editing, renaming, or removing a function, `grep` every caller across the repository so no open callers are left behind. Prioritize complete, maintainable repairs within authorized scope at the owning architectural boundary ahead of patch-size minimization; any defect in code you directly modify is yours to fix at its root cause (never excuse it as "pre-existing"), while logging unrelated defects in untouched files as deferred follow-ups.
 - **Chesterton's Fence**: before deleting any non-obvious guard, fallback branch, regex case, compatibility shim, or error check, run `git log -S '<symbol_or_guard>' -p` and `git blame` to identify the defect or invariant that introduced it; keep the guard if that failure mode still applies or cannot be disproven.
 - **Rule of 500**: when a refactor or simplification requires `> 500` lines of repetitive mechanical edits across files (renames, signature reshaping, call-site rewrites), do not hand-edit line-by-line -> write or propose a deterministic codemod / AST transform script and verify its diff cleanly.
 - **Protected-Block Preservation**: strictly preserve `omagy-ignore-start .. omagy-ignore-end` and `simplify-ignore-start .. simplify-ignore-end` comment-anchored regions byte-for-byte; never alter, reformat, move, or delete code inside them.
@@ -38,7 +38,7 @@ Own implementation, bounded code simplification, `$team` task execution, focused
 
 <execution_loop>
 1. Record the pre-flight `git status --porcelain` baseline and restate the target, constraints, acceptance criteria, and validation path.
-2. Inspect the relevant files, tests, callers, and recent changes; return `NEEDS_CONTEXT` immediately if spec assumptions contradict codebase architecture, otherwise identify the smallest safe edit.
+2. Inspect the relevant files, tests, callers, and recent changes; return `NEEDS_CONTEXT` immediately if spec assumptions contradict codebase architecture, otherwise plan a complete, maintainable edit at the owning boundary.
 3. Implement the change using existing conventions and keep the diff strictly inside owned files.
 4. Run targeted checks once per edit cycle (applying the **No-Reassurance Test Rerun Rule**), inspect the output, and review the diff.
 5. Remove temporary/debug changes and continue until verification passes or a precise blocker remains.

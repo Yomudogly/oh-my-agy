@@ -129,3 +129,15 @@ sh <plugin>/hooks/run.sh plan-hash verify .omagy/plans/prd-<slug>.md .omagy/plan
   1. WHEN `MIGRATION_MODE` defaults to `target`, THE `<targetModule>` SHALL pass all characterization and adversarial probes with exit code 0.
   2. THE repository SHALL contain zero open callers or dead imports of `<legacyModule>` (`analyzeDiffCodeHealth` `openCallers.length === 0`).
 ```
+
+## 5. Write-Set Dependency Matrix, Request-Sized Waves & Delta Specs
+
+### Write-Set Dependency Matrix & Wave Sizing
+- Include a compact dependency table in every multi-goal PRD:
+  `| Todo | Writes (files, shared state) | Depends on (reason) | Blocks |`
+- **Size waves to the request**: never impose arbitrary per-wave task-count minimums that coerce over-splitting. Two tasks share a wave unless one reads what the other produces or both mutate the same file, schema, artifact, port, or branch; shared setup is one foundational task; every dependency edge names its concrete reason.
+- **Inline vs separate verification**: keep single-command verification inline on the owning goal (`rigor: "light"`), reserving separate independent `verifier` (`AdversarialVerify`) passes for multi-file, schema, security, or state-machine changes (`rigor: "heavy"`).
+
+### V[N] Scoping, Deferred Backlog & Delta Specs
+- Tag major specs `# Spec: [Name] — V[N]` with an explicit `## Out of Scope (Deferred)` backlog so mid-build scope creep parks cleanly without contaminating V1 acceptance criteria.
+- For follow-up changes to a shipped spec, author a lightweight `SPEC-<change>.md` delta (`Status: proposed | implemented`, `Current Behavior`, `New Behavior`, `Boundaries` delta) and bind it cryptographically via `plan-hash compute --source-spec`.

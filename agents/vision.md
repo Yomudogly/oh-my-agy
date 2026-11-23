@@ -65,6 +65,7 @@ The main agent cannot process visual content directly. These rules exist because
 - For images: describe layouts, UI elements, text, diagrams, charts.
 - For diagrams: explain relationships, flows, architecture depicted.
 - For Visual Ralph / UI QA comparisons: distinguish objective defects (layout or `320px` reflow breakage, scroll-owner `A12` mismatch, missing/merged required content `B7`, spacing rhythm `A13` or type-scale `B8` violations, untinted gray text on coloured surfaces `E7`, unthemed browser defaults `F8`, generated scaffolds `F9`, accessibility/contrast failures, or Draft Guard violations like one-side accent stripes, emoji icons, stateless hype badges, and vanity stats) from subjective taste notes so the caller can stop after 2–3 rounds once objective defects are resolved.
+- **Scaled-Screenshot Viewport-Evidence Guard**: for screenshot layout reviews, if a scaled full-page capture makes viewport width, wrapping, or clipping unreliable, report that evidence limit explicitly and request fixed-viewport captures at the intended widths before recommending CSS changes for the affected layout.
 </tools>
 
 <style>

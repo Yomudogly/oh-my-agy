@@ -44,8 +44,8 @@ In Antigravity, workers are **subagents**:
 ```
 Also write `.omagy/state/team-state.json` (`mode:"team"`, `active:true`, `current_phase:"executing"`, `state.team:"<team>"`).
 
-- **DAG Wave Scheduling, Capacity Reservation & Fail-Closed Task Validation**:
-  - Tasks form an explicit DAG via `depends_on`. Launch ready waves (`status:"pending"` whose `depends_on` tasks are all `"completed"`), up to 6 concurrent workers per wave.
+- **DAG Wave Scheduling, Request-Sized Waves, Capacity Reservation & Fail-Closed Task Validation**:
+  - Tasks form an explicit DAG via `depends_on` with explicit `owned_paths` (write-sets). Size waves strictly to the request (no artificial minimum tasks per wave): two tasks share a wave unless one reads what the other produces or both write the same file, schema, port, or shared state; keep single-command verification inline unless the slice is heavy/multi-file. Launch ready waves (`status:"pending"` whose `depends_on` tasks are all `"completed"`), up to 6 concurrent workers per wave.
   - **One-task-per-worker capacity reservation & rollback**: reserve at most 1 active (`in_progress`) task per worker at a time. If `invoke_subagent` or `send_message` dispatch fails, immediately roll the task's claim back to `status: "pending"` (`worker: null`, `conversation_id: null`) so it is not stranded as a phantom `in_progress` claim.
   - **Fail-closed task-board integrity**: before scheduling a new wave or declaring completion, validate `.omagy/state/team/<team>/tasks.json` (or run `sh <plugin>/hooks/run.sh validate-team-tasks <workspace> <team>`). Any missing, unreadable, symlinked, or malformed task board is a hard blocker (`team_task_read_failed`) — never treat an unreadable board as "0 pending tasks".
   - If a task fails or blocks after retries, mark it `"blocked"` and cascade `"blocked"` (`result:"blocked-by:<id>"`) to downstream tasks whose `depends_on` transitively includes `<id>`, while continuing independent branches.

@@ -88,6 +88,8 @@ Match instruction specificity to task fragility rather than writing uniform pros
 - **Write the Procedure, Not the Workaround**: capture portable invariants and deterministic CLI checks rather than machine-specific hacks or 5-step ad-hoc grep chains ([testing-and-sdo.md](./references/testing-and-sdo.md#write-the-procedure-not-the-workaround)).
 - **Rejected-Change Impact Ledger**: when trimming or consolidating an existing skill, record pruned rules, replacement coverage, and verification gates per [testing-and-sdo.md](./references/testing-and-sdo.md#rejected-change-impact-ledger).
 
+- **6-Rung Skill Decision Ladder (Before Creating a New Skill)**: evaluate `update > extend > deprecate > split > create > none` in strict order (defaulting to `none` when unsure or when existing docs/rules suffice) so duplicate or low-value wrapper skills are never created.
+
 ## 6-Step Skill Authoring Lifecycle (`$skill init` / `$skill add` / `$skill edit`)
 
 1. **Gather Concrete Trigger & Near-Miss Examples**:

@@ -95,7 +95,7 @@ PHASE 5: 5-Dimension Self-Assessment (>=85) & Automated Audit (audit-research)
 Write the report to `.omagy/artifacts/research/deep-research-<slug>-<UTC>.md` (and optionally copy or link `.omagy/artifacts/research/deep-research-latest.md`) following [report-template.md](./references/report-template.md):
 
 1. **Executive Summary** (250–500 words): Core thesis, key `[VERIFIED]` / `[DERIVED]` findings, primary tradeoffs, and recommended path.
-2. **Introduction, Context & Scope**: Problem definition, boundary conditions, historical/version trajectory, and why-now significance.
+2. **Introduction, Context & Scope (Version and Date Context)**: Problem definition, boundary conditions, explicit **Version and date context** (exact versions, release channels, and retrieval dates for every freshness-sensitive claim, flagging stale or version-mismatched evidence), historical/version trajectory, and why-now significance.
 3. **Research Methodology & Source Tiers**: Active lens(es), query strategy, Tier A–E source breakdown, and bias/contradiction controls.
 4. **Multidimensional Lens Analysis**: Deep dive across the selected lens(es) (`Technical`, `Business`, `Idea / Product`, `Implementation`) plus cross-lens interactions and paradox resolution.
 5. **Interpretation, Synthesis & Systemic Modeling**: Unified mental model and at least one Mermaid diagram (causal loop, dialectical synthesis, or architecture topology from [report-template.md](./references/report-template.md)).
