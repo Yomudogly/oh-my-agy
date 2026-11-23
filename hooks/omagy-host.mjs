@@ -1092,38 +1092,45 @@ export function sanitizeUntrustedContext(text) {
     .replace(/<\/([A-Za-z][A-Za-z0-9_:-]*(?:\s[^>]*)?)>/g, '<\\$1>');
 }
 
+/** Parse POSIX, Win32 drive, UNC, and Win32 extended-length (\\?\, \\?\UNC\) prefixes into { root, parts, abs }. */
+export function parseKernelPathPrefix(str) {
+  const isWin = process.platform === 'win32';
+  const normDrive = (s) => (isWin ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
+  let norm = String(str || '').replace(/\\/g, '/');
+  let fromUncPrefix = false;
+  if (/^\/\/\?\/UNC\//i.test(norm)) {
+    norm = `//${norm.slice(8)}`;
+    fromUncPrefix = true;
+  } else if (norm.startsWith('//?/')) {
+    norm = norm.slice(4);
+  }
+  norm = normDrive(norm);
+  if (fromUncPrefix || (isWin && norm.startsWith('//'))) {
+    const unc = /^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(norm);
+    if (unc) return { root: `${path.sep}${path.sep}${unc[1]}${path.sep}${unc[2]}${path.sep}`, parts: (unc[3] || '').split('/').filter(Boolean), abs: true };
+  }
+  const drv = /^([A-Za-z]:)(?:\/(.*))?$/.exec(norm);
+  if (drv) return { root: `${drv[1]}${path.sep}`, parts: (drv[2] || '').split('/').filter(Boolean), abs: true };
+  if (norm.startsWith('/')) return { root: path.sep, parts: norm.slice(1).split('/').filter(Boolean), abs: true };
+  return { root: '', parts: norm.split('/').filter(Boolean), abs: false };
+}
+
 /** Walk raw path component-by-component following symlinks in kernel order (40-hop cap) without lexical .. collapse. */
 export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40, watchRoots = [] } = {}) {
   const input = String(rawPath || '').trim();
   if (!input || input.includes('\0')) return { ok: false, error: 'invalid_path', path: '', leafPath: '', leafIsSymlink: false, sawWatchedSymlink: false };
-  const normDrive = (s) => (process.platform === 'win32' ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
-  const canonWatches = watchRoots.map((w) => canonWsPath(w));
+  const isWin = process.platform === 'win32';
+  const realpathNative = fs.realpathSync.native || fs.realpathSync;
+  const normDrive = (s) => (isWin ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
+  const cmpKey = (p) => (isWin ? normDrive(p).toLowerCase() : p);
+  const canonWatches = watchRoots.map((w) => cmpKey(canonWsPath(w)));
   const isWatched = (p) => {
-    const np = normDrive(p);
+    const np = cmpKey(p);
     return canonWatches.some((w) => np === w || np.startsWith(w.endsWith(path.sep) ? w : `${w}${path.sep}`));
-  };
-  const splitPrefix = (str) => {
-    let norm = String(str || '').replace(/\\/g, '/');
-    let fromUncPrefix = false;
-    if (/^\/\/\?\/UNC\//i.test(norm)) {
-      norm = `//${norm.slice(8)}`;
-      fromUncPrefix = true;
-    } else if (norm.startsWith('//?/')) {
-      norm = norm.slice(4);
-    }
-    norm = normDrive(norm);
-    if (fromUncPrefix || (process.platform === 'win32' && norm.startsWith('//'))) {
-      const unc = /^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(norm);
-      if (unc) return { root: `${path.sep}${path.sep}${unc[1]}${path.sep}${unc[2]}${path.sep}`, parts: (unc[3] || '').split('/').filter(Boolean), abs: true };
-    }
-    const drv = /^([A-Za-z]:)(?:\/(.*))?$/.exec(norm);
-    if (drv) return { root: `${drv[1]}${path.sep}`, parts: (drv[2] || '').split('/').filter(Boolean), abs: true };
-    if (norm.startsWith('/')) return { root: path.sep, parts: norm.slice(1).split('/').filter(Boolean), abs: true };
-    return { root: '', parts: norm.split('/').filter(Boolean), abs: false };
   };
   const joinParts = (root, parts) => (parts.length ? `${root}${parts.join(path.sep)}` : root);
 
-  const parsed = splitPrefix(input);
+  const parsed = parseKernelPathPrefix(input);
   let rootPrefix;
   let resolvedParts;
   let queue;
@@ -1132,7 +1139,7 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
     resolvedParts = [];
     queue = [...parsed.parts];
   } else {
-    const baseParsed = splitPrefix(canonWsPath(baseDir));
+    const baseParsed = parseKernelPathPrefix(canonWsPath(baseDir));
     rootPrefix = baseParsed.root;
     resolvedParts = [...baseParsed.parts];
     queue = [...parsed.parts];
@@ -1172,7 +1179,7 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
       if (hops > maxHops) return { ok: false, error: 'ELOOP', path: '', leafPath, leafIsSymlink, sawWatchedSymlink };
       let target;
       try { target = fs.readlinkSync(candidate); } catch { return { ok: false, error: 'readlink_error', path: '', leafPath, leafIsSymlink, sawWatchedSymlink }; }
-      const tp = splitPrefix(target);
+      const tp = parseKernelPathPrefix(target);
       if (tp.abs) {
         rootPrefix = tp.root;
         resolvedParts = [];
@@ -1181,6 +1188,18 @@ export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40,
         queue = [...tp.parts, ...queue];
       }
     } else {
+      if (isWin) {
+        try {
+          const realCand = normDrive(realpathNative(candidate));
+          const rp = parseKernelPathPrefix(realCand);
+          if (rp.abs) {
+            rootPrefix = rp.root;
+            resolvedParts = [...rp.parts];
+            if (isFinalSeg) leafPath = realCand;
+            continue;
+          }
+        } catch { /* fail open: keep walked segment when native realpath is unavailable */ }
+      }
       if (isFinalSeg) leafPath = normDrive(candidate);
       resolvedParts.push(seg);
     }

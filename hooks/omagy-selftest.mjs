@@ -4847,11 +4847,13 @@ export async function runSelftest() {
       fs.writeFileSync(path.join(t65Ws, '.omagy', 'state', 'ralplan-state.json'), JSON.stringify({ mode: 'ralplan', active: true, current_phase: 'planning', updated_at: new Date().toISOString() }), 'utf8');
       fs.writeFileSync(path.join(t65Out, 'victim.js'), 'export const x = 1;\n', 'utf8');
       fs.writeFileSync(path.join(t65Out, 'real-log.jsonl'), '{"ok":true}\n', 'utf8');
-      const { walkKernelPath } = await import('./omagy-host.mjs');
-      const winDrvWalk = walkKernelPath('\\\\?\\C:\\real\\path', t65Ws);
-      const winUncWalk = walkKernelPath('\\\\?\\UNC\\server\\share\\dir', t65Ws);
-      const winPrefixOk = winDrvWalk.ok && !winDrvWalk.path.includes('?') && /[Cc]:[/\\]real[/\\]path$/.test(winDrvWalk.path)
-        && winUncWalk.ok && !winUncWalk.path.includes('?') && /server[/\\]share[/\\]dir$/.test(winUncWalk.path);
+      const { walkKernelPath, parseKernelPathPrefix } = await import('./omagy-host.mjs');
+      const winDrvWalk = walkKernelPath('\\\\?\\C:\\nonexistent-omagy-t65\\path', t65Ws);
+      const winUncPfx = parseKernelPathPrefix('\\\\?\\UNC\\server\\share\\dir');
+      const winRealWalkOk = process.platform !== 'win32' || walkKernelPath(`\\\\?\\${t65Ws}`, t65Ws).path === canonicalizePath(t65Ws);
+      const winPrefixOk = winDrvWalk.ok && !winDrvWalk.path.includes('?') && /[Cc]:[/\\]nonexistent-omagy-t65[/\\]path$/.test(winDrvWalk.path)
+        && winUncPfx.abs && !winUncPfx.root.includes('?') && /server[/\\]share[/\\]$/.test(winUncPfx.root) && winUncPfx.parts.join('/') === 'dir'
+        && winRealWalkOk;
       const t65Ws2 = path.join(ws, 't65-sec-other');
       fs.mkdirSync(path.join(t65Ws2, '.omagy', 'plans'), { recursive: true });
       fs.writeFileSync(path.join(t65Ws, '.omagy', 'notifications.json'), '{"slack":"x"}\n', 'utf8');
