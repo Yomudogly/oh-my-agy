@@ -7,12 +7,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { CODE_EXTENSIONS, redactSecrets, stripUtf8Bom } from './omagy-hook.mjs';
-import { defaultRuntimeDir } from './omagy-host.mjs';
+import { cleanGitEnv, defaultRuntimeDir } from './omagy-host.mjs';
 
 export function githubSlugger(rawHeading, seenCounts = null) {
-  const unwrapped = String(rawHeading || '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
-  const noHtml = unwrapped.replace(/`([^`]*)`|<[!\/a-zA-Z][^>]*>/g, (_, code) => (code !== undefined ? code : ''));
-  const base = noHtml.trim().toLowerCase().replace(/[*~`]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
+  const stripped = String(rawHeading || '').replace(/^\s*#{1,6}\s+/, '').replace(/\s+#+\s*$/, '');
+  const flattened = stripped.replace(/(`+)([\s\S]*?)\1|!?\[([^\]]*)\]\([^)]*\)|<[!\/a-zA-Z][^>]*>/g, (_m, ticks, code, label) => {
+    if (ticks !== undefined) {
+      return code.length >= 2 && code.startsWith(' ') && code.endsWith(' ') && /[^ ]/.test(code) ? code.slice(1, -1) : code;
+    }
+    return label !== undefined ? label : '';
+  });
+  const base = flattened.trim().toLowerCase().replace(/[*~`]/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/ /g, '-');
   if (!(seenCounts instanceof Map)) return base;
   const prev = seenCounts.get(base);
   if (prev === undefined) { seenCounts.set(base, 0); return base; }
@@ -40,7 +45,7 @@ const isDir = (p) => { try { return Boolean(p) && fs.statSync(p).isDirectory(); 
 const isFile = (p) => { try { return Boolean(p) && fs.statSync(p).isFile(); } catch { /* fail open: missing file */ return false; } };
 const listEntries = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => !e.isSymbolicLink()); } catch { /* fail open: unreadable dir */ return []; } };
 const readUtf8 = (p) => stripUtf8Bom(fs.readFileSync(p, 'utf8'));
-const gitOut = (cwd, args, extra = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, maxBuffer: 16 * 1024 * 1024, ...extra });
+const gitOut = (cwd, args, extra = {}) => execFileSync('git', args, { cwd, env: cleanGitEnv(process.env), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, maxBuffer: 16 * 1024 * 1024, ...extra });
 
 function blankFencedLines(markdown) {
   const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
@@ -78,6 +83,7 @@ function parseAuditArgs(rawArgs = []) {
   let rootArgExplicit = false;
   let baseRef = '';
   let json = false;
+  let gitStaleness = false;
   let help = false;
   let endOfFlags = false;
   const positional = [];
@@ -86,6 +92,7 @@ function parseAuditArgs(rawArgs = []) {
     if (!endOfFlags && a === '--') { endOfFlags = true; continue; }
     if (!endOfFlags && (a === '--help' || a === '-h')) { help = true; continue; }
     if (!endOfFlags && a === '--json') { json = true; continue; }
+    if (!endOfFlags && a === '--git-staleness') { gitStaleness = true; continue; }
     if (!endOfFlags && (a === '-C' || a === '--dir' || a === '--root')) {
       if (i + 1 >= rawArgs.length || String(rawArgs[i + 1] ?? '').startsWith('-')) return { ok: false, help, error: `missing_flag_value:${a}` };
       dir = rawArgs[++i];
@@ -116,7 +123,7 @@ function parseAuditArgs(rawArgs = []) {
   if (!dir && positional[0]) { dir = positional[0]; rootArgExplicit = true; }
   if (!baseRef && positional[1]) baseRef = positional[1];
   if (baseRef && baseRef.startsWith('-')) return { ok: false, help, error: `invalid_base_ref:${baseRef}` };
-  return { ok: true, help, rootArgExplicit, rootDir: dir || process.cwd(), baseRef, json };
+  return { ok: true, help, rootArgExplicit, rootDir: dir || process.cwd(), baseRef, json, gitStaleness };
 }
 
 export function walkWikiMd(absWiki, skipIndex = false) {
@@ -337,7 +344,8 @@ function extractRelativeImports(absFile, text) {
   return out;
 }
 
-export function runDocsDrift(rootDir = process.cwd()) {
+export function runDocsDrift(rootDir = process.cwd(), opts = {}) {
+  const checkGitStaleness = Boolean(opts && opts.gitStaleness);
   if (!strArg(rootDir)) return { ok: false, exitCode: 2, root: '', error: 'missing_root_dir' };
   const absRoot = path.resolve(rootDir);
   if (!isDir(absRoot)) return { ok: false, exitCode: 2, root: absRoot, error: 'missing_root_dir' };
@@ -364,6 +372,8 @@ export function runDocsDrift(rootDir = process.cwd()) {
   const brokenLinks = [];
   const missingScripts = [];
   const missingMakeTargets = [];
+  const linkedRepoPairs = [];
+  const seenLinkPairs = new Set();
   const mdAnchorCache = new Map();
   const anchorsForMd = (absMd) => {
     const key = path.resolve(absMd);
@@ -439,6 +449,16 @@ export function runDocsDrift(rootDir = process.cwd()) {
           if (!fs.existsSync(cand)) {
             brokenLinks.push({ file: relDoc, line: i + 1, href, resolved: toPosix(path.relative(absRoot, cand)) });
             continue;
+          }
+          if (checkGitStaleness && isFile(cand) && cand !== doc) {
+            const relTarget = toPosix(path.relative(absRoot, cand));
+            if (relTarget && !relTarget.startsWith('../') && !path.isAbsolute(relTarget)) {
+              const pairKey = `${relDoc}=>${relTarget}`;
+              if (!seenLinkPairs.has(pairKey) && linkedRepoPairs.length < 50) {
+                seenLinkPairs.add(pairKey);
+                linkedRepoPairs.push({ doc: relDoc, target: relTarget });
+              }
+            }
           }
         }
         if (rawFrag && !/[*<>{}$]/.test(rawFrag) && !/^L\d+(?:-L?\d+)?$/.test(rawFrag) && isFile(cand) && /\.(?:md|markdown)$/i.test(cand)) {
@@ -529,6 +549,44 @@ export function runDocsDrift(rootDir = process.cwd()) {
     }
   }
 
+  let gitStaleness = [];
+  if (checkGitStaleness && linkedRepoPairs.length > 0) {
+    let isGitRepo = false;
+    let isShallow = false;
+    try {
+      isGitRepo = gitOut(absRoot, ['rev-parse', '--is-inside-work-tree']).trim() === 'true';
+      if (isGitRepo) {
+        isShallow = gitOut(absRoot, ['rev-parse', '--is-shallow-repository']).trim() === 'true';
+      }
+    } catch { /* fail open: non-git workspace */ }
+    const lastCommitCache = new Map();
+    const lastCommitOf = (relPath) => {
+      if (lastCommitCache.has(relPath)) return lastCommitCache.get(relPath);
+      let sha = '';
+      if (isGitRepo) {
+        try { sha = gitOut(absRoot, ['log', '-1', '--format=%H', '--', relPath]).trim(); } catch { /* fail open: untracked or unreadable git log */ }
+      }
+      lastCommitCache.set(relPath, sha);
+      return sha;
+    };
+    const isAncestor = (anc, desc) => {
+      try { gitOut(absRoot, ['merge-base', '--is-ancestor', anc, desc]); return true; } catch { /* fail open: not ancestor or divergent */ return false; }
+    };
+    gitStaleness = linkedRepoPairs.map(({ doc, target }) => {
+      if (!isGitRepo || isShallow) return { doc, target, status: "can't tell", docCommit: '', targetCommit: '' };
+      const docCommit = lastCommitOf(doc);
+      const targetCommit = lastCommitOf(target);
+      if (!docCommit || !targetCommit) return { doc, target, status: "can't tell", docCommit, targetCommit };
+      if (docCommit === targetCommit || isAncestor(targetCommit, docCommit)) {
+        return { doc, target, status: 'current', docCommit, targetCommit };
+      }
+      if (isAncestor(docCommit, targetCommit)) {
+        return { doc, target, status: 'stale', docCommit, targetCommit };
+      }
+      return { doc, target, status: "can't tell", docCommit, targetCommit };
+    });
+  }
+
   const ok = !brokenLinks.length && !missingScripts.length && !missingMakeTargets.length
     && !undocumentedEnvVars.length && !unusedEnvExampleVars.length;
   return {
@@ -543,6 +601,7 @@ export function runDocsDrift(rootDir = process.cwd()) {
     undocumentedEnvVars,
     unusedEnvExampleVars,
     deadModuleEnvVars,
+    ...(checkGitStaleness ? { gitStaleness } : {}),
   };
 }
 
@@ -993,7 +1052,7 @@ export function auditTmpdirTrust(targetDir = '') {
 
 function auditUsageText(event) {
   const usage = {
-    'docs-drift': 'Usage: sh hooks/run.sh docs-drift [rootDir] [-C <dir>] [--json]',
+    'docs-drift': 'Usage: sh hooks/run.sh docs-drift [rootDir] [-C <dir>] [--git-staleness] [--json]',
     'coverage-map': 'Usage: sh hooks/run.sh coverage-map [rootDir] [-C <dir>] [--json]',
     'dep-license-diff': 'Usage: sh hooks/run.sh dep-license-diff [rootDir] [--base <ref>] [--json]',
     'mcp-audit': 'Usage: sh hooks/run.sh mcp-audit [rootDir] [-C <dir>] [--json]',
@@ -1010,7 +1069,7 @@ export async function runAuditCli(event, rawArgs = []) {
   }
   let res;
   if (!parsed.ok) res = { ok: false, exitCode: 2, error: parsed.error };
-  else if (event === 'docs-drift') res = runDocsDrift(parsed.rootDir);
+  else if (event === 'docs-drift') res = runDocsDrift(parsed.rootDir, { gitStaleness: parsed.gitStaleness });
   else if (event === 'coverage-map') res = runCoverageMap(parsed.rootDir);
   else if (event === 'dep-license-diff') res = runDepLicenseDiff(parsed.rootDir, { baseRef: parsed.baseRef });
   else if (event === 'mcp-audit') res = runMcpAudit(parsed.rootDir);

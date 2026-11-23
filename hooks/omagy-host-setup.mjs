@@ -421,15 +421,33 @@ function renderCodexOpenAiYaml(skillName, fmFields, bundleDir = '') {
 
 const SUPPORTED_HOOK_EVENTS = new Set(['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop']);
 
+function hookHandlerCommandText(h) {
+  if (!h || typeof h !== 'object') return '';
+  const parts = [];
+  if (typeof h.command === 'string' && h.command.trim()) parts.push(h.command.trim());
+  if (Array.isArray(h.args)) {
+    for (const a of h.args) {
+      if (typeof a === 'string' && a.trim()) parts.push(a.trim());
+    }
+  }
+  return parts.join(' ');
+}
+
 function buildHostHooksJson(host, bundleDir, { platform = process.platform } = {}) {
   const isWin = platform === 'win32';
   const runSh = path.join(bundleDir, 'hooks', 'run.sh');
   const hookMjs = path.win32.join(bundleDir, 'hooks', 'omagy-hook.mjs');
   const mkEntry = (cliEvent, matcher = '', timeout = 15) => {
-    const cmd = isWin
-      ? `node "${hookMjs}" ${cliEvent} --host=${host}`
-      : `OMAGY_HOST=${host} OMAGY_BUNDLE_DIR=${shellQuote(bundleDir)} sh ${shellQuote(runSh)} ${cliEvent} --host=${host}`;
-    const entry = { hooks: [{ type: 'command', command: cmd, timeout }] };
+    const handler = (isWin && host === 'claude')
+      ? { type: 'command', command: 'node', args: [hookMjs, cliEvent, `--host=${host}`], timeout }
+      : {
+        type: 'command',
+        command: isWin
+          ? `node "${hookMjs}" ${cliEvent} --host=${host}`
+          : `OMAGY_HOST=${host} OMAGY_BUNDLE_DIR=${shellQuote(bundleDir)} sh ${shellQuote(runSh)} ${cliEvent} --host=${host}`,
+        timeout,
+      };
+    const entry = { hooks: [handler] };
     if (matcher) entry.matcher = matcher;
     return [entry];
   };
@@ -790,7 +808,10 @@ function isOmagyHookEntry(entry) {
     entry
     && typeof entry === 'object'
     && Array.isArray(entry.hooks)
-    && entry.hooks.some((h) => h && typeof h.command === 'string' && (h.command.includes('oh-my-agy') || /hooks[\/\\](?:run\.sh|omagy-hook\.mjs)/.test(h.command))),
+    && entry.hooks.some((h) => {
+      const cmdText = hookHandlerCommandText(h);
+      return Boolean(cmdText) && (cmdText.includes('oh-my-agy') || /hooks[\/\\](?:run\.sh|omagy-hook\.mjs)/.test(cmdText));
+    }),
   );
 }
 
@@ -1260,11 +1281,13 @@ function validateHooksConfig(hooksJsonPath, host, errors, { allowForeignHooks = 
       }
       for (let hIdx = 0; hIdx < entry.hooks.length; hIdx += 1) {
         const h = entry.hooks[hIdx];
-        if (!h || h.type !== 'command' || typeof h.command !== 'string' || !h.command.trim()) {
+        const argsValid = h?.args === undefined || (Array.isArray(h.args) && h.args.length > 0 && h.args.every((a) => typeof a === 'string' && a.trim().length > 0));
+        if (!h || h.type !== 'command' || typeof h.command !== 'string' || !h.command.trim() || !argsValid) {
           errors.push(`invalid_hook_handler:${ev}[${idx}].hooks[${hIdx}]`);
           continue;
         }
-        const isOmagyHandler = h.command.includes(`--host=${host}`) && /hooks[\/\\](?:run\.sh|omagy-hook\.mjs)/.test(h.command);
+        const cmdText = hookHandlerCommandText(h);
+        const isOmagyHandler = cmdText.includes(`--host=${host}`) && /hooks[\/\\](?:run\.sh|omagy-hook\.mjs)/.test(cmdText);
         if (isOmagyHandler) omagyMatchedEvents.add(ev);
         else if (!allowForeignHooks) errors.push(`missing_host_command_flag:${hooksJsonPath}:${ev}[${idx}]`);
       }
@@ -1472,7 +1495,9 @@ function validateCodexMcpJson(mcpJsonPath, expectedRoot, errors, { platform = ''
     ? path.win32.join(expectedRoot, 'mcp', 'server.mjs')
     : path.join(expectedRoot, 'mcp', 'run.sh');
   const arg0 = Array.isArray(entry.args) && typeof entry.args[0] === 'string' ? entry.args[0] : '';
-  if (!arg0 || arg0.includes('${') || arg0 !== expectedArg) {
+  const argMatches = Boolean(arg0) && !arg0.includes('${')
+    && (arg0 === expectedArg || (!isWin && realpathOrResolved(arg0) === realpathOrResolved(expectedArg)));
+  if (!argMatches) {
     errors.push(`invalid_codex_mcp_args:${label}`);
   }
   const hostEntry = path.join(expectedRoot, 'mcp', isWin ? 'server.mjs' : 'run.sh');
@@ -1628,6 +1653,19 @@ export function validateHostBundle(options = {}) {
           }
         } catch { /* fail open: malformed launch.json recorded */ errors.push('invalid_json:.claude/launch.json'); }
       }
+      const localSettingsPath = path.join(workspace, '.claude', 'settings.local.json');
+      if (fs.existsSync(localSettingsPath)) {
+        try {
+          const localDoc = readJsonStrict(localSettingsPath);
+          const localHooks = localDoc && typeof localDoc === 'object' && !Array.isArray(localDoc) ? localDoc.hooks : null;
+          if (localHooks && typeof localHooks === 'object' && !Array.isArray(localHooks)) {
+            const hasConflict = Object.values(localHooks).some((arr) => Array.isArray(arr) && arr.some(isOmagyHookEntry));
+            if (hasConflict) warnings.push('claude_settings_local_hook_conflict:.claude/settings.local.json');
+          }
+        } catch { /* fail open: malformed settings.local.json recorded as warning */
+          warnings.push('invalid_json:.claude/settings.local.json');
+        }
+      }
     }
   } else {
     const codexPluginPath = path.join(bundleDir, '.codex-plugin', 'plugin.json');
@@ -1748,7 +1786,9 @@ export function validateHostBundle(options = {}) {
           const expectedArg = expectedCmd === 'node'
             ? path.win32.join(bundleDir, 'mcp', 'server.mjs')
             : path.join(bundleDir, 'mcp', 'run.sh');
-          if (!cmdMatch || cmdMatch[1] !== expectedCmd || !Array.isArray(parsedArgs) || parsedArgs[0] !== expectedArg) {
+          const arg0 = Array.isArray(parsedArgs) && typeof parsedArgs[0] === 'string' ? parsedArgs[0] : '';
+          const mcpArgOk = Boolean(arg0) && (arg0 === expectedArg || (expectedCmd !== 'node' && realpathOrResolved(arg0) === realpathOrResolved(expectedArg)));
+          if (!cmdMatch || cmdMatch[1] !== expectedCmd || !mcpArgOk) {
             errors.push('config_missing_mcp_oh_my_agy_state');
           }
         }

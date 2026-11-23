@@ -4126,8 +4126,12 @@ export async function runSelftest() {
         && wCxProjCfg.includes('[mcp_servers.oh-my-agy_state]')
         && wCxProjCfg.includes('command = "node"')
         && wCxProjCfg.includes('mcp\\\\server.mjs');
+      const wClSessionHook = wClHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0] || {};
       const winOk = wClSetup.ok === true && wClVal.ok === true
-        && String(wClHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0]?.command || '').startsWith('node "')
+        && wClSessionHook.command === 'node'
+        && Array.isArray(wClSessionHook.args)
+        && wClSessionHook.args.includes('session-start')
+        && wClSessionHook.args.includes('--host=claude')
         && Number(wClStopHook?.timeout) === 30
         && wClHudCfg?.runtimeExecutable === 'node'
         && (wClHudCfg?.runtimeArgs || []).some((a) => /sidecars[\\/]hud[\\/]main\.mjs$/i.test(String(a)))
@@ -4943,6 +4947,110 @@ export async function runSelftest() {
       t66Detail = e instanceof Error ? e.message : String(e);
     }
     check('T66: G2 linear-pass key-shape redactSecrets, cleanGitEnv, list-scoped negation + disabledSkills & atomic mode preservation pass', t66Ok, t66Detail);
+
+    // T67: G3 githubSlugger CommonMark 6.1 backtick links + advisory docs-drift --git-staleness
+    let t67Ok = false;
+    let t67Detail = '';
+    try {
+      const { githubSlugger, runDocsDrift } = await import('./omagy-audit.mjs');
+      const s1 = githubSlugger('## The `[docs](url)` and `` `<dialog>` `` form');
+      const s2 = githubSlugger('## See [My Guide](guide.md) & <span>HTML</span>');
+      const slugOk = s1 === 'the-docsurl-and-dialog-form' && s2 === 'see-my-guide--html';
+
+      const t67Repo = path.join(ws, 't67-git');
+      fs.mkdirSync(t67Repo, { recursive: true });
+      const runGit67 = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      runGit67(t67Repo, ['init', '-q']);
+      runGit67(t67Repo, ['config', 'user.email', 'test@example.com']);
+      runGit67(t67Repo, ['config', 'user.name', 'Test']);
+      fs.writeFileSync(path.join(t67Repo, 'app.js'), 'export const a = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(t67Repo, 'cur.js'), 'export const b = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(t67Repo, 'untracked.js'), 'export const c = 1;\n', 'utf8');
+      fs.writeFileSync(path.join(t67Repo, 'README.md'), '# Repo\n- [App](app.js)\n- [Cur](cur.js)\n- [New](untracked.js)\n', 'utf8');
+      runGit67(t67Repo, ['add', 'app.js', 'cur.js', 'README.md']);
+      runGit67(t67Repo, ['commit', '-q', '-m', 'init']);
+      fs.writeFileSync(path.join(t67Repo, 'app.js'), 'export const a = 2;\n', 'utf8');
+      runGit67(t67Repo, ['add', 'app.js']);
+      runGit67(t67Repo, ['commit', '-q', '-m', 'update app']);
+
+      const dRes = runDocsDrift(t67Repo, { gitStaleness: true });
+      const byTarget = Object.fromEntries((dRes.gitStaleness || []).map((x) => [x.target, x.status]));
+      const staleOk = dRes.ok === true && dRes.exitCode === 0
+        && byTarget['app.js'] === 'stale'
+        && byTarget['cur.js'] === 'current'
+        && byTarget['untracked.js'] === "can't tell";
+
+      // Shallow clone must report "can't tell", never "current"
+      const t67Shallow = path.join(ws, 't67-shallow');
+      runGit67(ws, ['clone', '--depth', '1', `file://${t67Repo}`, t67Shallow]);
+      fs.writeFileSync(path.join(t67Shallow, 'untracked.js'), 'export const c = 1;\n', 'utf8');
+      const dShallow = runDocsDrift(t67Shallow, { gitStaleness: true });
+      const shallowOk = dShallow.ok === true && dShallow.exitCode === 0
+        && Array.isArray(dShallow.gitStaleness) && dShallow.gitStaleness.length >= 2
+        && dShallow.gitStaleness.every((x) => x.status === "can't tell");
+
+      const bogusFlag = spawnSync(process.execPath, [path.join(pluginRoot, 'hooks', 'omagy-hook.mjs'), 'docs-drift', t67Repo, '--bogus-flag'], { encoding: 'utf8' });
+      const bogusRejected = bogusFlag.status === 2;
+
+      t67Ok = slugOk && staleOk && shallowOk && bogusRejected;
+      t67Detail = `slug=${slugOk}(${s1}) stale=${staleOk} shallow=${shallowOk} bogus=${bogusRejected}`;
+    } catch (e) { /* fail open: capture T67 error detail */
+      t67Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T67: G3 githubSlugger CommonMark 6.1 backtick links & advisory docs-drift --git-staleness pass', t67Ok, t67Detail);
+
+    // T68: G3 Windows Claude exec-form hooks, .claude/settings.local.json conflict, Codex symlink alias & terminal Stop schema
+    let t68Ok = false;
+    let t68Detail = '';
+    try {
+      const { serializeHookOutcome } = await import('./omagy-host.mjs');
+      const { setupHostBundle, validateHostBundle } = await import('./omagy-host-setup.mjs');
+
+      // 1. Terminal Stop vs normal Stop wire schema
+      const normalStop = serializeHookOutcome('stop', { decision: 'stop' }, 'codex');
+      const termStop = serializeHookOutcome('stop', { continue: false, stopReason: 'team_lock_recovery_required', systemMessage: 'Recover lock' }, 'codex');
+      const stopOk = Object.keys(normalStop).length === 0
+        && termStop.continue === false
+        && termStop.stopReason === 'team_lock_recovery_required'
+        && termStop.systemMessage === 'Recover lock';
+
+      // 2. Win32 Claude exec-form hooks with spaces in path + .claude/settings.local.json conflict check
+      const t68ClWs = path.join(ws, 't68 claude ws');
+      const t68ClHome = path.join(ws, 't68 claude home');
+      fs.mkdirSync(t68ClWs, { recursive: true });
+      fs.mkdirSync(t68ClHome, { recursive: true });
+      const clSetup = setupHostBundle({ host: 'claude', pluginRoot, scope: 'project', workspace: t68ClWs, homeDir: t68ClHome, platform: 'win32', mode: 'copy' });
+      const clHooksDoc = JSON.parse(readFixture(path.join(clSetup.bundleDir, 'hooks', 'hooks.json')));
+      const clStartH = clHooksDoc.hooks?.SessionStart?.[0]?.hooks?.[0] || {};
+      const clValClean = validateHostBundle({ host: 'claude', bundleDir: clSetup.bundleDir, workspace: t68ClWs, homeDir: t68ClHome, platform: 'win32', strict: true });
+      fs.writeFileSync(path.join(t68ClWs, '.claude', 'settings.local.json'), JSON.stringify({
+        hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node', args: ['C:\\fake\\hooks\\omagy-hook.mjs', 'session-start', '--host=claude'] }] }] },
+      }, null, 2), 'utf8');
+      const clValConflict = validateHostBundle({ host: 'claude', bundleDir: clSetup.bundleDir, workspace: t68ClWs, homeDir: t68ClHome, platform: 'win32', strict: true });
+      const clOk = clSetup.ok === true && clValClean.ok === true
+        && clStartH.command === 'node' && Array.isArray(clStartH.args) && clStartH.args[0].includes('t68 claude ws')
+        && !clValConflict.ok && clValConflict.warnings.some((w) => w.includes('claude_settings_local_hook_conflict'));
+
+      // 3. Codex symlinked CODEX_HOME alias validation
+      let codexAliasOk = true;
+      if (process.platform !== 'win32') {
+        const realCx = path.join(ws, 't68-real-codex');
+        const linkCx = path.join(ws, 't68-link-codex');
+        const cxWs = path.join(ws, 't68-cx-ws');
+        fs.mkdirSync(realCx, { recursive: true });
+        fs.mkdirSync(cxWs, { recursive: true });
+        fs.symlinkSync(realCx, linkCx);
+        const cxSetup = setupHostBundle({ host: 'codex', pluginRoot, scope: 'user', codexHome: realCx, mode: 'copy', codexVersion: '0.118.0' });
+        const cxValAlias = validateHostBundle({ host: 'codex', bundleDir: path.join(linkCx, 'plugins', 'oh-my-agy'), codexHome: linkCx, strict: true });
+        codexAliasOk = cxSetup.ok === true && cxValAlias.ok === true;
+      }
+
+      t68Ok = stopOk && clOk && codexAliasOk;
+      t68Detail = `stop=${stopOk} clExecAndLocal=${clOk} codexAlias=${codexAliasOk}`;
+    } catch (e) { /* fail open: capture T68 error detail */
+      t68Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T68: G3 Windows Claude exec-form hooks, settings.local.json conflict, Codex symlink alias & terminal Stop schema pass', t68Ok, t68Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);

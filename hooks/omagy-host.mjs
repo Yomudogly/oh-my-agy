@@ -919,6 +919,14 @@ export function serializeHookOutcome(rawEvent, rawResult = {}, host = 'antigravi
   }
 
   if (ev === 'stop') {
+    if (res.continue === false || (typeof res.stopReason === 'string' && res.stopReason.trim())) {
+      const out = { continue: false, stopReason: String(res.stopReason || 'stopped').trim() };
+      const msg = (typeof res.systemMessage === 'string' && res.systemMessage.trim())
+        ? res.systemMessage.trim()
+        : (typeof res.reason === 'string' && res.reason.trim() ? res.reason.trim() : '');
+      if (msg) out.systemMessage = msg;
+      return out;
+    }
     if (res.decision === 'continue' && res.reason) {
       return { decision: 'block', reason: String(res.reason) };
     }
