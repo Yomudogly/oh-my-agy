@@ -986,3 +986,258 @@ export function serializeHookOutcome(rawEvent, rawResult = {}, host = 'antigravi
     },
   };
 }
+
+// ---------- shared hot-path runtime utilities (zero external deps, acyclic leaf) ----------
+
+const HOSTILE_GIT_ENV_KEYS = new Set([
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_CONFIG',
+  'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_COUNT',
+  'GIT_CONFIG_PARAMETERS', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+]);
+
+/** Strip inherited git override env vars before spawning git, then overlay explicit caller overrides. */
+export function cleanGitEnv(baseEnv = process.env, extra = null) {
+  const out = {};
+  if (baseEnv && typeof baseEnv === 'object') {
+    for (const [k, v] of Object.entries(baseEnv)) {
+      if (v === undefined) continue;
+      if (HOSTILE_GIT_ENV_KEYS.has(k) || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(k)) continue;
+      out[k] = v;
+    }
+  }
+  if (extra && typeof extra === 'object') {
+    for (const [k, v] of Object.entries(extra)) {
+      if (v !== undefined) out[k] = v;
+    }
+  }
+  return out;
+}
+
+const _winSleepArr = typeof SharedArrayBuffer === 'function' && typeof Atomics === 'object'
+  ? new Int32Array(new SharedArrayBuffer(4))
+  : null;
+
+function sleepSyncMs(ms) {
+  if (_winSleepArr) {
+    try { Atomics.wait(_winSleepArr, 0, 0, ms); return; } catch { /* fail open: fallback when Atomics.wait is blocked */ }
+  }
+  const until = Date.now() + ms;
+  while (Date.now() < until) { /* fallback win32 retry delay */ }
+}
+
+/** Atomically rename tmpPath onto destPath with non-spinning Atomics.wait retries on win32 AV locks. */
+export function renameSyncAtomic(tmpPath, destPath) {
+  for (let i = 0; ; i += 1) {
+    try { fs.renameSync(tmpPath, destPath); return; } catch (err) {
+      if (process.platform === 'win32' && i < 10 && /^(EPERM|EBUSY|EACCES)$/.test(err?.code || '')) {
+        sleepSyncMs(3);
+        continue;
+      }
+      try { fs.unlinkSync(tmpPath); } catch { /* fail open: tmp cleanup */ }
+      throw err;
+    }
+  }
+}
+
+let _atomicWriteSeq = 0;
+
+/** Atomically write UTF-8 content preserving existing regular-file mode (default 0o600) and refusing symlinks. */
+export function writeFileAtomicWithMode(destPath, content, { defaultMode = 0o600 } = {}) {
+  let targetMode = defaultMode;
+  try {
+    const st = fs.lstatSync(destPath);
+    if (st.isSymbolicLink()) {
+      throw new Error(`refusing_symlink_overwrite:${destPath}`);
+    }
+    if (st.isFile()) {
+      targetMode = st.mode & 0o777;
+    }
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  _atomicWriteSeq = (_atomicWriteSeq + 1) % 1000000;
+  const tmp = `${destPath}.${process.pid}.${_atomicWriteSeq}.tmp`;
+  let fd = -1;
+  try {
+    fd = fs.openSync(tmp, 'wx', targetMode);
+    fs.writeFileSync(fd, String(content ?? ''), 'utf8');
+    if (process.platform !== 'win32') {
+      try { fs.fchmodSync(fd, targetMode); } catch { /* fail open: unsupported fs chmod */ }
+    }
+    fs.closeSync(fd);
+    fd = -1;
+    renameSyncAtomic(tmp, destPath);
+  } catch (err) {
+    if (fd >= 0) { try { fs.closeSync(fd); } catch { /* fail open: ignore close error during cleanup */ } }
+    try { fs.unlinkSync(tmp); } catch { /* fail open: tmp cleanup */ }
+    throw err;
+  }
+}
+
+/** Strip C0/C1/DEL/bidi format controls (keeping \n/\r/\t) and neutralize closing XML envelope tags. */
+export function sanitizeUntrustedContext(text) {
+  return String(text ?? '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u0080-\u009F]/g, '')
+    .replace(/\p{Cf}/gu, '')
+    .replace(/<\/([A-Za-z][A-Za-z0-9_:-]*(?:\s[^>]*)?)>/g, '<\\$1>');
+}
+
+/** Walk raw path component-by-component following symlinks in kernel order (40-hop cap) without lexical .. collapse. */
+export function walkKernelPath(rawPath, baseDir = process.cwd(), { maxHops = 40, watchRoots = [] } = {}) {
+  const input = String(rawPath || '').trim();
+  if (!input || input.includes('\0')) return { ok: false, error: 'invalid_path', path: '', sawWatchedSymlink: false };
+  const normDrive = (s) => (process.platform === 'win32' ? String(s || '').replace(/^([a-z]):/, (_, d) => `${d.toUpperCase()}:`) : String(s || ''));
+  const canonWatches = watchRoots.map((w) => canonWsPath(w));
+  const isWatched = (p) => {
+    const np = normDrive(p);
+    return canonWatches.some((w) => np === w || np.startsWith(w.endsWith(path.sep) ? w : `${w}${path.sep}`));
+  };
+  const splitPrefix = (str) => {
+    const norm = normDrive(str).replace(/\\/g, '/');
+    const drv = /^([A-Za-z]:)(?:\/(.*))?$/.exec(norm);
+    if (drv) return { root: `${drv[1]}${path.sep}`, parts: (drv[2] || '').split('/').filter(Boolean), abs: true };
+    if (norm.startsWith('/')) return { root: path.sep, parts: norm.slice(1).split('/').filter(Boolean), abs: true };
+    return { root: '', parts: norm.split('/').filter(Boolean), abs: false };
+  };
+  const joinParts = (root, parts) => (parts.length ? path.join(root, ...parts) : root);
+
+  const parsed = splitPrefix(input);
+  let rootPrefix;
+  let resolvedParts;
+  let queue;
+  if (parsed.abs) {
+    rootPrefix = parsed.root;
+    resolvedParts = [];
+    queue = [...parsed.parts];
+  } else {
+    const baseParsed = splitPrefix(canonWsPath(baseDir));
+    rootPrefix = baseParsed.root;
+    resolvedParts = [...baseParsed.parts];
+    queue = [...parsed.parts];
+  }
+
+  let hops = 0;
+  let sawWatchedSymlink = false;
+  while (queue.length > 0) {
+    const seg = queue.shift();
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (resolvedParts.length > 0) resolvedParts.pop();
+      continue;
+    }
+    const candidate = joinParts(rootPrefix, [...resolvedParts, seg]);
+    let st = null;
+    try {
+      st = fs.lstatSync(candidate);
+    } catch (err) {
+      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+        resolvedParts.push(seg);
+        continue;
+      }
+      return { ok: false, error: err?.code || 'lstat_error', path: '', sawWatchedSymlink };
+    }
+    if (st.isSymbolicLink()) {
+      if (isWatched(candidate)) sawWatchedSymlink = true;
+      hops += 1;
+      if (hops > maxHops) return { ok: false, error: 'ELOOP', path: '', sawWatchedSymlink };
+      let target;
+      try { target = fs.readlinkSync(candidate); } catch { return { ok: false, error: 'readlink_error', path: '', sawWatchedSymlink }; }
+      const tp = splitPrefix(target);
+      if (tp.abs) {
+        rootPrefix = tp.root;
+        resolvedParts = [];
+        queue = [...tp.parts, ...queue];
+      } else {
+        queue = [...tp.parts, ...queue];
+      }
+    } else {
+      resolvedParts.push(seg);
+    }
+  }
+  return { ok: true, path: normDrive(joinParts(rootPrefix, resolvedParts)), sawWatchedSymlink, hops };
+}
+
+const KEY_SHAPE_NAME_RE = /^(?:[A-Za-z0-9_-]*(?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|secret[_-]?key|signing[_-]?key|webhook[_-]?secret|session[_-]?secret|password|passwd)|secret|token)$/i;
+const PLACEHOLDER_VAL_RE = /^(?:\$|\{\{|\[REDACTED|<|process\.env\.|os\.environ|null\b|undefined\b|true\b|false\b|example\b|placeholder\b|your[_-]|changeme\b|dummy\b)/i;
+
+/** Bounded linear-pass key-shape redaction: assignment-before-prefix precedence, unquoted KEY=val, and truncated quotes. */
+export function redactKeyShapeSecrets(text) {
+  const s = String(text ?? '');
+  if (!s) return '';
+  const out = [];
+  let i = 0;
+  const n = s.length;
+  const isKeyChar = (c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_' || c === '-';
+
+  while (i < n) {
+    // Check quoted truncated known-prefix token previews at EOF/EOL
+    if ((s[i] === '"' || s[i] === "'") && i + 12 < n) {
+      const q = s[i];
+      let end = i + 1;
+      const limit = Math.min(n, i + 257);
+      let closed = false;
+      while (end < limit && s[end] !== '\n' && s[end] !== '\r') {
+        if (q === '"' && s[end] === '\\' && end + 1 < limit) { end += 2; continue; }
+        if (s[end] === q) { closed = true; break; }
+        end += 1;
+      }
+      if (!closed && end > i + 12) {
+        const inner = s.slice(i + 1, end);
+        if (/^(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{12,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{12,}|gh[pousr]_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{16,}|hf_[A-Za-z0-9]{12,})/.test(inner)) {
+          out.push(q, '[REDACTED_SECRET]');
+          i = end;
+          continue;
+        }
+      }
+    }
+
+    if (isKeyChar(s[i]) && (i === 0 || !isKeyChar(s[i - 1]))) {
+      let kEnd = i;
+      while (kEnd < n && kEnd - i < 64 && isKeyChar(s[kEnd])) kEnd += 1;
+      const key = s.slice(i, kEnd);
+      if (KEY_SHAPE_NAME_RE.test(key)) {
+        let p = kEnd;
+        while (p < n && (s[p] === ' ' || s[p] === '\t')) p += 1;
+        if (p < n && (s[p] === '=' || s[p] === ':')) {
+          const sep = s[p];
+          p += 1;
+          while (p < n && (s[p] === ' ' || s[p] === '\t')) p += 1;
+          if (p < n && (s[p] === '"' || s[p] === "'")) {
+            const q = s[p];
+            let vEnd = p + 1;
+            const vLim = Math.min(n, p + 257);
+            let closed = false;
+            while (vEnd < vLim && s[vEnd] !== '\n' && s[vEnd] !== '\r') {
+              if (q === '"' && s[vEnd] === '\\' && vEnd + 1 < vLim) { vEnd += 2; continue; }
+              if (s[vEnd] === q) { closed = true; break; }
+              vEnd += 1;
+            }
+            const val = s.slice(p + 1, vEnd);
+            if (val.length >= 8 && !PLACEHOLDER_VAL_RE.test(val)) {
+              out.push(s.slice(i, p + 1), '[REDACTED_SECRET]', closed ? q : '');
+              i = closed ? vEnd + 1 : vEnd;
+              continue;
+            }
+          } else if (p < n && s[p] !== '\n' && s[p] !== '\r') {
+            let vEnd = p;
+            const vLim = Math.min(n, p + 256);
+            while (vEnd < vLim && !/[\s,;'"`()[\]{}<>]/.test(s[vEnd])) vEnd += 1;
+            const val = s.slice(p, vEnd);
+            const nextCh = vEnd < n ? s[vEnd] : '';
+            const looksCallOrExpr = nextCh === '(' || (sep === ':' && !/[0-9_-]/.test(val) && /^[a-z]+$/i.test(val));
+            if (val.length >= 8 && !looksCallOrExpr && !PLACEHOLDER_VAL_RE.test(val)) {
+              out.push(s.slice(i, p), '[REDACTED_SECRET]');
+              i = vEnd;
+              continue;
+            }
+          }
+        }
+      }
+    }
+    out.push(s[i]);
+    i += 1;
+  }
+  return out.join('');
+}

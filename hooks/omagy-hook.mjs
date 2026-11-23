@@ -29,14 +29,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import {
-  buildCompactClaudeContract, checkHostBundleDrift, defaultPluginDataDir, defaultRuntimeDir,
+  buildCompactClaudeContract, checkHostBundleDrift, cleanGitEnv, defaultPluginDataDir, defaultRuntimeDir,
   desktopHudRegistryFile, detectHost, ensureDesktopHudDaemon, ensureSecureRuntimeDir,
   expandTranscriptRecordForFreshness, extractHostTranscriptRecords, extractTranscriptReadPaths,
   formatSystemMessageStep, hasClaudeRulesFile, isDesktopAppSession, normalizeLifecycleEvent,
   normalizeLifecyclePayload, parseGuardScope, readTranscriptTailSlice, readTranscriptTailText,
-  resolveBundleRoot, resolveCodexVersion, resolvePluginRoot, serializeHookOutcome,
+  redactKeyShapeSecrets, renameSyncAtomic, resolveBundleRoot, resolveCodexVersion, resolvePluginRoot,
+  sanitizeUntrustedContext, serializeHookOutcome, walkKernelPath, writeFileAtomicWithMode,
 } from './omagy-host.mjs';
-export { readTranscriptTailSlice, readTranscriptTailText };
+export { cleanGitEnv, readTranscriptTailSlice, readTranscriptTailText, renameSyncAtomic, sanitizeUntrustedContext, writeFileAtomicWithMode };
 
 export function hardenWindowsExeSearch() {
   if (process.platform === 'win32') {
@@ -133,28 +134,8 @@ export function parseJson(text) {
 export function readJson(p) {
   try { return JSON.parse(stripUtf8Bom(fs.readFileSync(p, 'utf8'))); } catch { return null; }
 }
-let _tmpSeq = 0;
-export function renameSyncAtomic(tmpPath, destPath) {
-  for (let i = 0; ; i += 1) {
-    try { fs.renameSync(tmpPath, destPath); return; } catch (err) {
-      if (process.platform === 'win32' && i < 4 && /^(EPERM|EBUSY|EACCES)$/.test(err?.code || '')) {
-        const until = Date.now() + (i + 1) * 15;
-        while (Date.now() < until) { /* win32 AV lock retry */ }
-        continue;
-      }
-      try { fs.unlinkSync(tmpPath); } catch { /* fail open: tmp cleanup */ }
-      throw err;
-    }
-  }
-}
-
 export function writeJson(p, obj) {
-  const tmp = `${p}.${process.pid}.${_tmpSeq = (_tmpSeq + 1) % 1e6}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(tmp, `${JSON.stringify(obj, null, 2)}\n`, { mode: 0o600 });
-    renameSyncAtomic(tmp, p);
-  } catch { try { fs.unlinkSync(tmp); } catch { /* fail open: tmp cleanup */ } }
+  try { writeFileAtomicWithMode(p, `${JSON.stringify(obj, null, 2)}\n`); } catch { /* fail open: state write error */ }
 }
 function safeId(v) {
   return String(v || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128);
@@ -431,7 +412,7 @@ export function activeStates(roots, modes, convId = '') {
 
 // ---------- wiki & working agreements summary (expiry filtering & secret redaction) ----------
 export function redactSecrets(text) {
-  return String(text || '')
+  return redactKeyShapeSecrets(String(text || ''))
     .replace(/\b(?:sk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}|AIza[0-9A-Za-z_-]{35}|SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})\b/g, '[REDACTED_KEY]')
     .replace(/\b(?:(?:gh[pousr]|github_pat|pypi)_[A-Za-z0-9_-]{16,}|(?:glpat|xox[baprs]|pypi)-[A-Za-z0-9_-]{16,}|hf_[A-Za-z0-9]{20,}|npm_[0-9A-Za-z]{36})\b/g, '[REDACTED_TOKEN]')
     .replace(/\bA(?:KIA|SIA)[0-9A-Z]{16}\b/g, '[REDACTED_AWS_KEY]')
@@ -464,7 +445,7 @@ function filterAndRedactWikiLines(raw, maxLines, nowMs = Date.now()) {
       const expMs = Date.parse(inlineExp[1]);
       if (Number.isFinite(expMs) && expMs <= nowMs) continue;
     }
-    out.push(redactSecrets(line));
+    out.push(sanitizeUntrustedContext(redactSecrets(line)));
     if (out.length >= maxLines) break;
   }
   return out;
@@ -542,7 +523,7 @@ export function discoverSubdirAgents(roots, text, seenList = [], nowMs = Date.no
           if (raw) {
             seen.add(agentsFile);
             const rel = path.relative(root, agentsFile).replace(/\\/g, '/');
-            const snippet = redactSecrets(raw.split('\n').slice(0, 30).join('\n')).slice(0, 1500);
+            const snippet = sanitizeUntrustedContext(redactSecrets(raw.split('\n').slice(0, 30).join('\n'))).slice(0, 1500);
             messages.push(`[oh-my-agy] Subdirectory AGENTS.md (${rel}):\n${snippet}`);
           }
         }
@@ -911,9 +892,11 @@ function isMapSourceFile(relFile) {
   return MAP_SRC_RE.test(norm) && !MAP_SKIP_DIR_RE.test(norm) && !MAP_SKIP_FILE_RE.test(norm);
 }
 
+const gitExec = (args, opts) => execFileSync('git', args, { env: cleanGitEnv(process.env), ...opts });
+
 function listRepoSourceFiles(root) {
   try {
-    const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+    const out = gitExec(['ls-files', '--cached', '--others', '--exclude-standard'], {
       cwd: root, encoding: 'utf8', timeout: 2500, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     if (out) {
@@ -1023,7 +1006,7 @@ export function scanShortcutDebt(roots, marker = '') {
     if (!fs.existsSync(root)) continue;
     let files = [];
     try {
-      const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], {
+      const out = gitExec(['ls-files', '--cached', '--others', '--exclude-standard'], {
         cwd: root, encoding: 'utf8', timeout: 1500, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
       }).trim();
       if (out) {
@@ -1479,7 +1462,7 @@ export function analyzeDiffCodeHealth(roots, opts = {}) {
     if (!fs.existsSync(cwd)) continue;
     let diff = '';
     try {
-      diff = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', 'HEAD', '--'], {
+      diff = gitExec(['-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', 'HEAD', '--'], {
         cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500, maxBuffer: 8 * 1024 * 1024,
       });
     } catch { /* fail open: non-git workspace or empty HEAD */ continue; }
@@ -1596,17 +1579,17 @@ export function buildReviewPackage(cwd, baseRef, headRef = 'HEAD', outPath = '')
   let baseSha = '';
   let headSha = '';
   try {
-    baseSha = execFileSync('git', ['rev-parse', '--verify', `${baseArg}^{commit}`], {
+    baseSha = gitExec(['rev-parse', '--verify', `${baseArg}^{commit}`], {
       cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
     }).trim();
-    headSha = execFileSync('git', ['rev-parse', '--verify', `${headArg}^{commit}`], {
+    headSha = gitExec(['rev-parse', '--verify', `${headArg}^{commit}`], {
       cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
     }).trim();
   } catch (err) {
     return { ok: false, exitCode: 1, error: `Cannot resolve git commit range: ${err instanceof Error ? err.message : String(err)}` };
   }
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', baseSha, headSha], {
+    gitExec(['merge-base', '--is-ancestor', baseSha, headSha], {
       cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
     });
   } catch {
@@ -1614,7 +1597,7 @@ export function buildReviewPackage(cwd, baseRef, headRef = 'HEAD', outPath = '')
   }
   let count = 0;
   try {
-    count = Number(execFileSync('git', ['rev-list', '--count', `${baseSha}..${headSha}`], {
+    count = Number(gitExec(['rev-list', '--count', `${baseSha}..${headSha}`], {
       cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
     }).trim());
   } catch {
@@ -1625,13 +1608,13 @@ export function buildReviewPackage(cwd, baseRef, headRef = 'HEAD', outPath = '')
   }
   const base7 = baseSha.slice(0, 7);
   const head7 = headSha.slice(0, 7);
-  const log = execFileSync('git', ['log', '--oneline', `${baseSha}..${headSha}`], {
+  const log = gitExec(['log', '--oneline', `${baseSha}..${headSha}`], {
     cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
   }).trimEnd();
-  const stat = execFileSync('git', ['diff', '--stat', `${baseSha}..${headSha}`], {
+  const stat = gitExec(['diff', '--stat', `${baseSha}..${headSha}`], {
     cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
   }).trimEnd();
-  const diff = execFileSync('git', ['diff', '-U10', `${baseSha}..${headSha}`], {
+  const diff = gitExec(['diff', '-U10', `${baseSha}..${headSha}`], {
     cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024,
   });
   const target = outPath && String(outPath).trim()
@@ -2353,7 +2336,7 @@ export function scanRepoCodeHygiene(cwd, parsedEntries = [], options = {}) {
       if (hasIgnore) {
         let baseRaw = '';
         try {
-          baseRaw = execFileSync('git', ['show', `${baseRef}:${entry.oldFile || entry.newFile}`], {
+          baseRaw = gitExec(['show', `${baseRef}:${entry.oldFile || entry.newFile}`], {
             cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, maxBuffer: 4 * 1024 * 1024,
           });
         } catch { /* fail open: absent in baseRef */ }
@@ -2399,7 +2382,7 @@ export function scanRepoCodeHygiene(cwd, parsedEntries = [], options = {}) {
 
   let untrackedRaw = '';
   try {
-    untrackedRaw = execFileSync('git', ['-c', 'core.quotepath=false', 'ls-files', '-z', '--others', '--exclude-standard'], {
+    untrackedRaw = gitExec(['-c', 'core.quotepath=false', 'ls-files', '-z', '--others', '--exclude-standard'], {
       cwd: repoDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500, maxBuffer: 4 * 1024 * 1024,
     });
   } catch { /* fail open: skip untracked scan outside git worktrees */ }
@@ -2430,7 +2413,7 @@ export function scanDiffBlockers(roots) {
     if (!fs.existsSync(cwd)) continue;
     let diff = '';
     try {
-      diff = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3', 'HEAD', '--'], {
+      diff = gitExec(['-c', 'core.quotepath=false', 'diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', '--unified=3', 'HEAD', '--'], {
         cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500, maxBuffer: 8 * 1024 * 1024,
       });
     } catch { /* fail open: non-git directory or unborn HEAD */ continue; }
@@ -2450,7 +2433,7 @@ function hasRalplanArtifacts(sRoot) {
   return names.some((n) => /^prd-.*\.md$/i.test(n)) && names.some((n) => /^test-spec-.*\.md$/i.test(n));
 }
 function stripQuotedAndNegatedRegions(text) {
-  return String(text || '')
+  let out = String(text || '')
     .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
     .replace(/`[^`\n]+`/g, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
@@ -2458,8 +2441,45 @@ function stripQuotedAndNegatedRegions(text) {
     .replace(/^\s*>[^\r\n]*/gm, ' ')
     .replace(/\bhttps?:\/\/\S+/gi, ' ')
     .replace(/"[^"\n]{1,200}"/g, ' ')
-    .replace(/(?<![\w'])'[^'\n]{1,200}'(?![\w'])/g, ' ')
-    .replace(/\b(?:do\s+not|don't|dont|never|avoid|without|instead\s+of|rather\s+than|skip|stop|no\s+need\s+to|not)\s+(?:(?:load|use|run|invoke|call|activate|trigger|start)(?:ing)?\s+)?(?:the\s+)?[$/][a-z][a-z0-9-]*(?:\s+skill|\s+mode)?/gi, ' ');
+    .replace(/(?<![\w'])'[^'\n]{1,200}'(?![\w'])/g, ' ');
+  const negLeadRe = /\b(?:do\s+not|don't|dont|never|avoid(?:ing)?|without|instead\s+of|rather\s+than|skip(?:ping)?|stop|no\s+need\s+to|no|not)\s+(?:(?:load|use|run|invoke|call|activate|trigger|start)(?:ing)?\s+)?(?:the\s+)?/gi;
+  const skillTokRe = /^[$/](?:oh-my-agy:)?[a-z][a-z0-9-]*(?:\s+(?:skill|mode))?/i;
+  const listSepRe = /^(?:\s*,\s*(?:(?:or|and|nor)\s+)?|\s+(?:or|and|nor)\s+)/i;
+  let masked = '';
+  let last = 0;
+  let m;
+  while ((m = negLeadRe.exec(out)) !== null) {
+    if (m.index < last) continue;
+    let pos = m.index + m[0].length;
+    const first = skillTokRe.exec(out.slice(pos));
+    if (!first) continue;
+    pos += first[0].length;
+    while (pos < out.length) {
+      const sep = listSepRe.exec(out.slice(pos));
+      if (!sep) break;
+      const next = skillTokRe.exec(out.slice(pos + sep[0].length));
+      if (!next) break;
+      pos += sep[0].length + next[0].length;
+    }
+    masked += out.slice(last, m.index) + ' ';
+    last = pos;
+    negLeadRe.lastIndex = pos;
+  }
+  return last > 0 ? masked + out.slice(last) : out;
+}
+function loadDisabledSkills(roots = []) {
+  const disabled = new Set();
+  for (const r of (Array.isArray(roots) ? roots : [])) {
+    for (const cfgPath of [path.join(stateRoot(r), '.omagy', 'config.json'), path.join(path.resolve(String(r)), '.omagy', 'config.json')]) {
+      const cfg = readJson(cfgPath);
+      if (Array.isArray(cfg?.disabledSkills)) {
+        for (const s of cfg.disabledSkills) {
+          if (typeof s === 'string' && s.trim()) disabled.add(s.trim().toLowerCase());
+        }
+      }
+    }
+  }
+  return disabled;
 }
 function isInformationalHelpPrompt(text) {
   return /^\s*(?:what\s+(?:is|does|are)|how\s+(?:do\s+i|to|does|can\s+i)|can\s+you\s+explain|explain|tell\s+me\s+about|describe)\b/i.test(String(text || ''))
@@ -2474,7 +2494,10 @@ export function sanitizeRelayedText(text) {
   const body = reqs.length ? reqs.join('\n') : stripped;
   return body.replace(/^\s*\[Message\b[^\r\n]*$/gim, '').replace(/<\/?USER_REQUEST\b[^>]*>/gi, '\n').trim();
 }
-export function detectSkills(text) {
+export function detectSkills(text, opts = {}) {
+  const disabled = opts?.disabledSkills instanceof Set
+    ? opts.disabledSkills
+    : (Array.isArray(opts?.disabledSkills) ? new Set(opts.disabledSkills.map((s) => String(s).trim().toLowerCase())) : null);
   const raw = sanitizeRelayedText(text);
   const found = [];
   const lead = /^\s*\[?([$/])(?:oh-my-agy:)?([a-z][a-z0-9-]*)\b/.exec(raw);
@@ -2497,7 +2520,7 @@ export function detectSkills(text) {
     if (sigil === '/' && AGY_SLASH.has(name)) continue;
     if (!found.includes(name)) found.push(name);
   }
-  return found;
+  return disabled && disabled.size ? found.filter((s) => !disabled.has(s)) : found;
 }
 export function buildActiveModeMessage(roots, convId = '') {
   const active = activeStates(roots, null, convId);
@@ -2550,7 +2573,7 @@ export function loadUltragoalNotepad(roots, maxChars = MAX_NOTEPAD_CHARS) {
         const h2 = /^##\s+(.+)$/.exec(line.trim());
         if (h2) on = /^(?:priority|working)\b/i.test(h2[1].trim());
         else if (/^#\s+/.test(line.trim())) continue;
-        if (on) kept.push(redactSecrets(line));
+        if (on) kept.push(sanitizeUntrustedContext(redactSecrets(line)));
       }
       const body = kept.join('\n').trim();
       if (!body) continue;
@@ -2687,7 +2710,8 @@ export function preInvocation(payload) {
   let candMap = null;
   let skills = Array.isArray(record.skills) ? record.skills : [];
   if (!isSubagent) {
-    const det = isNewUserTurn && user ? detectSkills(user.text) : [];
+    const disabledSkills = loadDisabledSkills(roots);
+    const det = isNewUserTurn && user ? detectSkills(user.text, { disabledSkills }) : [];
     if (det.length) {
       skills = det;
       messages.push(
@@ -2772,15 +2796,19 @@ function extractToolTargets(toolName, args) {
   return out;
 }
 export function isPathInsideAllowedOmagy(roots, rawTarget) {
-  const resolved = canonicalizePath(rawTarget);
-  const rawResolved = path.resolve(String(rawTarget));
-  if (/(?:^|[/\\])\.omagy[/\\]notifications\.json$/i.test(resolved) || /(?:^|[/\\])\.omagy[/\\]notifications\.json$/i.test(rawResolved)) {
-    return false;
-  }
+  const rawStr = String(rawTarget || '').trim();
+  if (!rawStr) return false;
+  const isNotif = (p) => /(?:^|[/\\])\.omagy[/\\]notifications\.json$/i.test(p);
+  if (isNotif(rawStr)) return false;
   return roots.some((r) => {
     const sr = canonicalizePath(stateRoot(r));
     const wr = canonicalizePath(r);
-    if (hasSymlinkSegment(r, rawResolved) || hasSymlinkSegment(sr, rawResolved) || hasSymlinkSegment(wr, rawResolved)) return false;
+    const kp = walkKernelPath(rawStr, r, { watchRoots: [r, sr, wr] });
+    if (!kp.ok || kp.sawWatchedSymlink || isNotif(kp.path)) return false;
+    const resolved = kp.path;
+    const lexResolved = path.isAbsolute(rawStr) ? path.resolve(rawStr) : path.resolve(r, rawStr);
+    if (isNotif(lexResolved)) return false;
+    if (hasSymlinkSegment(r, resolved) || hasSymlinkSegment(sr, resolved) || hasSymlinkSegment(wr, resolved)) return false;
     if (
       resolved.startsWith(path.join(sr, '.omagy') + path.sep)
       || resolved.startsWith(path.join(wr, '.omagy') + path.sep)
@@ -2812,6 +2840,13 @@ export function preToolUse(payload, opts = {}) {
   const args = call.args || call.arguments || {};
   const targets = extractToolTargets(toolName, args);
   const seenFile = runtimeFile(conv, 'seen');
+  const resolveRawTargetPath = (rawTarget) => {
+    if (path.isAbsolute(rawTarget)) return path.resolve(rawTarget);
+    const found = roots.map((r) => path.resolve(r, rawTarget)).find((p) => {
+      try { fs.lstatSync(p); return true; } catch { return false; }
+    });
+    return found || (roots[0] ? path.resolve(roots[0], rawTarget) : path.resolve(rawTarget));
+  };
   const resolveTargetPath = (rawTarget) => {
     if (path.isAbsolute(rawTarget)) return canonicalizePath(rawTarget);
     const found = roots.map((r) => path.resolve(r, rawTarget)).find((p) => fs.existsSync(p));
@@ -2892,9 +2927,15 @@ export function preToolUse(payload, opts = {}) {
           reason: `oh-my-agy: notifications-guard — ${toolName} on ${targetResolved} modifies outbound notification webhooks or command settings. Approve explicitly if intended.`,
         };
       }
-      if (isFullOverwrite && /(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i.test(targetResolved)) {
+      if (isFullOverwrite && (/(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i.test(targetResolved) || /(?:^|[/\\])(?:\.omagy[/\\]ultragoal[/\\]ledger\.jsonl|omagy_wiki[/\\]log\.md)$/i.test(rawTarget))) {
+        const rawLogPath = resolveRawTargetPath(rawTarget);
+        try {
+          if (fs.lstatSync(rawLogPath).isSymbolicLink()) {
+            return { decision: 'force_ask', reason: `oh-my-agy: append-only-guard — refusing full Overwrite through symlink ${rawLogPath}.` };
+          }
+        } catch { /* fail open: new log */ }
         let nonEmpty = false;
-        try { const st = fs.statSync(targetResolved); nonEmpty = st.isFile() && st.size > 0; } catch { /* fail open: new log */ }
+        try { const st = fs.lstatSync(targetResolved); nonEmpty = st.isFile() && st.size > 0; } catch { /* fail open: new log */ }
         if (nonEmpty) {
           return { decision: 'force_ask', reason: `oh-my-agy: append-only-guard — refusing full Overwrite of non-empty append-only log ${targetResolved} (use Append: true or hooks/run.sh append-jsonl).` };
         }
@@ -2970,26 +3011,36 @@ export function preToolUse(payload, opts = {}) {
   }
 
   // Write-existing-file guard:
-  // Escalates full-file Overwrite on a non-empty existing code file that has not been read in this session.
-  if (runWriteGuards && isFullOverwrite && CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase())) {
-    let existsNonEmpty = false;
-    try {
-      const st = fs.statSync(resolved);
-      existsNonEmpty = st.isFile() && st.size > 0;
-    } catch { /* fail open: file does not exist */ existsNonEmpty = false; }
-    if (existsNonEmpty) {
-      const seen = readJson(seenFile) || { readFiles: [] };
-      const readList = Array.isArray(seen.readFiles) ? seen.readFiles : [];
-      let wasRead = readList.includes(resolved);
-      if (!wasRead) {
-        const txPath = String(payload.transcriptPath || payload.transcript_path || payload.logPath || getRoutingRec().transcriptPath || '').trim();
-        if (txPath) wasRead = extractTranscriptReadPaths(txPath, roots, host).includes(resolved);
-      }
-      if (!wasRead) {
-        return {
-          decision: 'force_ask',
-          reason: `oh-my-agy: write-existing-file-guard — Overwriting existing source file ${resolved} without reading it first in this session. Read the file first or use edit_file to avoid accidental code deletion, or approve to overwrite.`,
-        };
+  // Escalates full-file Overwrite on a symlink or non-empty existing code file that has not been read in this session.
+  if (runWriteGuards && isFullOverwrite) {
+    const rawOutPath = resolveRawTargetPath(outsideTarget);
+    const isCodeExt = CODE_EXTENSIONS.has(path.extname(resolved).toLowerCase()) || CODE_EXTENSIONS.has(path.extname(rawOutPath).toLowerCase());
+    if (isCodeExt) {
+      let existsNonEmpty = false;
+      try {
+        const rawSt = fs.lstatSync(rawOutPath);
+        if (rawSt.isSymbolicLink()) {
+          return {
+            decision: 'force_ask',
+            reason: `oh-my-agy: write-existing-file-guard — refusing Overwrite through symlink ${rawOutPath}. Inspect the real target or approve explicitly.`,
+          };
+        }
+        existsNonEmpty = rawSt.isFile() && rawSt.size > 0;
+      } catch { /* fail open: file does not exist */ existsNonEmpty = false; }
+      if (existsNonEmpty) {
+        const seen = readJson(seenFile) || { readFiles: [] };
+        const readList = Array.isArray(seen.readFiles) ? seen.readFiles : [];
+        let wasRead = readList.includes(resolved);
+        if (!wasRead) {
+          const txPath = String(payload.transcriptPath || payload.transcript_path || payload.logPath || getRoutingRec().transcriptPath || '').trim();
+          if (txPath) wasRead = extractTranscriptReadPaths(txPath, roots, host).includes(resolved);
+        }
+        if (!wasRead) {
+          return {
+            decision: 'force_ask',
+            reason: `oh-my-agy: write-existing-file-guard — Overwriting existing source file ${resolved} without reading it first in this session. Read the file first or use edit_file to avoid accidental code deletion, or approve to overwrite.`,
+          };
+        }
       }
     }
   }
@@ -3338,9 +3389,10 @@ async function main() {
           if (hud?.message) extra.push(hud.message);
         }
       } else if (normEvent === 'pre-invocation' && isDesktopAppSession(host, rawPayload, process.env)) {
-        const ws = workspaceRoots(payload)[0] || process.cwd();
+        const invRoots = workspaceRoots(payload);
+        const ws = invRoots[0] || process.cwd();
         const txt = String(payload.lastUserInput || payload.last_user_input || payload.prompt || rawPayload?.prompt || '');
-        const hudAsk = detectSkills(txt).includes('hud')
+        const hudAsk = detectSkills(txt, { disabledSkills: loadDisabledSkills(invRoots) }).includes('hud')
           || (result.injectSteps || []).some((s) => String(s?.systemMessage?.systemMessage || '').includes('$hud'));
         if (hudAsk || !fs.existsSync(desktopHudRegistryFile(ws))) {
           const hud = await ensureDesktopHudDaemon({ host, workspace: ws, pluginRoot, env: process.env, argv1: process.argv[1] });

@@ -11,9 +11,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   CODE_EXTENSIONS, TEST_FILE_NAME_RE, appendJsonlRecord, isRealVerificationCommand, loadModeStates,
   loadUltragoalNotepad, normalizeFailureSignature, parseUnifiedDiff, readJson, readJsonlRecords,
-  redactSecrets, renameSyncAtomic, scanRepoCodeHygiene, stateRoot, stripCodeStrings, stripUtf8Bom,
+  redactSecrets, scanRepoCodeHygiene, stateRoot, stripCodeStrings, stripUtf8Bom,
   transformOutsideCodeSpans, validateCompletionEvidence,
 } from './omagy-hook.mjs';
+import { cleanGitEnv, writeFileAtomicWithMode } from './omagy-host.mjs';
 import { githubSlugger, lintWikiPages, scanInitDeepCandidates, walkWikiMd } from './omagy-audit.mjs';
 export { githubSlugger, lintWikiPages, scanInitDeepCandidates };
 
@@ -48,20 +49,8 @@ const isDir = (p) => { try { return Boolean(p) && fs.statSync(p).isDirectory(); 
 const isFile = (p) => { try { return Boolean(p) && fs.statSync(p).isFile(); } catch { /* fail open: missing file */ return false; } };
 const listEntries = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => !e.isSymbolicLink()); } catch { /* fail open: unreadable dir */ return []; } };
 const readUtf8 = (p) => stripUtf8Bom(fs.readFileSync(p, 'utf8'));
-let _cliTmpSeq = 0;
-const writeJsonStrict = (p, o) => {
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  _cliTmpSeq = (_cliTmpSeq + 1) % 1000000;
-  const tmp = `${p}.${process.pid}.${_cliTmpSeq}.tmp`;
-  try {
-    fs.writeFileSync(tmp, `${JSON.stringify(o, null, 2)}\n`, 'utf8');
-    renameSyncAtomic(tmp, p);
-  } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* fail open: best-effort tmp cleanup */ }
-    throw err;
-  }
-};
-const gitOut = (cwd, args, extra = {}) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, maxBuffer: 16 * 1024 * 1024, ...extra });
+const writeJsonStrict = (p, o) => writeFileAtomicWithMode(p, `${JSON.stringify(o, null, 2)}\n`);
+const gitOut = (cwd, args, extra = {}) => execFileSync('git', args, { cwd, env: cleanGitEnv(process.env), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000, maxBuffer: 16 * 1024 * 1024, ...extra });
 const gitHead = (d) => { try { const s = gitOut(d, ['rev-parse', '--verify', 'HEAD^{commit}']).trim(); return /^[0-9a-fA-F]{7,64}$/.test(s) ? s : ''; } catch { /* fail open: non-git or unborn HEAD */ return ''; } };
 const scrubHome = (s) => redactSecrets(String(s || '')).replace(/\/(?:Users|home)\/[A-Za-z0-9._-]+/g, '<HOME>').replace(/[A-Za-z]:\\Users\\[A-Za-z0-9._-]+/gi, '<HOME>');
 function canonicalizeLocal(p) { const abs = path.resolve(String(p || '')); try { return fs.realpathSync(abs); } catch { /* fail open: path may not exist yet */ return abs; } }
@@ -855,11 +844,11 @@ export function manageShadowCheckpoint(action, cwd = process.cwd(), target = '')
       const realIdx = path.resolve(repoDir, gitOut(repoDir, ['rev-parse', '--git-path', 'index']).trim());
       const idx1 = path.join(tmpDir, 'i1'); const idx2 = path.join(tmpDir, 'i2');
       if (fs.existsSync(realIdx)) fs.copyFileSync(realIdx, idx1);
-      else gitOut(repoDir, ['read-tree', 'HEAD'], { env: { ...process.env, GIT_INDEX_FILE: idx1 } });
-      const indexTreeSha = gitOut(repoDir, ['write-tree'], { env: { ...process.env, GIT_INDEX_FILE: idx1 } }).trim();
-      gitOut(repoDir, ['read-tree', indexTreeSha], { env: { ...process.env, GIT_INDEX_FILE: idx2 } });
-      gitOut(repoDir, ['add', '-A', '--', '.', ':(exclude).omagy'], { env: { ...process.env, GIT_INDEX_FILE: idx2 }, timeout: 10000 });
-      const workTreeSha = gitOut(repoDir, ['write-tree'], { env: { ...process.env, GIT_INDEX_FILE: idx2 } }).trim();
+      else gitOut(repoDir, ['read-tree', 'HEAD'], { env: cleanGitEnv(process.env, { GIT_INDEX_FILE: idx1 }) });
+      const indexTreeSha = gitOut(repoDir, ['write-tree'], { env: cleanGitEnv(process.env, { GIT_INDEX_FILE: idx1 }) }).trim();
+      gitOut(repoDir, ['read-tree', indexTreeSha], { env: cleanGitEnv(process.env, { GIT_INDEX_FILE: idx2 }) });
+      gitOut(repoDir, ['add', '-A', '--', '.', ':(exclude).omagy'], { env: cleanGitEnv(process.env, { GIT_INDEX_FILE: idx2 }), timeout: 10000 });
+      const workTreeSha = gitOut(repoDir, ['write-tree'], { env: cleanGitEnv(process.env, { GIT_INDEX_FILE: idx2 }) }).trim();
       const untrackedFiles = gitOut(repoDir, ['-c', 'core.quotepath=false', 'ls-files', '-z', '--others', '--exclude-standard']).split('\0').filter((p) => p && p !== '.omagy' && !p.startsWith('.omagy/'));
       const commitSha = gitOut(repoDir, ['-c', 'user.name=oh-my-agy', '-c', 'user.email=ckpt@oh-my-agy.local', 'commit-tree', workTreeSha, '-p', headSha], { input: JSON.stringify({ id, label, createdAt, headSha, indexTreeSha, workTreeSha, untrackedFiles }), stdio: ['pipe', 'pipe', 'pipe'] }).trim();
       gitOut(repoDir, ['update-ref', `refs/omagy/checkpoints/${id}`, commitSha]);
