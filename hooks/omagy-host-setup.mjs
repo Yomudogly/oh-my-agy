@@ -457,7 +457,7 @@ function buildHostHooksJson(host, bundleDir, { platform = process.platform } = {
       hooks: {
         SessionStart: mkEntry('session-start'),
         UserPromptSubmit: mkEntry('user-prompt-submit'),
-        PreToolUse: mkEntry('pre-tool-use', 'Write|Edit|MultiEdit|NotebookEdit|Read'),
+        PreToolUse: mkEntry('pre-tool-use', 'Write|Edit|MultiEdit|NotebookEdit|Read|Bash|Task|Agent'),
         Stop: mkEntry('stop', '', 30),
       },
     };

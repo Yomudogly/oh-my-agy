@@ -1298,3 +1298,304 @@ export function redactKeyShapeSecrets(text) {
   }
   return out.join('');
 }
+
+// ---------- durable workspace pause / resume state (.omagy/state/pause.json) ----------
+export const PAUSE_FILENAME = 'pause.json';
+const PAUSE_TERMINAL_PHASES = new Set(['complete', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'blocked', 'cleared']);
+
+export function isResumeIntentText(text) {
+  return /^\s*(?:please\s+)?(?:continue|resume|keep\s+going)\b/i.test(String(text || '').trim());
+}
+
+export function isCancelIntentText(text) {
+  return /^\s*[$/](?:oh-my-agy:)?cancel\b/i.test(String(text || '').trim());
+}
+
+function stripBomLocal(raw) {
+  const s = String(raw ?? '');
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+}
+
+function verifyDirChainSafe(rootDir, segments, { createMissing = false } = {}) {
+  const absRoot = path.resolve(String(rootDir || ''));
+  let cur = absRoot;
+  for (const seg of segments) {
+    if (!seg || seg === '.' || seg === '..' || seg.includes('/') || seg.includes('\\') || seg.includes('\0')) {
+      return { ok: false, error: `invalid_segment:${seg}`, path: '' };
+    }
+    cur = path.join(cur, seg);
+    let st = null;
+    try {
+      st = fs.lstatSync(cur);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        if (!createMissing) return { ok: true, missing: true, path: cur };
+        try {
+          fs.mkdirSync(cur);
+          st = fs.lstatSync(cur);
+        } catch (mkErr) {
+          return { ok: false, error: `mkdir_failed:${mkErr?.code || 'error'}`, path: cur };
+        }
+      } else {
+        return { ok: false, error: `lstat_failed:${err?.code || 'error'}`, path: cur };
+      }
+    }
+    if (st.isSymbolicLink()) return { ok: false, error: `symlink_blocked:${cur}`, path: cur };
+    if (!st.isDirectory()) return { ok: false, error: `not_directory:${cur}`, path: cur };
+  }
+  return { ok: true, missing: false, path: cur };
+}
+
+function readRegularJsonSafe(filePath) {
+  let st = null;
+  try {
+    st = fs.lstatSync(filePath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return { ok: true, missing: true, data: null };
+    return { ok: false, error: `lstat_failed:${err?.code || 'error'}`, data: null };
+  }
+  if (st.isSymbolicLink()) return { ok: false, error: `symlink_blocked:${filePath}`, data: null };
+  if (!st.isFile()) return { ok: false, error: `not_file:${filePath}`, data: null };
+  try {
+    const parsed = JSON.parse(stripBomLocal(fs.readFileSync(filePath, 'utf8')));
+    return { ok: true, missing: false, data: (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null };
+  } catch { /* fail open: ignore malformed JSON state file */
+    return { ok: true, missing: false, data: null };
+  }
+}
+
+function collectSafeModeFiles(absRoot, stateDir) {
+  const files = [];
+  const scanDir = (dirPath, relPrefix) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dirPath); } catch { /* fail open: unreadable state dir */ return; }
+    for (const name of entries) {
+      const m = /^(.+)-state\.json$/.exec(name);
+      if (!m) continue;
+      const full = path.join(dirPath, name);
+      let st = null;
+      try { st = fs.lstatSync(full); } catch { /* fail open: transient state file */ continue; }
+      if (st.isSymbolicLink() || !st.isFile()) continue;
+      files.push({
+        full,
+        rel: `${relPrefix}/${name}`,
+        modeFallback: m[1],
+      });
+    }
+  };
+  scanDir(stateDir, '.omagy/state');
+  const sessionsCheck = verifyDirChainSafe(absRoot, ['.omagy', 'state', 'sessions'], { createMissing: false });
+  if (sessionsCheck.ok && !sessionsCheck.missing) {
+    let sessNames = [];
+    try { sessNames = fs.readdirSync(sessionsCheck.path); } catch { /* fail open: unreadable sessions dir */ }
+    for (const sess of sessNames) {
+      const sCheck = verifyDirChainSafe(absRoot, ['.omagy', 'state', 'sessions', sess], { createMissing: false });
+      if (!sCheck.ok || sCheck.missing) continue;
+      scanDir(sCheck.path, `.omagy/state/sessions/${sess}`);
+    }
+  }
+  return files;
+}
+
+function resolveContainedStateRelPath(absRoot, rawRel) {
+  const norm = String(rawRel || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const parts = norm.split('/').filter(Boolean);
+  if (parts.length < 3 || parts[0] !== '.omagy' || parts[1] !== 'state') return null;
+  if (parts.some((p) => p === '.' || p === '..' || p.includes('\0'))) return null;
+  const dirParts = parts.slice(0, -1);
+  const fileName = parts[parts.length - 1];
+  if (!/^.+?-state\.json$/.test(fileName)) return null;
+  const dirCheck = verifyDirChainSafe(absRoot, dirParts, { createMissing: false });
+  if (!dirCheck.ok || dirCheck.missing) return null;
+  return { full: path.join(dirCheck.path, fileName), rel: parts.join('/') };
+}
+
+/** Read workspace pause sentinel (.omagy/state/pause.json) across candidate roots with full-chain symlink safety. */
+export function readPauseState(roots = []) {
+  const list = Array.isArray(roots) ? roots : (roots ? [roots] : []);
+  const seen = new Set();
+  for (const r of list) {
+    if (!r || typeof r !== 'string') continue;
+    const absRoot = path.resolve(r);
+    if (seen.has(absRoot)) continue;
+    seen.add(absRoot);
+    const dirCheck = verifyDirChainSafe(absRoot, ['.omagy', 'state'], { createMissing: false });
+    if (!dirCheck.ok || dirCheck.missing) continue;
+    const pauseFile = path.join(dirCheck.path, PAUSE_FILENAME);
+    const res = readRegularJsonSafe(pauseFile);
+    if (!res.ok || res.missing || !res.data || res.data.paused !== true) continue;
+    return { paused: true, file: pauseFile, root: absRoot, data: res.data };
+  }
+  return { paused: false, file: '', root: '', data: null };
+}
+
+/** Atomically pause active non-terminal workflow mode files and write .omagy/state/pause.json. */
+export function pauseWorkspaceExecution(rootDir, opts = {}) {
+  if (!rootDir || typeof rootDir !== 'string') {
+    return { ok: false, error: 'invalid_root', alreadyPaused: false, pauseFile: '', pausedAt: '', pausedModes: [] };
+  }
+  const absRoot = path.resolve(rootDir);
+  let rootSt = null;
+  try { rootSt = fs.statSync(absRoot); } catch { /* fail open: missing root checked below */ }
+  if (!rootSt || !rootSt.isDirectory()) {
+    return { ok: false, error: 'root_not_directory', alreadyPaused: false, pauseFile: '', pausedAt: '', pausedModes: [] };
+  }
+  const dirCheck = verifyDirChainSafe(absRoot, ['.omagy', 'state'], { createMissing: true });
+  if (!dirCheck.ok) {
+    return { ok: false, error: dirCheck.error, alreadyPaused: false, pauseFile: '', pausedAt: '', pausedModes: [] };
+  }
+  const stateDir = dirCheck.path;
+  const pauseFile = path.join(stateDir, PAUSE_FILENAME);
+  const existingRes = readRegularJsonSafe(pauseFile);
+  if (!existingRes.ok) {
+    return { ok: false, error: existingRes.error, alreadyPaused: false, pauseFile, pausedAt: '', pausedModes: [] };
+  }
+  const nowIso = String(opts.nowIso || new Date().toISOString());
+  const existing = existingRes.data;
+  const alreadyPaused = Boolean(existing && existing.paused === true);
+
+  const mergedByFile = new Map();
+  if (alreadyPaused && Array.isArray(existing.paused_modes)) {
+    for (const entry of existing.paused_modes) {
+      if (entry && typeof entry === 'object' && typeof entry.file === 'string' && entry.file) {
+        mergedByFile.set(entry.file, {
+          file: entry.file,
+          mode: String(entry.mode || ''),
+          previous_phase: String(entry.previous_phase || 'unknown'),
+          previous_active: entry.previous_active !== false,
+        });
+      }
+    }
+  }
+
+  for (const mf of collectSafeModeFiles(absRoot, stateDir)) {
+    const mRes = readRegularJsonSafe(mf.full);
+    if (!mRes.ok || mRes.missing || !mRes.data) continue;
+    const d = mRes.data;
+    const phase = String(d.current_phase || 'unknown');
+    const isTerminal = PAUSE_TERMINAL_PHASES.has(phase.toLowerCase()) || (typeof d.completed_at === 'string' && d.completed_at.trim().length > 0);
+    if (d.active === true && !isTerminal) {
+      const next = {
+        ...d,
+        active: false,
+        paused: true,
+        paused_at: nowIso,
+        paused_from_phase: phase,
+      };
+      writeFileAtomicWithMode(mf.full, `${JSON.stringify(next, null, 2)}\n`);
+      mergedByFile.set(mf.rel, {
+        file: mf.rel,
+        mode: String(d.mode || mf.modeFallback),
+        previous_phase: phase,
+        previous_active: true,
+      });
+    } else if (d.paused === true && !isTerminal && !mergedByFile.has(mf.rel)) {
+      mergedByFile.set(mf.rel, {
+        file: mf.rel,
+        mode: String(d.mode || mf.modeFallback),
+        previous_phase: String(d.paused_from_phase || phase),
+        previous_active: true,
+      });
+    }
+  }
+
+  const pausedModesList = [...mergedByFile.values()];
+  const pausedAt = (alreadyPaused && typeof existing.paused_at === 'string' && existing.paused_at) ? existing.paused_at : nowIso;
+  const payload = {
+    version: 1,
+    paused: true,
+    paused_at: pausedAt,
+    updated_at: nowIso,
+    source: String(opts.source || 'hud'),
+    reason: String(opts.reason || 'Paused via oh-my-agy HUD'),
+    workspace: absRoot,
+    paused_modes: pausedModesList,
+  };
+  writeFileAtomicWithMode(pauseFile, `${JSON.stringify(payload, null, 2)}\n`);
+  return {
+    ok: true,
+    alreadyPaused,
+    pauseFile,
+    pausedAt,
+    pausedModes: pausedModesList.map((m) => ({ file: m.file, mode: m.mode, previousPhase: m.previous_phase })),
+  };
+}
+
+/** Atomically clear .omagy/state/pause.json and restore paused workflow mode files. */
+export function resumeWorkspaceExecution(rootDir, opts = {}) {
+  const nowIso = String(opts.nowIso || new Date().toISOString());
+  if (!rootDir || typeof rootDir !== 'string') {
+    return { ok: false, error: 'invalid_root', wasPaused: false, resumedAt: nowIso, resumedModes: [] };
+  }
+  const absRoot = path.resolve(rootDir);
+  const dirCheck = verifyDirChainSafe(absRoot, ['.omagy', 'state'], { createMissing: false });
+  if (!dirCheck.ok) {
+    return { ok: false, error: dirCheck.error, wasPaused: false, resumedAt: nowIso, resumedModes: [] };
+  }
+  if (dirCheck.missing) {
+    return { ok: true, wasPaused: false, resumedAt: nowIso, resumedModes: [] };
+  }
+  const stateDir = dirCheck.path;
+  const pauseFile = path.join(stateDir, PAUSE_FILENAME);
+  const existingRes = readRegularJsonSafe(pauseFile);
+  if (!existingRes.ok) {
+    return { ok: false, error: existingRes.error, wasPaused: false, resumedAt: nowIso, resumedModes: [] };
+  }
+  const existing = existingRes.data;
+  let wasPaused = Boolean(existing && existing.paused === true);
+
+  const candidates = new Map();
+  if (existing && Array.isArray(existing.paused_modes)) {
+    for (const entry of existing.paused_modes) {
+      if (!entry || typeof entry.file !== 'string') continue;
+      const safeTarget = resolveContainedStateRelPath(absRoot, entry.file);
+      if (safeTarget) {
+        candidates.set(safeTarget.full, {
+          full: safeTarget.full,
+          rel: safeTarget.rel,
+          listed: true,
+          modeFallback: String(entry.mode || ''),
+        });
+      }
+    }
+  }
+  for (const mf of collectSafeModeFiles(absRoot, stateDir)) {
+    if (!candidates.has(mf.full)) {
+      candidates.set(mf.full, { full: mf.full, rel: mf.rel, listed: false, modeFallback: mf.modeFallback });
+    }
+  }
+
+  const resumedModes = [];
+  for (const cand of candidates.values()) {
+    const mRes = readRegularJsonSafe(cand.full);
+    if (!mRes.ok || mRes.missing || !mRes.data) continue;
+    const d = mRes.data;
+    const phase = String(d.current_phase || 'unknown');
+    const isTerminal = PAUSE_TERMINAL_PHASES.has(phase.toLowerCase()) || (typeof d.completed_at === 'string' && d.completed_at.trim().length > 0);
+    if (isTerminal) continue;
+    if (d.paused === true || (cand.listed && d.active !== true)) {
+      const next = { ...d };
+      delete next.paused;
+      delete next.paused_at;
+      delete next.paused_from_phase;
+      next.active = true;
+      next.updated_at = nowIso;
+      writeFileAtomicWithMode(cand.full, `${JSON.stringify(next, null, 2)}\n`);
+      wasPaused = true;
+      resumedModes.push({
+        file: cand.rel,
+        mode: String(next.mode || cand.modeFallback || ''),
+        phase: String(next.current_phase || 'unknown'),
+      });
+    }
+  }
+
+  if (!existingRes.missing) {
+    try { fs.unlinkSync(pauseFile); } catch (err) {
+      if (err && err.code !== 'ENOENT') {
+        return { ok: false, error: `unlink_failed:${err.code || 'error'}`, wasPaused, resumedAt: nowIso, resumedModes };
+      }
+    }
+  }
+  return { ok: true, wasPaused, resumedAt: nowIso, resumedModes };
+}

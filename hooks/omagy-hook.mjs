@@ -32,12 +32,16 @@ import {
   buildCompactClaudeContract, checkHostBundleDrift, cleanGitEnv, defaultPluginDataDir, defaultRuntimeDir,
   desktopHudRegistryFile, detectHost, ensureDesktopHudDaemon, ensureSecureRuntimeDir,
   expandTranscriptRecordForFreshness, extractHostTranscriptRecords, extractTranscriptReadPaths,
-  formatSystemMessageStep, hasClaudeRulesFile, isDesktopAppSession, normalizeLifecycleEvent,
-  normalizeLifecyclePayload, parseGuardScope, readTranscriptTailSlice, readTranscriptTailText,
-  redactKeyShapeSecrets, renameSyncAtomic, resolveBundleRoot, resolveCodexVersion, resolvePluginRoot,
+  formatSystemMessageStep, hasClaudeRulesFile, isCancelIntentText, isDesktopAppSession, isResumeIntentText,
+  normalizeLifecycleEvent, normalizeLifecyclePayload, parseGuardScope, PAUSE_FILENAME, pauseWorkspaceExecution,
+  readPauseState, readTranscriptTailSlice, readTranscriptTailText, redactKeyShapeSecrets, renameSyncAtomic,
+  resolveBundleRoot, resolveCodexVersion, resolvePluginRoot, resumeWorkspaceExecution,
   sanitizeUntrustedContext, serializeHookOutcome, walkKernelPath, writeFileAtomicWithMode,
 } from './omagy-host.mjs';
-export { cleanGitEnv, readTranscriptTailSlice, readTranscriptTailText, renameSyncAtomic, sanitizeUntrustedContext, writeFileAtomicWithMode };
+export {
+  cleanGitEnv, PAUSE_FILENAME, pauseWorkspaceExecution, readPauseState, readTranscriptTailSlice,
+  readTranscriptTailText, renameSyncAtomic, resumeWorkspaceExecution, sanitizeUntrustedContext, writeFileAtomicWithMode,
+};
 
 export function hardenWindowsExeSearch() {
   if (process.platform === 'win32') {
@@ -2624,6 +2628,30 @@ function toSystemMessageSteps(messages) {
   });
 }
 
+function expandPauseRoots(roots) {
+  const out = [];
+  const seen = new Set();
+  const push = (r) => {
+    if (!r) return;
+    const abs = path.resolve(String(r));
+    if (!seen.has(abs)) { seen.add(abs); out.push(abs); }
+  };
+  for (const r of roots || []) {
+    push(r);
+    const sr = stateRoot(r);
+    push(sr);
+    for (const sc of discoverOmagyScopes(sr)) push(sc.root);
+  }
+  return out;
+}
+function resumeAllPausedRoots(roots) {
+  let any = false;
+  for (const r of expandPauseRoots(roots)) {
+    if (readPauseState([r]).paused && resumeWorkspaceExecution(r).wasPaused) any = true;
+  }
+  return any;
+}
+
 // ---------- handlers ----------
 export function sessionStart(payload) {
   const host = detectHost(payload);
@@ -2638,6 +2666,9 @@ export function sessionStart(payload) {
   const artifactDirectoryPath = (typeof rawArt === 'string' && rawArt.trim()) ? rawArt.trim() : (record.artifactDirectoryPath || null);
   const messages = [];
 
+  if (readPauseState(expandPauseRoots(roots)).paused) {
+    messages.push('[oh-my-agy] Execution is paused via HUD. Wait for the user to click Continue in HUD or send continue/resume.');
+  }
   const activeMsg = buildActiveModeMessage(roots, conv);
   if (activeMsg) messages.push(activeMsg);
 
@@ -2700,10 +2731,28 @@ export function preInvocation(payload) {
   const isNewUserTurn = userKey
     ? record.lastUserKey !== userKey
     : Number(payload.invocationNum ?? payload.invocation_num ?? 0) <= 1;
-  if (!compactionChanged && !isNewUserTurn) return {};
-
   const cleanText = user ? sanitizeRelayedText(user.text) : '';
   const isSubagent = Boolean(record.isSubagent) || isSubagentPayload(payload, cleanText);
+  const invNum = Number(payload.invocationNum ?? payload.invocation_num ?? 0);
+  const isFreshUserPrompt = host !== 'antigravity'
+    || invNum === 1
+    || (invNum <= 0 && isNewUserTurn)
+    || (Boolean(record.lastUserKey) && Boolean(userKey) && record.lastUserKey !== userKey);
+  let resumedFromPause = false;
+  if (readPauseState(expandPauseRoots(roots)).paused) {
+    if (isFreshUserPrompt && !isSubagent && (isResumeIntentText(cleanText) || isCancelIntentText(cleanText))) {
+      resumedFromPause = resumeAllPausedRoots(roots);
+    } else if (host === 'antigravity') {
+      return {
+        injectSteps: [formatSystemMessageStep('', { userMarkdown: '**oh-my-agy** · Execution paused via HUD. Click **Continue** in the HUD Workspace card or type `continue` in chat to resume.' })],
+        terminationBehavior: 'terminate',
+      };
+    } else {
+      return { injectSteps: [formatSystemMessageStep('[oh-my-agy] Execution is paused via HUD. Do not run tools or continue workflow steps; wait for the user to click Continue in HUD or send continue/resume.')] };
+    }
+  }
+  if (!compactionChanged && !isNewUserTurn && !resumedFromPause) return {};
+
   const messages = [];
   let wikiInjected = Boolean(record.wikiInjected);
   let mapInjected = Boolean(record.mapInjected);
@@ -2711,7 +2760,7 @@ export function preInvocation(payload) {
   let skills = Array.isArray(record.skills) ? record.skills : [];
   if (!isSubagent) {
     const disabledSkills = loadDisabledSkills(roots);
-    const det = isNewUserTurn && user ? detectSkills(user.text, { disabledSkills }) : [];
+    const det = (isNewUserTurn || resumedFromPause) && user ? detectSkills(user.text, { disabledSkills }) : [];
     if (det.length) {
       skills = det;
       messages.push(
@@ -2892,12 +2941,12 @@ export function preToolUse(payload, opts = {}) {
   };
   const passThrough = () => {
     if (host !== 'antigravity') return {};
-    if (/^(?:read|view)_/i.test(toolName)) return { decision: 'allow' };
+    if (/^(?:read|view)(?:_|$)/i.test(toolName)) return { decision: 'allow' };
     if (!targets.length) return { decision: 'ask' };
     return targets.every(isWithinSafeRoot) ? { decision: 'allow' } : { decision: 'ask' };
   };
 
-  if (/^(?:read|view)_/i.test(toolName)) {
+  if (/^(?:read|view)(?:_|$)/i.test(toolName)) {
     if (!targets.length) return passThrough();
     const resolved = resolveTargetPath(targets[0]);
     const seen = readJson(seenFile) || { readFiles: [] };
@@ -2906,6 +2955,13 @@ export function preToolUse(payload, opts = {}) {
       writeJson(seenFile, { readFiles: [...list.slice(-199), resolved], at: new Date().toISOString() });
     }
     return passThrough();
+  }
+
+  if (runWriteGuards && readPauseState(expandPauseRoots(roots)).paused) {
+    return {
+      decision: 'deny',
+      reason: '[oh-my-agy] Execution is paused via HUD. Do not retry or work around; wait for the user to click Continue in HUD or send continue in chat.',
+    };
   }
 
   let s = null;
@@ -3189,6 +3245,7 @@ export async function stop(payload) {
   const roots = workspaceRoots(payload);
   const conv = payload.conversationId || payload.conversation_id;
   const rawReason = rawReasonInput.toLowerCase();
+  if (rawReason === 'terminal_custom_hook' || readPauseState(expandPauseRoots(roots)).paused) return allow;
   const isNormalStop = NORMAL_STOP_REASONS.has(rawReason);
 
   const routingRec = readJson(runtimeFile(conv, 'routing')) || {};

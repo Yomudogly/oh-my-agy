@@ -14,6 +14,8 @@ import {
   computeDesktopHudPort,
   desktopHudRegistryFile,
   ensureDesktopHudDaemon,
+  pauseWorkspaceExecution,
+  resumeWorkspaceExecution,
 } from '../../hooks/omagy-host.mjs';
 import { verifyAntigravityTargetConversation } from './dispatch.mjs';
 import {
@@ -29,12 +31,14 @@ import {
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
+  getFreshRoutingHint,
   highlightMatch,
   parseWorkflowStageLabel,
   prepareLoftSrcdoc,
   projectMindMapPoint,
   renderSafeMarkdown,
   resolveWorkflowStageState,
+  resolveWorkspaceControlState,
   selectCurrentMode,
 } from './ui.mjs';
 import {
@@ -47,6 +51,7 @@ import {
   dispatchHudAction,
   dispatchHudActionAsync,
   getCachedWorktrees,
+  handleWorkflowControl,
   readLatestRouting,
   readNotificationBooleans,
   resolveActiveConversationCandidates,
@@ -2145,6 +2150,164 @@ export async function runSelftest() {
       && blockedIdeaTraversal === null
       && blockedRootTraversal === null;
 
+    // H30: Dynamic Pause/Continue control API, anti-stale paused snapshot, 3-state smart toggle & Antigravity Aux Pane seenWorkspaceRoots vetting
+    let h30Ok = false;
+    const h30Ws = fs.mkdtempSync(path.join(os.tmpdir(), 'omagy-hud-h30-'));
+    try {
+      const h30StateDir = path.join(h30Ws, '.omagy', 'state');
+      const h30ChildWs = path.join(h30Ws, 'pkg', 'a');
+      fs.mkdirSync(h30StateDir, { recursive: true });
+      fs.mkdirSync(path.join(h30ChildWs, '.omagy', 'state'), { recursive: true });
+      const h30ApFile = path.join(h30StateDir, 'autopilot-state.json');
+      const agedTs = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+      fs.writeFileSync(h30ApFile, JSON.stringify({
+        mode: 'autopilot',
+        active: true,
+        current_phase: 'ultragoal',
+        iteration: 2,
+        updated_at: new Date().toISOString(),
+      }));
+
+      // H-PAUSE-1: Aged paused snapshot telemetry (anti-stale, zero phantom pause mode, paused statusLine, multi-root preservation)
+      pauseWorkspaceExecution(h30Ws, { source: 'hud' });
+      const pausedApRaw = JSON.parse(fs.readFileSync(h30ApFile, 'utf8'));
+      fs.writeFileSync(h30ApFile, JSON.stringify({ ...pausedApRaw, updated_at: agedTs, paused_at: agedTs }));
+      const h30OtherEmpty = path.join(h30Ws, 'secondary-empty');
+      fs.mkdirSync(h30OtherEmpty, { recursive: true });
+      const h30SnapPaused = buildHudSnapshot([h30Ws, h30OtherEmpty], Date.now(), h30Ws);
+      const h30ApMode = (h30SnapPaused.modes || []).find((m) => m.mode === 'autopilot');
+      const h30Sel = selectCurrentMode(h30SnapPaused.modes || []);
+      const h30NoPhantom = !(h30SnapPaused.modes || []).some((m) => m.mode === 'pause');
+
+      const h30StatelessWs = path.join(h30Ws, 'stateless-only');
+      fs.mkdirSync(h30StatelessWs, { recursive: true });
+      pauseWorkspaceExecution(h30StatelessWs, { source: 'hud' });
+      const h30SnapStateless = buildHudSnapshot([h30StatelessWs], Date.now());
+      resumeWorkspaceExecution(h30StatelessWs);
+      resumeWorkspaceExecution(h30Ws);
+
+      const hPause1Ok = h30SnapPaused.pauseState?.paused === true
+        && h30SnapPaused.pauseStatesByScope?.['.']?.paused === true
+        && h30NoPhantom
+        && Boolean(h30ApMode && h30ApMode.paused === true && h30ApMode.stale === false)
+        && h30Sel.current?.mode === 'autopilot'
+        && h30SnapPaused.statusLine === '[OMA] PAUSED | autopilot:ultragoal'
+        && h30SnapStateless.statusLine === '[OMA] PAUSED';
+
+      // H-PAUSE-2: 3-state smart toggle & multi-scope filtering
+      const nowH30 = Date.now();
+      const csRunningMode = resolveWorkspaceControlState({
+        modes: [{ mode: 'autopilot', active: true, stale: false, paused: false, scope: '.' }],
+        pauseState: { paused: false },
+        pauseStatesByScope: { '.': { paused: false } },
+      }, 'all', nowH30);
+      const csRunningRouting = resolveWorkspaceControlState({
+        modes: [],
+        pauseState: { paused: false },
+        pauseStatesByScope: { '.': { paused: false } },
+        doctor: { latestRouting: { skills: ['analyze'], at: new Date(nowH30 - 30_000).toISOString() } },
+      }, 'all', nowH30);
+      const csPaused = resolveWorkspaceControlState({
+        modes: [],
+        pauseState: { paused: true },
+        pauseStatesByScope: { '.': { paused: true } },
+      }, 'all', nowH30);
+      const csIdle = resolveWorkspaceControlState({
+        modes: [],
+        pauseState: { paused: false },
+        pauseStatesByScope: { '.': { paused: false } },
+      }, 'all', nowH30);
+      const multiScopeData = {
+        modes: [],
+        pauseState: { paused: true, scope: 'pkg/a' },
+        pauseStatesByScope: { '.': { paused: false }, 'pkg/a': { paused: true } },
+      };
+      const csScopeChildPaused = resolveWorkspaceControlState(multiScopeData, 'pkg/a', nowH30);
+      const csScopeRootIdle = resolveWorkspaceControlState(multiScopeData, '.', nowH30);
+      const hPause2Ok = csRunningMode === 'running'
+        && csRunningRouting === 'running'
+        && csPaused === 'paused'
+        && csIdle === 'idle'
+        && csScopeChildPaused === 'paused'
+        && csScopeRootIdle === 'idle';
+
+      // H-PAUSE-3: POST /api/workflow-control security, Aux Pane no-workspaceRoot vetting & round-trip
+      const h30Calls = [];
+      const h30Runner = (cmd, args) => {
+        h30Calls.push({ cmd, args });
+        if (args.includes('get-conversation-metadata')) return JSON.stringify({ conversationId: 'conv-h30', workspacePaths: [h30Ws] });
+        return JSON.stringify({ ok: true });
+      };
+      const h30DesktopSrv = createHudServer('h30-tok', { desktopServe: true, workspaceRoot: h30Ws, runner: h30Runner });
+      const h30AuxSrv = createHudServer('h30-aux', { runner: h30Runner });
+      const h30Unauth = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', host: '127.0.0.1:48801', origin: 'http://127.0.0.1:48801' }, { action: 'pause' }, h30DesktopSrv);
+      const h30BadOrigin = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', 'x-sidecar-token': 'h30-tok', host: '127.0.0.1:48801', origin: 'http://evil.example' }, { action: 'pause' }, h30DesktopSrv);
+      const h30BadCt = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'text/plain', 'x-sidecar-token': 'h30-tok', host: '127.0.0.1:48801', origin: 'http://127.0.0.1:48801' }, 'pause', h30DesktopSrv);
+      const h30BadAct = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', 'x-sidecar-token': 'h30-tok', host: '127.0.0.1:48801', origin: 'http://127.0.0.1:48801' }, { action: 'explode' }, h30DesktopSrv);
+      const h30HostileWs = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', 'x-sidecar-token': 'h30-tok', host: '127.0.0.1:48801', origin: 'http://127.0.0.1:48801' }, { action: 'pause', workspace: '/etc' }, h30DesktopSrv);
+      const h30HostileScope = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', 'x-sidecar-token': 'h30-tok', host: '127.0.0.1:48801', origin: 'http://127.0.0.1:48801' }, { action: 'pause', workspace: h30Ws, scope: '../../outside' }, h30DesktopSrv);
+
+      // Antigravity Aux Pane mode (no startup options.workspaceRoot): GET /api/status seeds seenWorkspaceRoots
+      const h30AuxStatus = await invokeHttp('GET', `/api/status?workspaces=${encodeURIComponent(JSON.stringify([h30Ws]))}`, { 'x-sidecar-token': 'h30-aux' }, null, h30AuxSrv);
+      const h30AuxPause = await invokeHttp('POST', `/api/workflow-control?workspaces=${encodeURIComponent(JSON.stringify([h30Ws]))}`, { 'content-type': 'application/json', 'x-sidecar-token': 'h30-aux' }, { action: 'pause', workspace: h30Ws, scope: 'all' }, h30AuxSrv);
+      const h30AuxSelfVet = await invokeHttp('POST', `/api/workflow-control?workspaces=${encodeURIComponent(JSON.stringify(['/etc']))}`, { 'content-type': 'application/json', 'x-sidecar-token': 'h30-aux' }, { action: 'pause', workspace: '/etc' }, h30AuxSrv);
+      const h30PauseFileExists = fs.existsSync(path.join(h30StateDir, 'pause.json'));
+      const h30AuxResume = await invokeHttp('POST', `/api/workflow-control?workspaces=${encodeURIComponent(JSON.stringify([h30Ws]))}`, { 'content-type': 'application/json', 'x-sidecar-token': 'h30-aux' }, { action: 'resume', workspace: h30Ws, scope: 'all', conversationId: 'conv-h30', dispatchResume: true }, h30AuxSrv);
+      const h30PauseFileGone = !fs.existsSync(path.join(h30StateDir, 'pause.json'));
+      const h30ApRestored = JSON.parse(fs.readFileSync(h30ApFile, 'utf8')).active === true;
+      const h30IdleResume = await handleWorkflowControl({ action: 'resume', workspace: h30Ws, dispatchResume: false }, { vettedRoots: [h30Ws], runner: h30Runner });
+
+      // Child-scope session-only mode paused & resumed via scope:'all', plus anchored child-folder Aux Pane seeding
+      const h30ChildSessDir = path.join(h30ChildWs, '.omagy', 'state', 'sessions', 'sess-1');
+      fs.mkdirSync(h30ChildSessDir, { recursive: true });
+      const h30ChildSessFile = path.join(h30ChildSessDir, 'autopilot-state.json');
+      fs.writeFileSync(h30ChildSessFile, JSON.stringify({ mode: 'autopilot', active: true, current_phase: 'ralplan', updated_at: new Date().toISOString() }));
+      const h30AllPause = await handleWorkflowControl({ action: 'pause', workspace: h30Ws, scope: 'all' }, { vettedRoots: [h30Ws], runner: h30Runner });
+      const h30ChildSessPaused = JSON.parse(fs.readFileSync(h30ChildSessFile, 'utf8')).paused === true;
+      const h30AllResume = await handleWorkflowControl({ action: 'resume', workspace: h30Ws, scope: 'all', dispatchResume: false }, { vettedRoots: [h30Ws], runner: h30Runner });
+      const h30ChildSessResumed = JSON.parse(fs.readFileSync(h30ChildSessFile, 'utf8')).active === true;
+
+      const h30AnchoredSub = path.join(h30Ws, 'sub-pkg');
+      fs.mkdirSync(h30AnchoredSub, { recursive: true });
+      const h30AuxAnchoredSrv = createHudServer('h30-anch', { runner: h30Runner });
+      const h30AnchStatus = await invokeHttp('GET', `/api/status?workspaces=${encodeURIComponent(JSON.stringify([h30AnchoredSub]))}`, { 'x-sidecar-token': 'h30-anch' }, null, h30AuxAnchoredSrv);
+      const h30AnchSnap = JSON.parse(h30AnchStatus.body || '{}');
+      const h30AnchPause = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', 'x-sidecar-token': 'h30-anch' }, { action: 'pause', workspace: h30AnchSnap.workspace }, h30AuxAnchoredSrv);
+      resumeWorkspaceExecution(h30Ws);
+
+      const hPause3Ok = h30Unauth.status === 401
+        && h30BadOrigin.status === 403
+        && h30BadCt.status === 415
+        && h30BadAct.status === 400
+        && h30HostileWs.status === 403
+        && h30HostileScope.status === 400
+        && h30AuxStatus.status === 200
+        && h30AuxPause.status === 200
+        && h30AuxSelfVet.status === 403
+        && h30PauseFileExists
+        && h30AuxResume.status === 200
+        && h30PauseFileGone
+        && h30ApRestored
+        && h30Calls.some((c) => c.args.includes('continue'))
+        && h30IdleResume.ok === true && h30IdleResume.wasPaused === false
+        && h30AllPause.ok === true && h30ChildSessPaused
+        && h30AllResume.ok === true && h30ChildSessResumed
+        && h30AnchStatus.status === 200 && h30AnchPause.status === 200;
+
+      // H-PAUSE-4: HTML/CSS & sharedHelpersSource contract
+      const hPause4Ok = HUD_HTML.includes('toggleWorkflowPause')
+        && HUD_HTML.includes('resolveWorkspaceControlState')
+        && HUD_HTML.includes('getFreshRoutingHint')
+        && HUD_HTML.includes('.badge-warn')
+        && HUD_HTML.includes('.action-btn-warn')
+        && HUD_HTML.includes('>Pause<')
+        && HUD_HTML.includes('>Continue<');
+
+      h30Ok = hPause1Ok && hPause2Ok && hPause3Ok && hPause4Ok;
+    } finally {
+      rmDirSafe(h30Ws);
+    }
+
     const namedChecks = {
       coreSnapHttp,
       floorCacheOk,
@@ -2166,6 +2329,7 @@ export async function runSelftest() {
       h27Ok,
       h28Ok,
       h29Ok,
+      h30Ok,
     };
     const failedChecks = Object.entries(namedChecks)
       .filter(([, v]) => !v)

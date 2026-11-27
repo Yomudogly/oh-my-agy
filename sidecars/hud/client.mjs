@@ -556,6 +556,58 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       postDispatch(btn, { mode, prompt });
     };
 
+    window.toggleWorkflowPause = async function(btn, action) {
+      const act = String(action || '').trim().toLowerCase();
+      if (act !== 'pause' && act !== 'resume') return;
+      if (btn) {
+        btn.disabled = true;
+        setButtonFeedback(btn, 'loading', act === 'pause' ? 'Pausing\u2026' : 'Resuming\u2026', 0);
+      }
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['X-Sidecar-Token'] = token;
+        const res = await hudFetch('/api/workflow-control?' + buildStreamQuery().toString(), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            action: act,
+            workspace: latestData?.workspace || (workspaceUris[0] || ''),
+            scope: activeScopeFilter,
+            conversationId: getHostConversationId(),
+            dispatchResume: act === 'resume',
+          }),
+        });
+        const data = await res.json().catch(() => { /* fail open: non-JSON workflow-control response */ return {}; });
+        if (!res.ok || !data.ok) {
+          if (btn) {
+            btn.disabled = false;
+            setButtonFeedback(btn, 'err', 'Error', 1800);
+          }
+          return;
+        }
+        if (act === 'resume' && data.modeUsed === 'clipboard-handoff') {
+          const clipTxt = data.clipboardPrompt || 'continue';
+          let copied = Boolean(data.copiedToClipboard);
+          if (!copied && clipTxt && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            copied = await navigator.clipboard.writeText(clipTxt).then(() => true, () => false);
+          }
+          if (btn) {
+            btn.disabled = false;
+            setButtonFeedback(btn, copied ? 'ok' : 'err', copied ? 'Resumed (Copied)' : 'Resumed', 1800);
+          }
+        } else if (btn) {
+          btn.disabled = false;
+          setButtonFeedback(btn, 'ok', act === 'pause' ? 'Paused' : 'Resumed', 1400);
+        }
+        await loadSnapshot(true);
+      } catch { /* fail open: workflow-control network failure */
+        if (btn) {
+          btn.disabled = false;
+          setButtonFeedback(btn, 'err', 'Failed', 1800);
+        }
+      }
+    };
+
     window.armCancelMode = function() {
       pendingCancelConfirm = true;
       if (cancelConfirmTimer) clearTimeout(cancelConfirmTimer);
@@ -2177,14 +2229,6 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
 
     setTab(activeView);
 
-    function getFreshRoutingHint(data) {
-      const lr = data?.doctor?.latestRouting;
-      if (!lr || !Array.isArray(lr.skills) || !lr.skills.length) return null;
-      const ts = lr.at ? Date.parse(lr.at) : NaN;
-      if (!Number.isFinite(ts) || (Date.now() - ts) > 30 * 60 * 1000) return null;
-      return lr;
-    }
-
     function applySnapshot(data, forceRender = false) {
       if (!data || typeof data !== 'object') return;
       latestData = data;
@@ -2456,12 +2500,15 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
       const filteredModes = allModes.filter(matchesScope);
       const { current: curMode, lastCompleted } = selectCurrentMode(filteredModes);
       const activeModeObj = curMode && !curMode.stale ? curMode : null;
+      const controlState = resolveWorkspaceControlState(data, activeScopeFilter);
 
       let currentModeBodyHtml = '';
       if (curMode) {
-        const statePill = curMode.awaitingConfirmation
-          ? '<span class="badge badge-live">WAITING CONFIRMATION</span>'
-          : (curMode.stale ? '<span class="badge">stale (&gt;6h)</span>' : '<span class="badge badge-live">active</span>');
+        const statePill = curMode.paused
+          ? '<span class="badge badge-warn">PAUSED</span>'
+          : (curMode.awaitingConfirmation
+              ? '<span class="badge badge-live">WAITING CONFIRMATION</span>'
+              : (curMode.stale ? '<span class="badge">stale (&gt;6h)</span>' : '<span class="badge badge-live">active</span>'));
         const staleFixBtn = curMode.stale
           ? \`<button type="button" class="action-btn" onclick="runQuickCommand(this, '/cancel', 'active-chat')" title="Cancel stale mode in active chat">Cancel Stale Mode</button>\`
           : '';
@@ -2469,13 +2516,26 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
           <div class="mode-spotlight">
             <div class="row-wrap-sm min0">
               <code class="fw-600 fs-13">\${esc(curMode.mode)}</code>
-              <span class="badge \${!curMode.stale ? 'badge-active' : ''}">\${esc(curMode.phase)}</span>
+              <span class="badge \${curMode.paused ? 'badge-warn' : (!curMode.stale ? 'badge-active' : '')}">\${esc(curMode.phase)}</span>
               \${statePill}
               \${curMode.iteration != null ? \`<span class="muted tabular fs-12">#\${esc(curMode.iteration)}</span>\` : ''}
             </div>
             <div class="row-wrap-sm">
               \${staleFixBtn}
               <span class="badge" title="\${esc(curMode.scope && curMode.scope !== '.' ? curMode.scope : data.workspace)}">\${esc(formatScopeLabel(curMode.scope || '.'))}</span>
+            </div>
+          </div>\`;
+      } else if (controlState === 'paused') {
+        const pInfo = activeScopeFilter !== 'all'
+          ? (data.pauseStatesByScope?.[activeScopeFilter] || data.pauseState)
+          : data.pauseState;
+        const pAt = pInfo?.pausedAt ? formatShortTime(pInfo.pausedAt) : '';
+        currentModeBodyHtml = \`
+          <div class="mode-spotlight">
+            <div class="row-wrap-sm min0">
+              <code class="fw-600 fs-13">workspace</code>
+              <span class="badge badge-warn">PAUSED</span>
+              <span class="muted fs-12">Execution paused via HUD — click Continue to resume\${pAt ? ' (' + esc(pAt) + ')' : ''}</span>
             </div>
           </div>\`;
       } else {
@@ -2522,9 +2582,15 @@ export function renderHudClientScript(sharedHelpersSource, allowedViews = ['over
            <button type="button" class="action-btn" onclick="abortCancelMode()">Abort</button>\`
         : \`<button type="button" class="action-btn" onclick="armCancelMode()">Cancel Mode</button>\`;
 
+      const primaryControlHtml = controlState === 'running'
+        ? \`<button type="button" class="action-btn action-btn-warn" onclick="toggleWorkflowPause(this, 'pause')" title="Safely pause ongoing workflow or skill execution">Pause</button>\`
+        : (controlState === 'paused'
+            ? \`<button type="button" class="action-btn action-btn-primary" onclick="toggleWorkflowPause(this, 'resume')" title="Resume paused workflow or skill execution">Continue</button>\`
+            : \`<button type="button" class="action-btn action-btn-primary" onclick="runQuickCommand(this, 'continue', 'active-chat')">Continue</button>\`);
+
       const quickActionsHtml = \`
         <div class="cmd-actions section-divider-top">
-          <button type="button" class="action-btn action-btn-primary" onclick="runQuickCommand(this, 'continue', 'active-chat')">Continue</button>
+          \${primaryControlHtml}
           \${cancelControlHtml}
           <button type="button" class="action-btn" onclick="runQuickCommand(this, '/hud --handoff', 'active-chat')">Create Handoff</button>
           <button type="button" class="action-btn" onclick="runQuickCommand(this, '/doctor', 'active-chat')">Run /doctor</button>

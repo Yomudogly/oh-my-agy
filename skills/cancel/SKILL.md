@@ -13,7 +13,7 @@ Use `$cancel` to stop an active oh-my-agy mode and run its documented cleanup: w
 
 - Accepted forms: `$cancel`, `$cancel <mode>`, `$cancel --force`.
 - Reject `--all`, unknown flags, and repeated or mixed flags before changing anything.
-- Discover active modes by reading `.omagy/state/*-state.json` in the workspace root. Active means `active:true` and a non-terminal `current_phase`.
+- Discover active or paused modes by reading `.omagy/state/*-state.json` in the workspace root (active means `active:true` or `paused:true` with a non-terminal `current_phase`). If `.omagy/state/pause.json` exists, clear it so cancellation is never blocked.
 - Confirm the exact target before cleanup. If several modes are active and no mode was named, cancel in dependency order (below) and report each one.
 
 ## Operational steps

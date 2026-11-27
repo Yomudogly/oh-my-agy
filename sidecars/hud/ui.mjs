@@ -650,14 +650,27 @@ export function formatShortRelPath(rel) {
   return String(rel || '').replace(/^(?:[^/]+\/)?\.omagy\//, '');
 }
 
+export function getFreshRoutingHint(data, nowMs = Date.now()) {
+  const lr = data?.doctor?.latestRouting;
+  if (!lr || !Array.isArray(lr.skills) || !lr.skills.length) return null;
+  const ts = lr.at ? Date.parse(lr.at) : NaN;
+  if (!Number.isFinite(ts) || (nowMs - ts) > 30 * 60 * 1000) return null;
+  return lr;
+}
+
 export function selectCurrentMode(modes) {
   const list = Array.isArray(modes) ? [...modes] : [];
   if (!list.length) return { current: null, lastCompleted: null };
   const byUpdatedDesc = (a, b) => (Number(b.updatedMs) || 0) - (Number(a.updatedMs) || 0);
-  const liveModes = list.filter((m) => m.active && !m.stale).sort(byUpdatedDesc);
+  const liveModes = list.filter((m) => m.active && !m.stale && !m.paused).sort(byUpdatedDesc);
   if (liveModes.length) {
     const topAuto = liveModes.find((m) => m.mode === 'autopilot');
     return { current: topAuto || liveModes[0], lastCompleted: null };
+  }
+  const pausedModes = list.filter((m) => m.paused).sort(byUpdatedDesc);
+  if (pausedModes.length) {
+    const topAuto = pausedModes.find((m) => m.mode === 'autopilot');
+    return { current: topAuto || pausedModes[0], lastCompleted: null };
   }
   const staleActive = list.filter((m) => m.active).sort(byUpdatedDesc);
   if (staleActive.length) {
@@ -666,6 +679,20 @@ export function selectCurrentMode(modes) {
   }
   const finished = list.sort(byUpdatedDesc);
   return { current: null, lastCompleted: finished[0] || null };
+}
+
+export function resolveWorkspaceControlState(data, activeScopeFilter = 'all', nowMs = Date.now()) {
+  const scope = String(activeScopeFilter || 'all');
+  const matchesScope = (item) => !scope || scope === 'all' || ((item && item.scope) || '.') === scope;
+  const modes = (Array.isArray(data?.modes) ? data.modes : []).filter(matchesScope);
+  const byScope = data?.pauseStatesByScope && typeof data.pauseStatesByScope === 'object' ? data.pauseStatesByScope : null;
+  const scopedPause = scope === 'all'
+    ? Boolean(data?.pauseState?.paused || (byScope && Object.values(byScope).some((ps) => ps && ps.paused)))
+    : Boolean(byScope ? byScope[scope]?.paused : (scope === '.' && data?.pauseState?.paused));
+  if (scopedPause || modes.some((m) => m && m.paused)) return 'paused';
+  if (modes.some((m) => m && m.active && !m.stale)) return 'running';
+  if ((scope === 'all' || scope === '.') && getFreshRoutingHint(data, nowMs)) return 'running';
+  return 'idle';
 }
 
 export function formatAgreementCard(a, idx) {
@@ -1142,7 +1169,9 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
     formatScopeLabel.toString(),
     formatShortTime.toString(),
     formatShortRelPath.toString(),
+    getFreshRoutingHint.toString(),
     selectCurrentMode.toString(),
+    resolveWorkspaceControlState.toString(),
     formatAgreementCard.toString(),
     parseWorkflowStageLabel.toString(),
     resolveWorkflowStageState.toString(),
@@ -1203,6 +1232,9 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
       --hud-ok-border: rgba(16, 185, 129, 0.42);
       --hud-ok-ink: #6ee7b7;
       --hud-warn: #f59e0b;
+      --hud-warn-tint: rgba(245, 158, 11, 0.14);
+      --hud-warn-border: rgba(245, 158, 11, 0.44);
+      --hud-warn-ink: #fcd34d;
       --hud-danger: #ef4444;
       --hud-danger-tint: rgba(239, 68, 68, 0.13);
       --hud-danger-border: rgba(239, 68, 68, 0.44);
@@ -1265,6 +1297,9 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
         --hud-ok-border: rgba(5, 150, 105, 0.38);
         --hud-ok-ink: #047857;
         --hud-warn: #d97706;
+        --hud-warn-tint: rgba(217, 119, 6, 0.12);
+        --hud-warn-border: rgba(217, 119, 6, 0.40);
+        --hud-warn-ink: #b45309;
         --hud-danger: #dc2626;
         --hud-danger-tint: rgba(220, 38, 38, 0.11);
         --hud-danger-border: rgba(220, 38, 38, 0.38);
@@ -1315,6 +1350,9 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
         --hud-ok-tint: color-mix(in srgb, var(--hud-ok) 14%, transparent);
         --hud-ok-border: color-mix(in srgb, var(--hud-ok) 44%, var(--hud-border));
         --hud-ok-ink: color-mix(in srgb, var(--hud-ok) 50%, var(--hud-fg));
+        --hud-warn-tint: color-mix(in srgb, var(--hud-warn) 14%, transparent);
+        --hud-warn-border: color-mix(in srgb, var(--hud-warn) 44%, var(--hud-border));
+        --hud-warn-ink: color-mix(in srgb, var(--hud-warn) 52%, var(--hud-fg));
         --hud-danger-tint: color-mix(in srgb, var(--hud-danger) 13%, transparent);
         --hud-danger-border: color-mix(in srgb, var(--hud-danger) 44%, var(--hud-border));
         --hud-danger-ink: color-mix(in srgb, var(--hud-danger) 52%, var(--hud-fg));
@@ -1419,6 +1457,11 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
       background: var(--hud-ok);
       flex-shrink: 0;
       animation: hudLiveDot 2.4s var(--ease-in-out) infinite;
+    }
+    .badge-warn {
+      border-color: var(--hud-warn-border);
+      background: var(--hud-warn-tint);
+      color: var(--hud-warn-ink);
     }
     .badge-danger {
       border-color: var(--hud-danger-border);
@@ -1715,6 +1758,16 @@ export function renderHudHtml(customClientRenderer = renderHudClientScript) {
       background: var(--hud-primary-tint-hover);
       border-color: var(--hud-primary);
       color: var(--hud-primary-ink);
+    }
+    .action-btn-warn {
+      border-color: var(--hud-warn-border);
+      color: var(--hud-warn-ink);
+      background: var(--hud-warn-tint);
+      font-weight: 600;
+    }
+    .action-btn-warn:hover {
+      border-color: var(--hud-warn);
+      color: var(--hud-warn-ink);
     }
     .action-btn-danger {
       border-color: var(--hud-danger-border);

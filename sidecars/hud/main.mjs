@@ -44,6 +44,7 @@ import {
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
+  getFreshRoutingHint,
   highlightMatch,
   parseWorkflowStageLabel,
   prepareLoftSrcdoc,
@@ -51,6 +52,7 @@ import {
   renderHudHtml,
   renderSafeMarkdown,
   resolveWorkflowStageState,
+  resolveWorkspaceControlState,
   selectCurrentMode,
 } from './ui.mjs';
 import {
@@ -69,7 +71,10 @@ import {
   defaultPluginDataDir,
   defaultRuntimeDir,
   desktopHudRegistryFile,
+  pauseWorkspaceExecution,
+  readPauseState,
   resolvePluginRoot,
+  resumeWorkspaceExecution,
 } from '../../hooks/omagy-host.mjs';
 
 const ALLOWED_HUD_HOSTS = new Set(['antigravity', 'claude', 'codex']);
@@ -94,6 +99,7 @@ export {
   formatAgreementCard,
   formatScopeLabel,
   formatWorkspaceName,
+  getFreshRoutingHint,
   highlightMatch,
   parseWorkflowStageLabel,
   prepareLoftSrcdoc,
@@ -101,6 +107,7 @@ export {
   renderHudHtml,
   renderSafeMarkdown,
   resolveWorkflowStageState,
+  resolveWorkspaceControlState,
   selectCurrentMode,
 };
 
@@ -1189,11 +1196,14 @@ function readModeFilesInDir(dir, sessionLabel = 'shared', scopeLabel = '.') {
     const updatedMs = Date.parse(data.updated_at || '') || st.mtimeMs || 0;
     const phase = String(data.current_phase || 'unknown');
     const isTerminal = TERMINAL.has(phase.toLowerCase()) || Boolean(data.completed_at);
+    const isPaused = Boolean(data.paused === true && !isTerminal);
     const awaitingConfirmation = isAwaitingConfirmation({ data, mtimeMs: st.mtimeMs });
-    const isStale = Boolean(data.active === true && !isTerminal && !awaitingConfirmation && Date.now() - updatedMs > STALE_MS);
+    const isStale = Boolean(data.active === true && !isTerminal && !awaitingConfirmation && !isPaused && Date.now() - updatedMs > STALE_MS);
     out.push({
       mode: String(data.mode || m[1]),
-      active: data.active === true && !isTerminal,
+      active: data.active === true && !isTerminal && !isPaused,
+      paused: isPaused,
+      pausedAt: isPaused ? String(data.paused_at || '') : '',
       phase,
       iteration: data.iteration ?? null,
       updatedAt: data.updated_at || new Date(st.mtimeMs).toISOString(),
@@ -1206,6 +1216,28 @@ function readModeFilesInDir(dir, sessionLabel = 'shared', scopeLabel = '.') {
       raw: data,
     });
   }
+  return out;
+}
+
+function readAllScopeModes(stateDir, scopeLabel = '.', maxSessions = 0) {
+  const scopePrefix = scopeLabel && scopeLabel !== '.' ? `${scopeLabel}/` : '';
+  const out = [...readModeFilesInDir(stateDir, `${scopePrefix}shared`, scopeLabel)];
+  const sessionsDir = path.join(stateDir, 'sessions');
+  try {
+    if (fs.existsSync(sessionsDir) && !fs.lstatSync(sessionsDir).isSymbolicLink()) {
+      let entries = fs.readdirSync(sessionsDir).map((name) => {
+        const p = path.join(sessionsDir, name);
+        try {
+          const st = fs.lstatSync(p);
+          return st.isDirectory() && !st.isSymbolicLink() ? { name, path: p, mtimeMs: st.mtimeMs } : null;
+        } catch { /* fail open: skip unreadable session entry */ return null; }
+      }).filter(Boolean).sort((a, b) => b.mtimeMs - a.mtimeMs);
+      if (maxSessions > 0) entries = entries.slice(0, maxSessions);
+      for (const sess of entries) {
+        out.push(...readModeFilesInDir(sess.path, `${scopePrefix}${sess.name.slice(0, 12)}`, scopeLabel));
+      }
+    }
+  } catch { /* fail open: sessions directory unavailable */ }
   return out;
 }
 
@@ -1486,20 +1518,7 @@ export function resolveActiveConversationCandidates(workspaceRoot = process.cwd(
 
   try {
     const stateRoot = resolveStateRoot(uriToFsPath(workspaceRoot) || workspaceRoot || process.cwd());
-    const stateDir = path.join(stateRoot, '.omagy', 'state');
-    const records = [...readModeFilesInDir(stateDir, 'shared')];
-    const sessionsDir = path.join(stateDir, 'sessions');
-    if (fs.existsSync(sessionsDir) && !fs.lstatSync(sessionsDir).isSymbolicLink()) {
-      for (const name of fs.readdirSync(sessionsDir)) {
-        const p = path.join(sessionsDir, name);
-        try {
-          const st = fs.lstatSync(p);
-          if (st.isDirectory() && !st.isSymbolicLink()) {
-            records.push(...readModeFilesInDir(p, name.slice(0, 12)));
-          }
-        } catch { /* fail open: skip unreadable session directory */ }
-      }
-    }
+    const records = readAllScopeModes(path.join(stateRoot, '.omagy', 'state'), '.');
     const sorted = records
       .filter((r) => validIdRe.test(r.owner))
       .sort((a, b) => b.updatedMs - a.updatedMs);
@@ -1732,6 +1751,127 @@ export async function dispatchHudActionAsync(payload = {}, options = {}) {
   );
 }
 
+/** Execute authenticated HUD workflow pause/resume control on server-vetted workspace/scope roots. */
+export async function handleWorkflowControl(payload = {}, options = {}) {
+  const action = String(payload?.action || '').trim().toLowerCase();
+  if (action !== 'pause' && action !== 'resume') {
+    return { ok: false, status: 400, error: `Invalid workflow control action: ${action || '(empty)'}` };
+  }
+  const rawVetted = Array.isArray(options.vettedRoots) && options.vettedRoots.length
+    ? options.vettedRoots
+    : (options.workspaceRoot ? [options.workspaceRoot] : []);
+  const vettedBases = [];
+  const seenBases = new Set();
+  for (const r of rawVetted) {
+    const fsPath = uriToFsPath(r) || String(r || '').trim();
+    if (!fsPath) continue;
+    const abs = path.resolve(fsPath);
+    const canon = canonicalizePath(abs);
+    if (!seenBases.has(canon)) {
+      seenBases.add(canon);
+      vettedBases.push({ abs, canon });
+    }
+  }
+  if (!vettedBases.length) {
+    return { ok: false, status: 400, error: 'no_vetted_workspace' };
+  }
+
+  let selectedBase = vettedBases[0];
+  const rawWs = String(payload?.workspace || '').trim();
+  if (rawWs) {
+    const wsFs = uriToFsPath(rawWs) || rawWs;
+    const wsCanon = canonicalizePath(path.resolve(wsFs));
+    let matched = vettedBases.find((b) => b.canon === wsCanon);
+    if (!matched) {
+      for (const b of vettedBases) {
+        const scHit = discoverOmagyScopes(b.abs, 3, 150).find((sc) => canonicalizePath(sc.root) === wsCanon);
+        if (scHit) { matched = { abs: path.resolve(scHit.root), canon: wsCanon }; break; }
+      }
+    }
+    if (!matched) return { ok: false, status: 403, error: 'forbidden_workspace' };
+    selectedBase = matched;
+  }
+
+  const rawScope = String(payload?.scope || '').trim().replace(/\\/g, '/');
+  let targetRoots = [selectedBase.abs];
+  if (rawScope && rawScope !== '.') {
+    if (rawScope === 'all') {
+      const childScopes = discoverOmagyScopes(selectedBase.abs, 3, 150);
+      const extras = [];
+      for (const sc of childScopes) {
+        const scRoot = path.resolve(sc.root);
+        if (canonicalizePath(scRoot) === selectedBase.canon) continue;
+        const scModes = readAllScopeModes(path.join(scRoot, '.omagy', 'state'), sc.scope);
+        if (action === 'pause') {
+          if (scModes.some((m) => m.active && !m.stale)) extras.push(scRoot);
+        } else if (readPauseState([scRoot]).paused || scModes.some((m) => m.paused)) {
+          extras.push(scRoot);
+        }
+      }
+      targetRoots = [selectedBase.abs, ...extras];
+    } else {
+      if (path.isAbsolute(rawScope) || rawScope.includes('\0') || rawScope.split('/').some((s) => s === '..')) {
+        return { ok: false, status: 400, error: 'invalid_scope' };
+      }
+      const normScope = rawScope.replace(/^\/+|\/+$/g, '');
+      const scMatch = discoverOmagyScopes(selectedBase.abs, 3, 150).find((sc) => String(sc.scope || '').replace(/\\/g, '/') === normScope);
+      if (!scMatch) return { ok: false, status: 403, error: 'forbidden_scope' };
+      targetRoots = [path.resolve(scMatch.root)];
+    }
+  }
+
+  if (action === 'pause') {
+    const pausedModes = [];
+    let pausedAt = '';
+    let alreadyPaused = true;
+    for (const r of targetRoots) {
+      const res = pauseWorkspaceExecution(r, { source: 'hud', reason: payload?.reason || 'Paused via oh-my-agy HUD' });
+      if (!res.ok) return { ok: false, status: 400, error: res.error || 'pause_failed' };
+      if (!pausedAt && res.pausedAt) pausedAt = res.pausedAt;
+      if (!res.alreadyPaused) alreadyPaused = false;
+      pausedModes.push(...(res.pausedModes || []));
+    }
+    return { ok: true, status: 200, action: 'pause', alreadyPaused, pausedAt, pausedModes };
+  }
+
+  const resumedModes = [];
+  let wasPaused = false;
+  let resumedAt = '';
+  for (const r of targetRoots) {
+    const res = resumeWorkspaceExecution(r, { source: 'hud' });
+    if (!res.ok) return { ok: false, status: 400, error: res.error || 'resume_failed' };
+    if (res.wasPaused) wasPaused = true;
+    if (!resumedAt && res.resumedAt) resumedAt = res.resumedAt;
+    resumedModes.push(...(res.resumedModes || []));
+  }
+  let dispatch = null;
+  if (payload?.dispatchResume !== false) {
+    dispatch = await dispatchHudActionAsync(
+      {
+        mode: 'active-chat',
+        prompt: 'continue',
+        workspace: targetRoots[0],
+        conversationId: payload?.conversationId,
+      },
+      { ...options, workspaceRoot: targetRoots[0] },
+    );
+  }
+  return {
+    ok: true,
+    status: 200,
+    action: 'resume',
+    wasPaused,
+    resumedAt,
+    resumedModes,
+    dispatch,
+    ...(dispatch && dispatch.modeUsed === 'clipboard-handoff' ? {
+      modeUsed: dispatch.modeUsed,
+      clipboardPrompt: dispatch.clipboardPrompt,
+      copiedToClipboard: dispatch.copiedToClipboard,
+    } : {}),
+  };
+}
+
 function canonicalizeForDigest(value, isRoot = false) {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value === undefined ? null : value);
@@ -1830,34 +1970,11 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   const seenModeKeys = new Set();
 
   for (const sc of scopeEntries) {
-    const scopePrefix = sc.scope && sc.scope !== '.' ? `${sc.scope}/` : '';
     const stateDir = path.join(sc.root, '.omagy', 'state');
-    for (const m of readModeFilesInDir(stateDir, `${scopePrefix}shared`, sc.scope)) {
-      const k = `${sc.root}:shared:${m.mode}`;
+    for (const m of readAllScopeModes(stateDir, sc.scope, 5)) {
+      const k = `${sc.root}:${m.session}:${m.mode}`;
       if (!seenModeKeys.has(k)) { seenModeKeys.add(k); allModeRecords.push(m); }
     }
-    const sessionsDir = path.join(stateDir, 'sessions');
-    try {
-      if (fs.existsSync(sessionsDir) && !fs.lstatSync(sessionsDir).isSymbolicLink()) {
-        const sessEntries = fs.readdirSync(sessionsDir)
-          .map((name) => {
-            const p = path.join(sessionsDir, name);
-            try {
-              const st = fs.lstatSync(p);
-              return st.isDirectory() && !st.isSymbolicLink() ? { name, path: p, mtimeMs: st.mtimeMs } : null;
-            } catch { /* fail open: skip unreadable session entry */ return null; }
-          })
-          .filter(Boolean)
-          .sort((a, b) => b.mtimeMs - a.mtimeMs)
-          .slice(0, 5);
-        for (const sess of sessEntries) {
-          for (const m of readModeFilesInDir(sess.path, `${scopePrefix}${sess.name.slice(0, 12)}`, sc.scope)) {
-            const k = `${sc.root}:${sess.name}:${m.mode}`;
-            if (!seenModeKeys.has(k)) { seenModeKeys.add(k); allModeRecords.push(m); }
-          }
-        }
-      }
-    } catch { /* fail open: sessions directory unavailable */ }
   }
 
   const modes = allModeRecords.map(({ raw: _raw, ...rest }) => rest);
@@ -2706,15 +2823,47 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
   // 10. Auto-discovered Plugin Catalog (Skills, Subagents, Workflows)
   const catalog = buildPluginCatalog(PLUGIN_ROOT, modes);
 
+  // 10.5 Durable workspace pause state across primary and inner scopes
+  const pauseStatesByScope = {};
+  const absPrimaryRoot = path.resolve(primaryRoot);
+  let primaryPauseState = { paused: false, pausedAt: '', source: '', reason: '', pausedModes: [], scope: '.' };
+  let firstPausedScopeState = null;
+  for (const sc of scopeEntries) {
+    const pInfo = readPauseState([sc.root]);
+    const pModes = pInfo.paused && Array.isArray(pInfo.data?.paused_modes)
+      ? pInfo.data.paused_modes.map((pm) => ({ file: String(pm.file || ''), mode: String(pm.mode || ''), previousPhase: String(pm.previous_phase || 'unknown') }))
+      : [];
+    const entry = {
+      paused: Boolean(pInfo.paused),
+      pausedAt: pInfo.paused ? String(pInfo.data?.paused_at || '') : '',
+      source: pInfo.paused ? String(pInfo.data?.source || 'hud') : '',
+      reason: pInfo.paused ? String(pInfo.data?.reason || '') : '',
+      pausedModes: pModes,
+      scope: sc.scope,
+    };
+    if (!pauseStatesByScope[sc.scope] || (!pauseStatesByScope[sc.scope].paused && entry.paused)) {
+      pauseStatesByScope[sc.scope] = entry;
+    }
+    if (sc.root === absPrimaryRoot) primaryPauseState = entry;
+    if (entry.paused && !firstPausedScopeState) firstPausedScopeState = entry;
+  }
+  const pauseState = primaryPauseState.paused ? primaryPauseState : (firstPausedScopeState || primaryPauseState);
+
   // Minimal statusline string
   const activeModes = modes.filter((m) => m.active && !m.stale);
-  const minimalParts = activeModes.map((m) => `${m.mode}:${m.phase}`);
-  if (ultragoal) minimalParts.push(`ultragoal:${ultragoal.counts.complete}/${ultragoal.counts.total}`);
-  for (const t of teams) {
-    const done = t.tasks.filter((x) => x.status === 'completed' || x.status === 'complete').length;
-    minimalParts.push(`team:${t.team} ${done}/${t.tasks.length}`);
+  const pausedModesList = modes.filter((m) => m.paused);
+  const anyPaused = Boolean(pauseState.paused || pausedModesList.length);
+  const minimalParts = (anyPaused ? pausedModesList : activeModes).map((m) => `${m.mode}:${m.phase}`);
+  if (!anyPaused && ultragoal) minimalParts.push(`ultragoal:${ultragoal.counts.complete}/${ultragoal.counts.total}`);
+  if (!anyPaused) {
+    for (const t of teams) {
+      const done = t.tasks.filter((x) => x.status === 'completed' || x.status === 'complete').length;
+      minimalParts.push(`team:${t.team} ${done}/${t.tasks.length}`);
+    }
   }
-  const statusLine = minimalParts.length ? `[OMA] ${minimalParts.join(' | ')}` : '[OMA] No active modes';
+  const statusLine = anyPaused
+    ? (minimalParts.length ? `[OMA] PAUSED | ${minimalParts.join(' | ')}` : '[OMA] PAUSED')
+    : (minimalParts.length ? `[OMA] ${minimalParts.join(' | ')}` : '[OMA] No active modes');
 
   const snapshotPayload = {
     at: new Date(nowMs).toISOString(),
@@ -2723,6 +2872,8 @@ export function buildHudSnapshot(rawWorkspaces = [], nowMs = Date.now(), preferr
     workspaces: roots,
     trackedScopes,
     statusLine,
+    pauseState,
+    pauseStatesByScope,
     allowedViews: ALLOWED_VIEWS,
     host: normalizeExplicitHudHost(extraOpts?.host),
     modes,
@@ -2883,6 +3034,21 @@ export function createHudServer(token, options = {}) {
   const maxSseClients = Math.max(1, Number(options.maxSseClients ?? 2));
   const forceFlatWatch = Boolean(options.forceFlatWatch);
   const activeSseCleanups = new Set();
+  const seenWorkspaceRoots = new Set();
+  const recordSeenWorkspaces = (list) => {
+    if (pinnedWorkspaceRoot || options.workspaceRoot) return;
+    for (const w of Array.isArray(list) ? list : []) {
+      const p = uriToFsPath(w) || String(w || '').trim();
+      if (!p) continue;
+      const abs = path.resolve(p);
+      if (seenWorkspaceRoots.has(abs)) continue;
+      if (seenWorkspaceRoots.size >= 32) {
+        const oldest = seenWorkspaceRoots.values().next().value;
+        if (oldest) seenWorkspaceRoots.delete(oldest);
+      }
+      seenWorkspaceRoots.add(abs);
+    }
+  };
   const sessionSecret = crypto.randomBytes(32);
   let activeDispatches = 0;
   const dispatchTimestamps = [];
@@ -3010,6 +3176,7 @@ export function createHudServer(token, options = {}) {
       }
       const { workspaces, activeRoot } = resolveScopedWorkspaces();
       const snap = buildHudSnapshot(workspaces, Date.now(), activeRoot, { host: hudHost });
+      recordSeenWorkspaces([...workspaces, ...(snap.workspaces || []), snap.workspace]);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(snap));
       return;
@@ -3027,6 +3194,8 @@ export function createHudServer(token, options = {}) {
         if (activeSseCleanups.size >= prevSize) activeSseCleanups.delete(oldestCleanup);
       }
       const { workspaces, activeRoot } = resolveScopedWorkspaces();
+      const resolvedForSeen = resolveWorkspaceRoots(workspaces, options.workspaceRoot || '', activeRoot);
+      recordSeenWorkspaces([...workspaces, ...(resolvedForSeen.roots || []), resolvedForSeen.primaryRoot]);
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
@@ -3165,7 +3334,7 @@ export function createHudServer(token, options = {}) {
       res.on('error', cleanupClient);
       return;
     }
-    if (req.method === 'POST' && reqUrl.pathname === '/api/dispatch') {
+    const handleAuthenticatedJsonPost = (onPayload) => {
       if (desktopServe) {
         const originHdr = String(req.headers.origin || '').trim().toLowerCase();
         const secSiteHdr = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
@@ -3236,18 +3405,11 @@ export function createHudServer(token, options = {}) {
             res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
             return;
           }
-          const dispatchOpts = {
-            ...options,
-            host: hudHost,
-            ...(pinnedWorkspaceRoot ? { workspaceRoot: pinnedWorkspaceRoot } : {}),
-            allowPayloadWsUrl: desktopServe ? false : Boolean(options.allowPayloadWsUrl),
-            skillSlugs: getSkillSlugs(),
-          };
           let result;
           try {
-            result = await dispatchHudActionAsync(payload, dispatchOpts);
-          } catch (err) { /* fail open: return 500 JSON when async dispatch rejects */
-            result = { ok: false, status: 500, error: redactSecrets(String(err?.message || err || 'Dispatch failed')) };
+            result = await onPayload(payload);
+          } catch (err) { /* fail open: return 500 JSON when async handler rejects */
+            result = { ok: false, status: 500, error: redactSecrets(String(err?.message || err || 'Request failed')) };
           }
           if (!res.headersSent) {
             res.writeHead(result.status || (result.ok ? 200 : 400), { 'Content-Type': 'application/json; charset=utf-8' });
@@ -3257,6 +3419,33 @@ export function createHudServer(token, options = {}) {
           releaseDispatch();
         }
       });
+    };
+    if (req.method === 'POST' && reqUrl.pathname === '/api/dispatch') {
+      handleAuthenticatedJsonPost((payload) => dispatchHudActionAsync(payload, {
+        ...options,
+        host: hudHost,
+        ...(pinnedWorkspaceRoot ? { workspaceRoot: pinnedWorkspaceRoot } : {}),
+        allowPayloadWsUrl: desktopServe ? false : Boolean(options.allowPayloadWsUrl),
+        skillSlugs: getSkillSlugs(),
+      }));
+      return;
+    }
+    if (req.method === 'POST' && reqUrl.pathname === '/api/workflow-control') {
+      const envWs = process.env.OMAGY_WORKSPACE ? [path.resolve(uriToFsPath(process.env.OMAGY_WORKSPACE) || process.env.OMAGY_WORKSPACE)] : [];
+      const vettedRoots = pinnedWorkspaceRoot
+        ? [pinnedWorkspaceRoot]
+        : (options.workspaceRoot
+            ? [path.resolve(uriToFsPath(options.workspaceRoot) || options.workspaceRoot)]
+            : (seenWorkspaceRoots.size > 0
+                ? [...seenWorkspaceRoots, ...envWs]
+                : [...resolveScopedWorkspaces().workspaces, ...envWs]));
+      handleAuthenticatedJsonPost((payload) => handleWorkflowControl(payload, {
+        ...options,
+        host: hudHost,
+        vettedRoots,
+        allowPayloadWsUrl: desktopServe ? false : Boolean(options.allowPayloadWsUrl),
+        skillSlugs: getSkillSlugs(),
+      }));
       return;
     }
     if (req.method === 'GET' && reqUrl.pathname === '/api/wiki-search') {

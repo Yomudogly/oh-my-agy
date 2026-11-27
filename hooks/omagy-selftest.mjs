@@ -22,8 +22,12 @@ import {
   normalizeLifecycleEvent,
   normalizeLifecyclePayload,
   parseGuardScope,
+  PAUSE_FILENAME,
+  pauseWorkspaceExecution,
+  readPauseState,
   resolveCodexVersion,
   resolvePluginRoot,
+  resumeWorkspaceExecution,
   serializeHookOutcome,
 } from './omagy-host.mjs';
 import {
@@ -3515,7 +3519,7 @@ export async function runSelftest() {
       const claudeEventsOk = JSON.stringify(Object.keys(claudeHooksDoc.hooks || {})) === JSON.stringify(wiredEvents);
       const codexEventsOk = JSON.stringify(Object.keys(codexHooksDoc.hooks || {})) === JSON.stringify(wiredEvents)
         && String(codexHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '').includes('apply_patch')
-        && String(claudeHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '') === 'Write|Edit|MultiEdit|NotebookEdit|Read';
+        && String(claudeHooksDoc.hooks?.PreToolUse?.[0]?.matcher || '') === 'Write|Edit|MultiEdit|NotebookEdit|Read|Bash|Task|Agent';
 
       fs.appendFileSync(path.join(codexHome, 'agents', 'explore.toml'), '\nsandbox_mode = "danger-full-access"\n', 'utf8');
       const xTamperVal = validateHostBundle({ host: 'codex', dir: codexBundle, workspace: codexProj, codexHome, scope: 'user', pluginRoot, strict: true });
@@ -5092,6 +5096,143 @@ export async function runSelftest() {
       t68Detail = e instanceof Error ? e.message : String(e);
     }
     check('T68: G3 Windows Claude exec-form hooks, settings.local.json conflict, Codex symlink alias & terminal Stop schema pass', t68Ok, t68Detail);
+
+    // T69: Durable workspace pause/resume (.omagy/state/pause.json), PreInvocation/PreToolUse/Stop fence, chat recovery & symlink safety
+    let t69Ok = false;
+    let t69Detail = '';
+    try {
+      const t69Ws = path.join(ws, 't69-pause');
+      const t69StDir = path.join(t69Ws, '.omagy', 'state');
+      const t69SessDir = path.join(t69StDir, 'sessions', 'conv-t69');
+      fs.mkdirSync(t69SessDir, { recursive: true });
+      const apPath = path.join(t69StDir, 'autopilot-state.json');
+      const ugPath = path.join(t69SessDir, 'ultragoal-state.json');
+      const oldTs = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+      writeJson(apPath, { mode: 'autopilot', active: true, current_phase: 'ultragoal', iteration: 2, updated_at: now, state: { handoff_artifacts: { deep_interview: { spec_path: '.omagy/specs/p.md' } } } });
+      writeJson(ugPath, { mode: 'ultragoal', active: true, current_phase: 'executing', updated_at: now });
+
+      // T-PAUSE-1: Durable round-trip, session-scoped modes, no phantom mode, double-pause union, >7h anti-stale
+      const p1 = pauseWorkspaceExecution(t69Ws, { source: 'hud' });
+      const p2 = pauseWorkspaceExecution(t69Ws, { source: 'hud' });
+      const apPaused = readJson(apPath);
+      const ugPaused = readJson(ugPath);
+      const loadedWhilePaused = loadModeStates(t69Ws);
+      const noPhantom = !loadedWhilePaused.some((m) => m.mode === 'pause');
+      writeJson(apPath, { ...apPaused, updated_at: oldTs, paused_at: oldTs });
+      const staleSafePaused = readPauseState([t69Ws]).paused === true;
+      const r1 = resumeWorkspaceExecution(t69Ws);
+      const apResumed = readJson(apPath);
+      const ugResumed = readJson(ugPath);
+      const tPause1Ok = PAUSE_FILENAME === 'pause.json'
+        && p1.ok === true && p1.alreadyPaused === false && p1.pausedModes.length === 2
+        && p2.ok === true && p2.alreadyPaused === true && p2.pausedModes.length === 2
+        && apPaused.active === false && apPaused.paused === true && apPaused.current_phase === 'ultragoal' && apPaused.iteration === 2 && apPaused.completed_at === undefined
+        && apPaused.state?.handoff_artifacts?.deep_interview?.spec_path === '.omagy/specs/p.md'
+        && ugPaused.active === false && ugPaused.paused === true && ugPaused.current_phase === 'executing'
+        && noPhantom && staleSafePaused
+        && r1.ok === true && r1.wasPaused === true && r1.resumedModes.length === 2
+        && !fs.existsSync(path.join(t69StDir, 'pause.json'))
+        && apResumed.active === true && apResumed.paused === undefined && apResumed.current_phase === 'ultragoal' && apResumed.iteration === 2
+        && ugResumed.active === true && ugResumed.paused === undefined && ugResumed.current_phase === 'executing';
+
+      // T-PAUSE-2: Stateless pause, Read exemption, Antigravity & Claude/Codex tool fence, PreInvocation & Stop
+      const statelessWs = path.join(ws, 't69-stateless');
+      fs.mkdirSync(path.join(statelessWs, 'src'), { recursive: true });
+      const stFile = path.join(statelessWs, 'src', 'a.js');
+      fs.writeFileSync(stFile, 'export const a = 1;\n');
+      const sp = pauseWorkspaceExecution(statelessWs, { source: 'hud' });
+      const agWriteBlocked = preToolUse({ conversationId: `${conv}-t69s`, workspacePaths: [statelessWs], toolCall: { name: 'write_file', args: { Path: stFile } } }, { guardScope: 'write' });
+      const agReadAllowed = preToolUse({ conversationId: `${conv}-t69s`, workspacePaths: [statelessWs], toolCall: { name: 'read_file', args: { Path: stFile } } }, { guardScope: 'write' });
+      const clWriteBlocked = preToolUse({ host: 'claude', session_id: `${conv}-t69c`, cwd: statelessWs, tool_name: 'Write', tool_input: { file_path: stFile } });
+      const clBashBlocked = preToolUse({ host: 'claude', session_id: `${conv}-t69c`, cwd: statelessWs, tool_name: 'Bash', tool_input: { command: 'ls' } });
+      const clTaskBlocked = preToolUse({ host: 'claude', session_id: `${conv}-t69c`, cwd: statelessWs, tool_name: 'Task', tool_input: { prompt: 'hi' } });
+      const clReadAllowed = preToolUse({ host: 'claude', session_id: `${conv}-t69c`, cwd: statelessWs, tool_name: 'Read', tool_input: { file_path: stFile } });
+      const clDenyWire = serializeHookOutcome('pre-tool-use', clBashBlocked, 'claude');
+      const cxDenyWire = serializeHookOutcome('pre-tool-use', clBashBlocked, 'codex', { codexVersion: '0.167.0' });
+      const cxLegacyWire = serializeHookOutcome('pre-tool-use', clBashBlocked, 'codex', { codexVersion: '0.118.0' });
+      const agPreInv = preInvocation({ conversationId: `${conv}-t69s`, workspacePaths: [statelessWs], invocationNum: 1, lastUserInput: 'keep editing' });
+      const clPreInv = preInvocation({ host: 'claude', session_id: `${conv}-t69c`, cwd: statelessWs, prompt: 'keep editing' });
+      const stStop = await stop({ conversationId: `${conv}-t69s`, workspacePaths: [statelessWs], terminationReason: 'NO_TOOL_CALL' });
+      resumeWorkspaceExecution(statelessWs);
+      const agWriteAfter = preToolUse({ conversationId: `${conv}-t69s`, workspacePaths: [statelessWs], toolCall: { name: 'write_file', args: { Path: stFile } } }, { guardScope: 'write' });
+      const clBashAfter = preToolUse({ host: 'claude', session_id: `${conv}-t69c`, cwd: statelessWs, tool_name: 'Bash', tool_input: { command: 'ls' } });
+      const tPause2Ok = sp.ok === true && sp.pausedModes.length === 0
+        && agWriteBlocked.decision === 'deny' && agReadAllowed.decision === 'allow'
+        && clWriteBlocked.decision === 'deny' && clBashBlocked.decision === 'deny' && clTaskBlocked.decision === 'deny'
+        && Object.keys(clReadAllowed).length === 0
+        && clDenyWire.hookSpecificOutput?.permissionDecision === 'deny'
+        && cxDenyWire.hookSpecificOutput?.permissionDecision === 'deny'
+        && typeof cxLegacyWire.systemMessage === 'string' && cxLegacyWire.systemMessage.includes('paused')
+        && agPreInv.terminationBehavior === 'terminate' && Boolean(agPreInv.injectSteps?.[0]?.systemMessage?.metadata?.user_markdown)
+        && Array.isArray(clPreInv.injectSteps) && clPreInv.injectSteps.length === 1
+        && stStop.decision === 'stop'
+        && agWriteAfter.decision === 'allow' && Object.keys(clBashAfter).length === 0;
+
+      // T-PAUSE-3: Mid-turn non-self-unpause (primed & cold-start), subagent fence, repeat continue & /cancel recovery
+      const cConv = `${conv}-t69r`;
+      const coldConv = `${conv}-t69cold`;
+      sessionStart({ conversationId: coldConv, workspacePaths: [t69Ws] });
+      preInvocation({ conversationId: cConv, workspacePaths: [t69Ws], invocationNum: 1, lastUserInput: 'continue' });
+      pauseWorkspaceExecution(t69Ws, { source: 'hud' });
+      const coldMidTurn = preInvocation({ conversationId: coldConv, workspacePaths: [t69Ws], invocationNum: 2, lastUserInput: 'continue' });
+      const stillAfterColdMid = readPauseState([t69Ws]).paused === true;
+      const midTurn = preInvocation({ conversationId: cConv, workspacePaths: [t69Ws], invocationNum: 2, lastUserInput: 'continue' });
+      const stillAfterMid = readPauseState([t69Ws]).paused === true;
+      const subBlocked = preInvocation({ conversationId: `${cConv}-sub`, workspacePaths: [t69Ws], isSubagent: true, invocationNum: 1, lastUserInput: 'continue' });
+      const stillAfterSub = readPauseState([t69Ws]).paused === true;
+      const unrelated = preInvocation({ conversationId: cConv, workspacePaths: [t69Ws], invocationNum: 1, lastUserInput: 'check status' });
+      const stillAfterUnrel = readPauseState([t69Ws]).paused === true;
+      const repeatCont = preInvocation({ conversationId: cConv, workspacePaths: [t69Ws], invocationNum: 1, lastUserInput: 'continue' });
+      const contSteps = (repeatCont.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '');
+      const clearedAfterCont = readPauseState([t69Ws]).paused === false && readJson(apPath)?.active === true;
+      pauseWorkspaceExecution(t69Ws, { source: 'hud' });
+      const cancelRec = preInvocation({ conversationId: cConv, workspacePaths: [t69Ws], invocationNum: 1, lastUserInput: '/cancel' });
+      const cancelSteps = (cancelRec.injectSteps || []).map((s) => s?.systemMessage?.systemMessage || '');
+      const clearedAfterCancel = readPauseState([t69Ws]).paused === false && readJson(apPath)?.active === true;
+      const tPause3Ok = coldMidTurn.terminationBehavior === 'terminate' && stillAfterColdMid
+        && midTurn.terminationBehavior === 'terminate' && stillAfterMid
+        && subBlocked.terminationBehavior === 'terminate' && stillAfterSub
+        && unrelated.terminationBehavior === 'terminate' && stillAfterUnrel
+        && repeatCont.terminationBehavior === undefined && clearedAfterCont
+        && contSteps.some((t) => t.includes('[oh-my-agy] Active workflow state:'))
+        && cancelRec.terminationBehavior === undefined && clearedAfterCancel
+        && cancelSteps.some((t) => t.includes('[oh-my-agy] Skill routing:') && t.includes('$cancel'));
+
+      // T-PAUSE-4: Symlink containment on pause.json, .omagy/state, and session mode file
+      let tPause4Ok = true;
+      if (process.platform !== 'win32') {
+        const symWs = path.join(ws, 't69-sym');
+        const extFile = path.join(ws, 't69-outside.json');
+        fs.writeFileSync(extFile, JSON.stringify({ paused: true }));
+        fs.mkdirSync(path.join(symWs, '.omagy', 'state'), { recursive: true });
+        fs.symlinkSync(extFile, path.join(symWs, '.omagy', 'state', 'pause.json'));
+        const symRead = readPauseState([symWs]);
+        const symPause = pauseWorkspaceExecution(symWs);
+        const symResume = resumeWorkspaceExecution(symWs);
+        const symStateWs = path.join(ws, 't69-sym-dir');
+        const extDir = path.join(ws, 't69-outside-dir');
+        fs.mkdirSync(extDir, { recursive: true });
+        fs.mkdirSync(path.join(symStateWs, '.omagy'), { recursive: true });
+        fs.symlinkSync(extDir, path.join(symStateWs, '.omagy', 'state'));
+        const symDirPause = pauseWorkspaceExecution(symStateWs);
+        const symSessWs = path.join(ws, 't69-sym-sess');
+        const extModeFile = path.join(ws, 't69-outside-mode.json');
+        const extModeOrig = JSON.stringify({ mode: 'autopilot', active: true, current_phase: 'ultragoal' });
+        fs.writeFileSync(extModeFile, extModeOrig);
+        fs.mkdirSync(path.join(symSessWs, '.omagy', 'state', 'sessions', 'conv-1'), { recursive: true });
+        fs.symlinkSync(extModeFile, path.join(symSessWs, '.omagy', 'state', 'sessions', 'conv-1', 'mode-state.json'));
+        const symSessPause = pauseWorkspaceExecution(symSessWs);
+        const extModeUnchanged = fs.readFileSync(extModeFile, 'utf8') === extModeOrig;
+        tPause4Ok = symRead.paused === false && symPause.ok === false && symResume.ok === false && symDirPause.ok === false
+          && symSessPause.ok === true && symSessPause.pausedModes.length === 0 && extModeUnchanged;
+      }
+
+      t69Ok = tPause1Ok && tPause2Ok && tPause3Ok && tPause4Ok;
+      t69Detail = `p1=${tPause1Ok} p2=${tPause2Ok} p3=${tPause3Ok} p4=${tPause4Ok}`;
+    } catch (e) { /* fail open: capture T69 error detail */
+      t69Detail = e instanceof Error ? e.message : String(e);
+    }
+    check('T69: Durable pause.json round-trip, stateless/cross-host tool fence, mid-turn/subagent guard, chat continue/cancel recovery & symlink containment pass', t69Ok, t69Detail);
 
     const leaked = fs.existsSync(path.join(defaultTmpRuntime, `${conv}.routing.json`));
     check('selftest isolates runtime files from system tmpdir', !leaked);
