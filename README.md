@@ -23,7 +23,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 
 - **How to Open**: Run `/hud` in chat and click `[oh-my-agy HUD](sidecar://oh-my-agy/hud/)`, or toggle **Oh My Agy** in Antigravity's Auxiliary Pane extensions bar.
 - **Real-Time Multi-Workspace Workbench**: Streams `.omagy/` and `omagy_wiki/` changes over debounced `GET /api/events` SSE (`150 ms` watcher debounce + `15 s` fallback poll) with stateful DOM preservation, a top-bar multi-workspace switcher (`?activeRoot=`), inner-folder scope filter chips, one-click `Handoff` (`/hud --handoff`), and a `Cmd/Ctrl+K` Command Palette indexing Views, Skills, Subagents, Artifacts, and Wiki pages.
-- **Overview Telemetry, DAG Waves & Slide-Over `#artifact-drawer`**: Tracks the `Current Workflow Mode` spotlight with contextual remediation buttons (`/cancel`, `/doctor`, `/wiki lint`), Ultragoal & Team Task DAG wave progress with JSON `Receipt` previews (`.omagy/evidence/*.json`, `.omagy/plans/ralplan-review-*.json`), a 3-mode Visual Ralph comparator (`side-by-side`, `split-slider`, `onion-skin`), an opaque-origin `srcdoc` Loft prototype sandbox, Code Health & `floor-guard` KPIs, Google Stitch `DESIGN.md` WCAG contrast checks, Session Transcript Forensics, Notification readiness flags, and Doctor diagnostics.
+- **Overview Telemetry, Pause/Continue Control, DAG Waves & Slide-Over `#artifact-drawer`**: Tracks the `Current Workflow Mode` spotlight with a dynamic 3-state Workspace **`Pause` / `Continue`** execution control (`POST /api/workflow-control`, durable `.omagy/state/pause.json` + hook fence) and contextual remediation buttons (`/cancel`, `/doctor`, `/wiki lint`), Ultragoal & Team Task DAG wave progress with JSON `Receipt` previews (`.omagy/evidence/*.json`, `.omagy/plans/ralplan-review-*.json`), a 3-mode Visual Ralph comparator (`side-by-side`, `split-slider`, `onion-skin`), an opaque-origin `srcdoc` Loft prototype sandbox, Code Health & `floor-guard` KPIs, Google Stitch `DESIGN.md` WCAG contrast checks, Session Transcript Forensics, Notification readiness flags, and Doctor diagnostics.
 - **Interactive Launchers, Skill `SKILL.md` Previews & 3D `Wiki` Mind-Map**: Provides animated horizontally scrollable `Workflows` pipelines, inline-editable `agentapi` prompt launchers (`Run in Chat`, `Dispatch into Active Chat`, plus automatic clipboard handoff when no active chat is open), `--flag` composer chips, **`Preview` buttons on every `Skills` card** (`GET /api/skill-doc` rendering `SKILL.md` + `references/*.md` playbooks in `#artifact-drawer`), Subagent `Model` tier pills (`inherit` | `flash_lite` | `flash` | `pro`), and an interactive 3D Canvas `Wiki` mind-map (`3D Map` / `List` switch) with server-indexed `/api/wiki-search`, TOC jump chips, computed `[[slug]]` backlinks, `omagy_wiki/log.md` activity, and left-rule Working Agreements.
 
 > See [HOW_TO_USE.md — Section 7](HOW_TO_USE.md#7-live-auxiliary-pane-hud-sidecarshud) for the complete tab, keyboard shortcut, and security reference.
@@ -39,7 +39,7 @@ All workflow state is plain JSON and Markdown under `.omagy/`, and the lifecycle
 oh-my-agy/
 ├── .gitattributes            # LF line-ending normalization across POSIX & Windows checkouts
 ├── .github/workflows/ci.yml  # 3-OS GitHub Actions CI matrix (ubuntu, macos, windows on Node 24)
-├── plugin.json               # Antigravity manifest (v0.10.0, strict 10-key JSON · hooks 4 · mcpServers 1)
+├── plugin.json               # Antigravity manifest (v0.11.0, strict 10-key JSON · hooks 4 · mcpServers 1)
 ├── assets/
 │   ├── logo.png              # Transparent plugin icon (346x346)
 │   └── sidecar-hud.webp      # Live Aux Pane HUD showcase screenshot (<=2 MB WebP)
@@ -58,7 +58,7 @@ oh-my-agy/
 │   ├── omagy-skill.mjs       # lazy-loaded non-lifecycle CLI dispatcher + zero-dep `skill-validate` (`disable-slash-command`) & `skill-init` (`39` CLI subcommands)
 │   ├── omagy-cli.mjs         # lazy-loaded zero-dep cold CLI (<93.7 KB; 13 COLD_CLI_EVENTS)
 │   ├── omagy-audit.mjs       # lazy-loaded repo audit CLIs (`docs-drift [--git-staleness]`, `coverage-map`, `dep-license-diff`, `mcp-audit`, `tmpdir-audit`)
-│   ├── omagy-selftest.mjs    # lazy-loaded 104-check offline selftest suite (`T1`–`T10`, `T20`–`T68`)
+│   ├── omagy-selftest.mjs    # lazy-loaded 105-check offline selftest suite (`T1`–`T10`, `T20`–`T69`)
 │   └── skill-eval-cases.json # 23-skill positive + owner-paired negative routing benchmark corpus (100% rank-1, 0 collisions)
 ├── sidecars/hud/             # Modular Desktop-only HUD (`main.mjs` <175 KB + lazy `selftest.mjs` + `dispatch.mjs` + `ui.mjs` + `client.mjs`; `on-failure` restart)
 ├── agents/                   # 18 role subagents (`subagent`/`mainAgent`/`tools` + Gemini 4 `inherit`-first + `commandExecutionPolicy: sandbox`)

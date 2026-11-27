@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.0 — 2026-11-27
+### Dynamic HUD Pause / Continue Execution Control, Durable Pause Fence & Win32 Path Fix (`105/105` Selftest, HUD `H1`–`H30`)
+- **Dynamic 3-State Workspace `Pause` / `Continue` Control in HUD (`sidecars/hud/{main,ui,client,selftest}.mjs`, `H30`)**:
+  - Added a dynamic `Pause` / `Continue` primary button in the HUD `Overview` -> `Workspace` block driven by shared `resolveWorkspaceControlState` and `getFreshRoutingHint` helpers (`sidecars/hud/ui.mjs` `sharedHelpersSource`): displays **`Pause`** (`.action-btn-warn`) whenever a scoped workflow is active or a skill was freshly routed, **`Continue`** (`.action-btn-primary`, resuming paused state + dispatching `continue`) when paused, and **`Continue`** (preserving quick chat resume) when idle.
+  - Added `PAUSED` badge (`.badge-warn`) and spotlight messaging in `Current Workflow Mode`, `[OMA] PAUSED | mode:phase` / `[OMA] PAUSED` `statusLine` telemetry, anti-stale paused-mode prioritization in `selectCurrentMode`, and multi-root-safe `pauseState` + `pauseStatesByScope` snapshots while preserving `GET /api/status` zero-mutation (`H1`).
+  - Added authenticated `POST /api/workflow-control` (`handleWorkflowControl`, sharing constant-time token, `desktop-serve` CSRF, body cap, and rate-limiting via `handleAuthenticatedJsonPost`), bounded `seenWorkspaceRoots` vetting for Antigravity Aux Pane launches (seeded from resolved `GET /api/status` & `GET /api/events` roots + `OMAGY_WORKSPACE`), and unified `readAllScopeModes` scanning both shared and `sessions/*/` mode states under `scope: 'all'` (`sidecars/hud/main.mjs` `174.1 KB < 175 KB`).
+- **Durable `.omagy/state/pause.json` & Cross-Host Lifecycle Hook Fence (`hooks/omagy-{host,hook,host-setup,selftest}.mjs`, `skills/cancel/SKILL.md`, `T69`)**:
+  - Added collision-free `.omagy/state/pause.json` primitives (`PAUSE_FILENAME`, `readPauseState`, `pauseWorkspaceExecution`, `resumeWorkspaceExecution`, `isResumeIntentText`, `isCancelIntentText`) to acyclic leaf `hooks/omagy-host.mjs` with full-chain `lstatSync` symlink containment, idempotent double-pause `paused_modes` unioning, and reversible `paused` metadata preserving `current_phase`, `iteration`, `state`, and `handoff_artifacts` across shared and session-scoped mode files.
+  - Wired pause enforcement across `PreInvocation` (native Antigravity `terminationBehavior: "terminate"` + `user_markdown` on mid-turn `invocationNum >= 2` and child subagents; automatic chat unpause + `resumedFromPause` routing on fresh main-agent `continue`/`resume`/`keep going` or `/cancel`/`$cancel`), `PreToolUse` (expanding read exemption to `/^(?:read|view)(?:_|$)/i` and denying fenced tools while paused, keeping root `hooks.json` unchanged), `Stop` (halting without nudges or outbound `notify()`), and `SessionStart`, plus expanded Claude Code `PreToolUse` matcher in `hooks/omagy-host-setup.mjs` to `Write|Edit|MultiEdit|NotebookEdit|Read|Bash|Task|Agent` (`hooks/omagy-hook.mjs` `168.8 KB < 170 KB`).
+  - Updated `skills/cancel/SKILL.md` so `$cancel` clears `.omagy/state/pause.json` and handles paused modes cleanly.
+- **Win32 Short-Path Hardening (`3730238`)**:
+  - Expanded Windows 8.3 short paths in `walkKernelPath` (`hooks/omagy-host.mjs`) and kept `T65` UNC containment tests offline without live SMB lookups.
+
 ## 0.10.0 — 2026-11-23
 ### Subagent Boot Fix, Hook Security Containment, Cross-Host Hardening & P2 Workflow Depth (`104/104` Selftest)
 - **Fixed Live Subagent Startup Crash (`agents/{explore,debugger,designer,tracer,researcher}.md`, `T41`)**:

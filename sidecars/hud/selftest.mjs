@@ -2238,7 +2238,7 @@ export async function runSelftest() {
         if (args.includes('get-conversation-metadata')) return JSON.stringify({ conversationId: 'conv-h30', workspacePaths: [h30Ws] });
         return JSON.stringify({ ok: true });
       };
-      const h30DesktopSrv = createHudServer('h30-tok', { desktopServe: true, workspaceRoot: h30Ws, runner: h30Runner });
+      const h30DesktopSrv = createHudServer('h30-tok', { desktopServe: true, workspaceRoot: h30Ws, runner: h30Runner, sameUidVerifier: () => true });
       const h30AuxSrv = createHudServer('h30-aux', { runner: h30Runner });
       const h30Unauth = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', host: '127.0.0.1:48801', origin: 'http://127.0.0.1:48801' }, { action: 'pause' }, h30DesktopSrv);
       const h30BadOrigin = await invokeHttp('POST', '/api/workflow-control', { 'content-type': 'application/json', 'x-sidecar-token': 'h30-tok', host: '127.0.0.1:48801', origin: 'http://evil.example' }, { action: 'pause' }, h30DesktopSrv);
